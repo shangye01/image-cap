@@ -16,7 +16,7 @@
         <div class="label">账号头像</div>
         <div class="avatar-box">
           <img src="https://img1.ttxsapp.com/avatar/default/0.png" class="avatar" />
-          <div class="camera">📷</div>
+          <!-- <div class="camera">📷</div> -->
         </div>
       </div>
 
@@ -55,19 +55,10 @@
         </div>
         <textarea class="textarea" maxlength="200" v-model="form.desc"></textarea>
       </div>
-
-      <!-- 主页 -->
-      <div class="form-item">
-        <div class="label">个人主页</div>
-        <div class="input-group">
-          <span class="prefix">https://huaban.com/user/</span>
-          <input class="input no-radius" v-model="form.home" />
-        </div>
-      </div>
     </div>
 
     <!-- ============ Tab 2 ============ -->
-    <div class="gda-tabs-tabpane">
+    <div v-if="activeTab === 2" class="gda-tabs-tabpane">
       <div class="gda-table-wrapper">
         <table class="gda-table">
           <thead>
@@ -93,11 +84,10 @@ import { ref } from 'vue'
 const activeTab = ref(1)
 
 const form = ref({
-  name: 'GD609633180',
-  id: '9035706867346164738',
-  nickname: 'GD609633180',
+  name: '李四',
+  id: '2',
+  nickname: '',
   desc: '',
-  home: 'dW1zLTkxNzUwNzc3OA',
 })
 
 function copyId() {
@@ -107,7 +97,6 @@ function copyId() {
 
 <style scoped>
 .profile-page {
-  background: #f5f6f8;
   padding: 32px;
   min-height: 100%;
 }
