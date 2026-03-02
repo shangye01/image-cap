@@ -226,20 +226,23 @@ const submitRegister = async () => {
 <style scoped>
 .home {
   height: 100vh;
-  background: #a19fdc;
+  background: radial-gradient(circle at 20% 30%, #ffffff 0%, #e6e9ff 40%, #d5d9ff 100%);
   display: flex;
   flex-direction: column;
-  overflow: hidden; /* 关键 */
+  overflow: hidden;
 }
 
 
 /* 顶部栏 */
 .header {
   height: 64px;
+  backdrop-filter: blur(12px);
+  background: rgba(255, 255, 255, 0.6);
+  border-bottom: 1px solid rgba(0,0,0,0.05);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 32px;
+  padding: 0 48px;
 }
 
 .logo img {
@@ -247,9 +250,14 @@ const submitRegister = async () => {
 }
 
 .auth-actions a {
-  color: #333;
+  color: #555;
   text-decoration: none;
-  margin: 0 6px;
+  margin: 0 8px;
+  transition: all 0.2s ease;
+}
+
+.auth-actions a:hover {
+  color: #7a6efc;
 }
 
 .divider {
@@ -258,14 +266,12 @@ const submitRegister = async () => {
 
 /* 主体 */
 .main {
-  height: calc(100vh - 64px); /* 精确剩余高度 */
+  height: calc(100vh - 64px);
   display: grid;
-  grid-template-columns: 1fr 2fr;
-  padding: 32px;   /* 建议略减 */
-  gap: 32px;
-  box-sizing: border-box; /* 非常重要 */
+  grid-template-columns: 1.2fr 1.8fr;
+  padding: 48px 80px;
+  gap: 80px;
 }
-
 
 /* 左侧 */
 .left {
@@ -295,10 +301,11 @@ const submitRegister = async () => {
 
 
 .home-image {
-  max-width: 100%;
-  max-height: 60%;  /* 给文字留空间 */
+  max-width: 90%;
+  max-height: 55%;
   object-fit: contain;
-  border-radius: 16px;
+  border-radius: 24px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.08);
 }
 
 .intro {

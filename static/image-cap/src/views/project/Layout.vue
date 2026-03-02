@@ -12,9 +12,9 @@
       <aside class="aside">
         <nav>
           <router-link to="/app/guide">首页</router-link>
-          <router-link to="/app/project">新建项目</router-link>
-          <router-link to="/app/history">历史</router-link>
-          <router-link to="/app/profile">我的</router-link>
+          <router-link to="/app/project">创建</router-link>
+          <router-link to="/app/history">列表</router-link>
+          <router-link to="/app/profile">个人中心</router-link>
         </nav>
       </aside>
 
@@ -85,6 +85,6 @@
   flex: 1;
   padding: 24px;
   overflow-y: auto;
-  background: #ffffff;
+  
 }
 </style>
