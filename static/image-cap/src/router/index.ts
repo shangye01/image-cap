@@ -1,8 +1,8 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useUserStore } from '@/stores/user'
-
+ 
 // // 导入视图组件
-// import HomeView from '../views/HomeView.vue'
+
 // import AnnotateView from '../views/AnnotateView.vue'
 // import TrainingView from '../views/TrainingView.vue'
 // import TaskListView from '../views/TaskListView.vue'
@@ -12,12 +12,13 @@ const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     /* ========= 公开路由（无需登录） ========= */
-    // {
-    //   path: '/',
-    //   name: 'home',
-    //   component: HomeView
-    // },
-    
+     {
+      path: '/',
+       name: 'home',
+       component: () => import('@/views/home/Home.vue'),
+       meta: { requiresAuth: false }
+     },
+     
     /* ========= 需要登录的路由 ========= */
     {
       path: '/app',
