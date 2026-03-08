@@ -16,11 +16,12 @@ import threading
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
+from urllib.parse import quote
 import numpy as np
 import torch
 from PIL import Image
 from ultralytics import YOLO
-from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Query, Form, Depends
+from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Query, Form, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse
@@ -64,6 +65,7 @@ MODEL_DIR = Path("./models")
 MODEL_DIR.mkdir(exist_ok=True)
 DATASET_DIR = Path("./datasets/custom")
 DATASET_DIR.mkdir(parents=True, exist_ok=True)
+LOCAL_UPLOADS_BASE_URL = os.getenv("PUBLIC_BACKEND_URL", "http://localhost:8000").rstrip("/")
 
 # 全局变量：存储最新训练结果
 latest_training_result = None
@@ -129,6 +131,13 @@ def remove_duplicate_annotations(annotations: List[Dict[str, Any]], iou_threshol
             if iou > iou_threshold:
                 suppressed.add(j)
     return keep
+
+def build_local_upload_url(filename: str, request: Optional[Request] = None) -> str:
+    """构建本地上传图片地址，优先使用当前请求域名。"""
+    safe_filename = quote(filename)
+    if request:
+        return str(request.url_for("get_local_upload", filename=safe_filename))
+    return f"{LOCAL_UPLOADS_BASE_URL}/local-uploads/{safe_filename}"
 
 
 # ========== 数据集验证器 ==========
@@ -497,8 +506,7 @@ async def batch_create_tasks(tasks: List[dict]):
                 )
                 storage_url = supabase.storage.from_("images").get_public_url(file_name)
             except:
-                storage_url = f"http://localhost:8000/local-uploads/{task_id}.jpg"
-
+                storage_url = build_local_upload_url(f"{task_id}.jpg")
             task_data = {
                 "id": task_id,
                 "image_url": storage_url,
@@ -593,7 +601,7 @@ async def get_tasks(
 
 
 @app.post("/api/predict")
-async def predict(file: UploadFile = File(...)):
+async def predict(request: Request, file: UploadFile = File(...)):
     """上传图片 → AI预测 → 返回结果"""
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(400, detail="必须是图片文件")
@@ -619,7 +627,7 @@ async def predict(file: UploadFile = File(...)):
             local_path = UPLOAD_DIR / f"{task_id}.jpg"
             with open(local_path, "wb") as f:
                 f.write(contents)
-            image_url = f"http://localhost:8000/local-uploads/{task_id}.jpg"
+            image_url = build_local_upload_url(f"{task_id}.jpg", request)
             file_name = str(local_path)
 
         task_data = {
@@ -684,12 +692,6 @@ async def predict(file: UploadFile = File(...)):
         raise HTTPException(500, detail=f"处理失败: {str(e)}")
 
 
-@app.get("/local-uploads/{filename}")
-async def get_local_upload(filename: str):
-    file_path = UPLOAD_DIR / filename
-    if file_path.exists():
-        return FileResponse(file_path)
-    raise HTTPException(404, detail="文件不存在")
 
 
 @app.get("/api/training/status")
@@ -1026,8 +1028,8 @@ async def delete_label(name: str):
         raise HTTPException(500, detail=str(e))
 
 
-@app.get("/local-uploads/{filename}")
-async def get_local(filename: str):
+@app.get("/local-uploads/{filename}", name="get_local_upload")
+async def get_local_upload(filename: str):
     path = UPLOAD_DIR / filename
     if path.exists():
         return FileResponse(path)
@@ -1125,4 +1127,3 @@ if __name__ == "__main__":
     logger.info("=" * 60)
 
     uvicorn.run("app.main:app", host="0.0.0.0", port=8000)
-
