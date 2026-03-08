@@ -1,5 +1,4 @@
 <template>
-
   <div class="annotation-workspace">
     <aside class="toolbar-panel">
    
@@ -360,14 +359,15 @@
     <main class="canvas-container" ref="canvasContainer">
       <div v-if="imageObj" class="canvas-wrapper"   
       :class="{ panning: isSpacePressed || isPanning }">
-        <v-stage ref="stage" 
+        <!-- ✅ 修复：使用 stageRef 而不是 stage -->
+        <v-stage ref="stageRef" 
          :config="scaledStageConfig" 
          @mousedown="handleMouseDown" 
          @mousemove="handleMouseMove" 
          @mouseup="handleMouseUp(currentLabel)" 
          @click="handleStageClick">
           <v-layer ref="layer">
-            <v-image :config="{ ...scaledImageConfig, name: 'background-image' }" />
+           <v-image :config="scaledImageConfig" />
             <v-rect
            v-if="isDrawing && drawingRect"
            :config="getDrawingRectConfig()"  
@@ -380,7 +380,8 @@
               @dragend="(e) => handleRectDragEnd(e, ann.id)" 
               @dragmove="() => handleRectDragMove(ann.id)" 
             />
-            <v-text v-for="ann in annotations" :key="`label-${ann.id}-${dragTick.value}`" :config="getTextConfig(ann)" />
+            <!-- ✅ 修复：key 绑定 -->
+            <v-text v-for="ann in annotations" :key="`label-${ann.id}-${dragTick}`" :config="getTextConfig(ann)" />
             <v-transformer ref="transformer" :config="transformerConfig" @transformstart="handleTransformStart" @transformend="(e) => handleTransformEnd(e, selectedId)" />
           </v-layer>
         </v-stage>
@@ -393,6 +394,7 @@
     </main>
   </div>
 </template>
+
 <script setup>
 import { ref, computed, reactive, onMounted, onUnmounted, watch, toRef, nextTick } from 'vue'
 import { useAnnotationStore } from '@/stores/annotation'
@@ -412,7 +414,7 @@ const fileInput = ref(null)
 const transformer = ref(null)
 const layer = ref(null)
 const canvasContainer = ref(null)
-const stage = ref(null)
+const stageRef = ref(null)  // ✅ 修复：改名，避免和 useCanvasEvents 返回的 stage 冲突
 const newLabel = ref('')
 const selectedColor = ref('#ff0000')
 const currentLabel = ref('object')
@@ -438,22 +440,24 @@ const MAX_ZOOM = 5
 const ZOOM_STEP = 0.1
 
 // ========== 容器尺寸计算 ==========
-// baseContainerSize: 基础尺寸（不包含 zoomScale，用于坐标计算）
 const baseContainerSize = computed(() => {
-  if (!canvasContainer.value || !imageObj.value) {
+  if (!canvasContainer.value) {
     return { width: 800, height: 600, scale: 1 }
   }
+  
+  // 使用 naturalWidth/naturalHeight 获取原始尺寸
+  const imgWidth = imageObj.value?.naturalWidth || imageObj.value?.width || 800
+  const imgHeight = imageObj.value?.naturalHeight || imageObj.value?.height || 600
+  
   const container = canvasContainer.value
   const padding = 40
-  const maxWidth = container.clientWidth - padding
-  const maxHeight = container.clientHeight - padding
-  
-  const imgWidth = imageObj.value.width
-  const imgHeight = imageObj.value.height
+  const maxWidth = Math.max(100, container.clientWidth - padding)
+  const maxHeight = Math.max(100, container.clientHeight - padding)
   
   const scale = Math.min(
     maxWidth / imgWidth,
-    maxHeight / imgHeight
+    maxHeight / imgHeight,
+    1
   )
   
   return {
@@ -463,7 +467,6 @@ const baseContainerSize = computed(() => {
   }
 })
 
-// containerSize: 实际显示尺寸（包含 zoomScale，用于 Stage 配置）
 const containerSize = computed(() => {
   const base = baseContainerSize.value
   return {
@@ -477,15 +480,20 @@ const containerSize = computed(() => {
 const scaledStageConfig = computed(() => {
   const base = baseContainerSize.value
   
-  return {
-    width: base.width * zoomScale.value,
-    height: base.height * zoomScale.value,
-    // ✅ 关键：不使用 scaleX/scaleY，而是通过计算宽高来实现缩放
+  const config = {
+    width: Math.max(1, base.width * zoomScale.value),
+    height: Math.max(1, base.height * zoomScale.value),
     scaleX: 1,
     scaleY: 1,
-    x: 0,
-    y: 0
+    // 临时调试：确认 Stage 渲染
+    containerStyle: {
+      backgroundColor: '#e8e8e8'
+    }
   }
+  
+  console.log('📐 scaledStageConfig:', config.width, 'x', config.height)
+  
+  return config
 })
 
 // ========== 计算属性 ==========
@@ -505,18 +513,15 @@ const selectedAnnotation = computed(() => {
 })
 
 // ========== 缩放控制函数 ==========
-// ========== 缩放控制函数（以中心为锚点）==========
 const zoomIn = () => {
   if (zoomScale.value < MAX_ZOOM) {
     const oldScale = zoomScale.value
     zoomScale.value = Math.min(zoomScale.value + ZOOM_STEP, MAX_ZOOM)
     
-    // 以画布中心为锚点缩放
     const base = baseContainerSize.value
     const centerX = base.width / 2
     const centerY = base.height / 2
     
-    // 计算新的偏移，保持中心点不变
     stageX.value = centerX - (centerX - stageX.value) * (zoomScale.value / oldScale)
     stageY.value = centerY - (centerY - stageY.value) * (zoomScale.value / oldScale)
     
@@ -529,12 +534,10 @@ const zoomOut = () => {
     const oldScale = zoomScale.value
     zoomScale.value = Math.max(zoomScale.value - ZOOM_STEP, MIN_ZOOM)
     
-    // 以画布中心为锚点缩放
     const base = baseContainerSize.value
     const centerX = base.width / 2
     const centerY = base.height / 2
     
-    // 计算新的偏移，保持中心点不变
     stageX.value = centerX - (centerX - stageX.value) * (zoomScale.value / oldScale)
     stageY.value = centerY - (centerY - stageY.value) * (zoomScale.value / oldScale)
     
@@ -544,7 +547,6 @@ const zoomOut = () => {
 
 const resetZoom = () => {
   zoomScale.value = 1
-  // 重置时可以选择是否重置位置，这里保持位置不变
   updateZoom()
 }
 
@@ -560,7 +562,6 @@ const actualSize = () => {
   const baseScale = baseContainerSize.value.scale
   zoomScale.value = 1 / baseScale
   
-  // 以画布中心为锚点缩放
   const base = baseContainerSize.value
   const centerX = base.width / 2
   const centerY = base.height / 2
@@ -576,39 +577,37 @@ const updateZoom = () => {
   if (transformer.value && selectedId.value) {
     nextTick(() => {
       const tr = transformer.value.getNode()
-      tr.forceUpdate()
+      if (tr) tr.forceUpdate()
     })
   }
 }
 
+// ✅ 修复：handleWheel 函数，避免变量名冲突
 const handleWheel = (e) => {
   if (!imageObj.value) return
   if (!e.ctrlKey && !e.metaKey) return
   
   e.preventDefault()
   
-  const stage = stage.value?.getNode()
-  if (!stage) return
+  // ✅ 使用 stageRef 而不是 stage
+  const stageNode = stageRef.value?.getNode()
+  if (!stageNode) return
   
   const oldScale = zoomScale.value
   const delta = e.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP
   const newScale = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoomScale.value + delta))
   
   if (newScale !== oldScale) {
-    // 获取鼠标在画布上的位置
-    const pointer = stage.getPointerPosition()
+    const pointer = stageNode.getPointerPosition()
     if (!pointer) return
     
     const base = baseContainerSize.value
     
-    // 计算鼠标在图片上的相对位置（考虑当前缩放和偏移）
     const mouseX = (pointer.x - stageX.value) / oldScale
     const mouseY = (pointer.y - stageY.value) / oldScale
     
-    // 设置新缩放
     zoomScale.value = newScale
     
-    // 调整偏移，使鼠标指向的点保持不变
     stageX.value = pointer.x - mouseX * newScale
     stageY.value = pointer.y - mouseY * newScale
     
@@ -630,6 +629,10 @@ const {
   { id: 3, name: 'dog', color: '#00ff00' }
 ])
 
+// ✅ 先定义 dragTick
+const dragTick = ref(0)
+
+// ✅ 将 dragTick 传给 useTaskFlow
 const {
   taskLoading,
   submitLoading,
@@ -641,12 +644,53 @@ const {
   saveDraftHandler,
   abandonTask,
   restoreTask
-} = useTaskFlow(store, imageObj, labelColorMap)
+} = useTaskFlow(store, imageObj, labelColorMap, dragTick)
+
+// ✅ 监听 imageObj 变化
+watch(imageObj, async (newImg) => {
+  if (!newImg) return
+  
+  console.log('👁️ imageObj watch 触发')
+  
+  if (!newImg.complete || newImg.naturalWidth === 0) {
+    await new Promise((resolve) => {
+      const onLoad = () => {
+        newImg.removeEventListener('load', onLoad)
+        newImg.removeEventListener('error', onError)
+        resolve()
+      }
+      const onError = () => {
+        console.error('❌ 图片加载失败:', newImg.src)
+        newImg.removeEventListener('load', onLoad)
+        newImg.removeEventListener('error', onError)
+        resolve()
+      }
+      newImg.addEventListener('load', onLoad)
+      newImg.addEventListener('error', onError)
+    })
+  }
+  
+  await nextTick()
+  dragTick.value++
+  
+setTimeout(() => {
+  if (stageRef.value) {
+    // Vue Konva 3.x: ref 直接返回 Konva 节点
+    const stage = stageRef.value
+    if (stage && typeof stage.batchDraw === 'function') {
+      stage.batchDraw()
+      console.log('🎨 Stage batchDraw 完成')
+    } else {
+      console.error('❌ stageRef.value 不是有效的 Konva Stage:', stageRef.value)
+    }
+  }
+}, 50)
+  
+}, { immediate: true })
 
 const {
   isDrawing,
   drawingRect,
-  dragTick,
   isTransforming,
   isPanning,
   stageX,
@@ -693,16 +737,15 @@ watch(() => store.annotations, (newVal) => {
 }, { deep: true })
 
 // ========== 配置函数 ==========
-// 计算当前实际缩放比例
 const currentScale = computed(() => {
   return (baseContainerSize.value?.scale || 1) * zoomScale.value
 })
+
 const getDrawingRectConfig = () => {
   if (!drawingRect.value || !baseContainerSize.value) return {}
   
   const baseScale = baseContainerSize.value.scale || 1
   
-  // ✅ 所有坐标都乘以 zoomScale
   return {
     x: (drawingRect.value.x * baseScale + stageX.value) * zoomScale.value,
     y: (drawingRect.value.y * baseScale + stageY.value) * zoomScale.value,
@@ -848,19 +891,30 @@ const getTextConfig = (ann) => {
 }
 
 const scaledImageConfig = computed(() => {
-  if (!imageObj.value) return {}
-  const { scale: baseScale } = baseContainerSize.value
+  if (!imageObj.value) {
+    return { image: null, width: 0, height: 0, x: 0, y: 0 }
+  }
+  
+  // 关键：使用 naturalWidth/naturalHeight
+  const imgWidth = imageObj.value.naturalWidth || imageObj.value.width || 0
+  const imgHeight = imageObj.value.naturalHeight || imageObj.value.height || 0
+  
+  if (imgWidth === 0 || imgHeight === 0) {
+    console.warn('⚠️ 图片尺寸为0，可能尚未加载完成')
+    return { image: null, width: 0, height: 0, x: 0, y: 0 }
+  }
+  
+  const base = baseContainerSize.value
   
   return {
     image: imageObj.value,
     x: stageX.value * zoomScale.value,
     y: stageY.value * zoomScale.value,
-    width: imageObj.value.width * baseScale * zoomScale.value,
-    height: imageObj.value.height * baseScale * zoomScale.value
+    width: imgWidth * base.scale * zoomScale.value,
+    height: imgHeight * base.scale * zoomScale.value,
+    name: 'background-image'
   }
 })
-
-
 
 const transformerConfig = computed(() => {
   if (!selectedId.value) {
@@ -881,9 +935,9 @@ const transformerConfig = computed(() => {
     centeredScaling: true,
     visible: true,
     boundBoxFunc: (oldBox, newBox) => {
-      // 使用当前 Stage 的实际尺寸作为边界
       const base = baseContainerSize.value
-      const maxWidth = base.width * zoomScale.value
+      const maxWidth = base.width * zoom
+
       const maxHeight = base.height * zoomScale.value
       
       if (newBox.x < 0) newBox.x = 0
@@ -921,7 +975,7 @@ const exportForYOLO = async () => {
     const normHeight = ann.height / imgHeight
     
     return `${classId} ${centerX.toFixed(6)} ${centerY.toFixed(6)} ${normWidth.toFixed(6)} ${normHeight.toFixed(6)}`
-  }).join('\n')
+  }).join('\\n')
 
   const txtBlob = new Blob([yoloData], { type: 'text/plain' })
   const url = URL.createObjectURL(txtBlob)
@@ -931,7 +985,7 @@ const exportForYOLO = async () => {
   a.click()
   URL.revokeObjectURL(url)
 
-  const classesData = labels.value.map((l, idx) => `${idx} ${l.name}`).join('\n')
+  const classesData = labels.value.map((l, idx) => `${idx} ${l.name}`).join('\\n')
   const classesBlob = new Blob([classesData], { type: 'text/plain' })
   const classesUrl = URL.createObjectURL(classesBlob)
   const classesA = document.createElement('a')
@@ -964,7 +1018,7 @@ const handleFileUpload = async (event) => {
     }
     
     localStorage.setItem('lastTaskId', data.task_id)
-    window.history.replaceState({}, '', `?task=${data.task_id}`)
+    window.history.replaceState({}, '', `/app/annotate?task=${data.task_id}`)
     
     store.clearAnnotations()
     store.setCurrentTask({ 
@@ -975,7 +1029,6 @@ const handleFileUpload = async (event) => {
     
     const img = new Image()
     img.crossOrigin = 'anonymous'
-    
     
     img.onload = async () => {
       imageObj.value = img
@@ -1634,7 +1687,7 @@ onMounted(async () => {
   if (!taskId) {
     taskId = localStorage.getItem('lastTaskId')
     if (taskId) {
-      window.history.replaceState({}, '', `?task=${taskId}`)
+      window.history.replaceState({}, '', `/app/annotate?task=${taskId}`)
     }
   }
 
@@ -1668,7 +1721,6 @@ onMounted(async () => {
         const img = new Image()
         img.crossOrigin = 'anonymous'
 
-        
         try {
           await new Promise((resolve, reject) => {
             img.onload = () => {
@@ -1708,7 +1760,7 @@ onMounted(async () => {
     if (e.target?.closest('.dialog-container')) return
     if (isDrawing.value) {
       const mouseUpHandler = handleMouseUp(currentLabel.value)
-      mouseUpHandler({ target: stage.value?.getNode() })
+      mouseUpHandler({ target: stageRef.value?.getNode() })
     }
   }
   
@@ -1726,7 +1778,7 @@ onMounted(async () => {
       e.preventDefault()
       setSpacePressed(true)
       
-      const stageNode = stage.value?.getNode()
+      const stageNode = stageRef.value?.getNode()
       if (stageNode && !isPanning.value) {
         stageNode.container().style.cursor = 'grab'
       }
@@ -1737,7 +1789,7 @@ onMounted(async () => {
     if (e.code === 'Space') {
       setSpacePressed(false)
       
-      const stageNode = stage.value?.getNode()
+      const stageNode = stageRef.value?.getNode()
       if (stageNode && !isPanning.value) {
         stageNode.container().style.cursor = 'default'
       }
@@ -1784,3 +1836,5 @@ watch(imageObj, async (newImg) => {
 <style scoped>
 @import './AnnotateView.css';
 </style>
+
+

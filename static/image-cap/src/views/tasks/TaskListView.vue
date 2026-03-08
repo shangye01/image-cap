@@ -586,7 +586,7 @@ const toggleProject = (project) => {
 }
 
 const openTask = (taskId) => {
-  router.push(`/annotate?task=${taskId}`)
+  router.push(`/app/annotate?task=${taskId}`)
 }
 
 const formatTime = (timeStr) => {
