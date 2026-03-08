@@ -28,11 +28,29 @@ See [Vite Configuration Reference](https://vite.dev/config/).
 ```sh
 npm install
 ```
+### Environment variables
 
+Create `.env.local` in this folder (`static/image-cap`) and configure:
+
+```env
+VITE_API_BASE_URL=http://127.0.0.1:8000
+VITE_SUPABASE_URL=your-supabase-url
+VITE_SUPABASE_ANON_KEY=your-supabase-anon-key
+```
+
+> `VITE_API_BASE_URL` is used for backend APIs and image URLs. If omitted, it defaults to `http://127.0.0.1:8000`.
 ### Compile and Hot-Reload for Development
 
+Run from this directory:
+
 ```sh
-npm run dev
+npm run dev -- --host 0.0.0.0 --port 5173
+```
+
+Or from the repo root:
+
+```sh
+npm --prefix ./static/image-cap run dev -- --host 0.0.0.0 --port 5173
 ```
 
 ### Type-Check, Compile and Minify for Production

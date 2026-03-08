@@ -405,7 +405,7 @@ import { useAnnotationApi } from '@/composables/useAnnotationApi'
 import { confirmDialog, promptDialog, alertDialog } from '@/composables/useDialog'
 import { supabase } from '@/supabase'
 import { useAutoSave } from '@/supabase'
-
+import { apiUrl, resolveAssetUrl } from '@/config/api'
 const store = useAnnotationStore()
 
 // ========== 响应式状态定义 ==========
@@ -774,7 +774,7 @@ const trainingMessage = ref(null)
 
 const checkTrainingStatus = async () => {
   try {
-    const res = await fetch('http://localhost:8000/api/training/status')
+    const res = await fetch(apiUrl('/api/training/status'))
     const data = await res.json()
     trainingStatus.value = data
   } catch (e) {
@@ -794,7 +794,7 @@ const startTraining = async () => {
       augmentation: true
     })
     
-    const res = await fetch(`http://localhost:8000/api/training/start?${params}`, {
+   const res = await fetch(apiUrl(`/api/training/start?${params}`), {
       method: 'POST'
     })
     const data = await res.json()
@@ -820,7 +820,7 @@ const startTraining = async () => {
 
 const switchModel = async (model) => {
   try {
-    const res = await fetch('http://localhost:8000/api/models/switch', {
+   const res = await fetch(apiUrl('/api/models/switch'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: model.path, name: model.name })
@@ -1006,7 +1006,7 @@ const handleFileUpload = async (event) => {
     const formData = new FormData()
     formData.append('file', file)
     
-    const response = await fetch('http://localhost:8000/api/predict', {
+ const response = await fetch(apiUrl('/api/predict'), {
       method: 'POST',
       body: formData
     })
@@ -1023,7 +1023,7 @@ const handleFileUpload = async (event) => {
     store.clearAnnotations()
     store.setCurrentTask({ 
       id: data.task_id, 
-      imageUrl: data.image_url,
+      imageUrl: resolveAssetUrl(data.image_url),
       imageStoragePath: data.image_storage_path
     })
     
@@ -1113,7 +1113,7 @@ const handleFileUpload = async (event) => {
       taskError.value = '❌ 图片加载失败'
       console.error('图片加载失败:', data.image_url)
     }
-    img.src = data.image_url
+   img.src = resolveAssetUrl(data.image_url)
     
   } catch (error) {
     console.error('上传失败:', error)
@@ -1126,7 +1126,7 @@ const handleFileUpload = async (event) => {
 
 const saveLabelToBackend = async (name, color) => {
   try {
-    const response = await fetch('http://localhost:8000/api/labels', {
+   const response = await fetch(apiUrl('/api/labels'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
@@ -1145,7 +1145,7 @@ const saveLabelToBackend = async (name, color) => {
     if (response.status === 409 || errorData.detail?.includes('已存在')) {
       console.log(`📝 标签 ${name} 已存在，更新颜色为 ${color}`)
       
-      const updateRes = await fetch(`http://localhost:8000/api/labels/${encodeURIComponent(name)}`, {
+      const updateRes = await fetch(apiUrl(`/api/labels/${encodeURIComponent(name)}`), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ color: color })
@@ -1371,7 +1371,7 @@ const saveLabelEdit = async (oldName) => {
   console.log('✅ 最终使用的颜色:', color, '用于新标签:', newName)
 
   try {
-    const createRes = await fetch('http://localhost:8000/api/labels', {
+    const createRes = await fetch(apiUrl('/api/labels'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
@@ -1385,7 +1385,7 @@ const saveLabelEdit = async (oldName) => {
       const errorData = await createRes.json()
       if (errorData.detail?.includes('已存在')) {
         console.log('标签已存在，更新颜色:', color)
-        await fetch(`http://localhost:8000/api/labels/${encodeURIComponent(newName)}`, {
+       await fetch(apiUrl(`/api/labels/${encodeURIComponent(newName)}`), {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ color: color })
@@ -1396,7 +1396,7 @@ const saveLabelEdit = async (oldName) => {
     }
     
     try {
-      await fetch(`http://localhost:8000/api/labels/${encodeURIComponent(oldName)}`, {
+      await fetch(apiUrl(`/api/labels/${encodeURIComponent(oldName)}`), {
         method: 'DELETE'
       })
     } catch (e) {
@@ -1488,7 +1488,7 @@ const removeLabel = async (labelName) => {
   
   if (result.confirmed) {
     try {
-      const response = await fetch(`http://localhost:8000/api/labels/${encodeURIComponent(labelName)}`, {
+      const response = await fetch(apiUrl(`/api/labels/${encodeURIComponent(labelName)}`), {
         method: 'DELETE'
       })
       
@@ -1622,7 +1622,7 @@ const updateSelectedAnnotationColor = async () => {
 
 const loadSavedLabels = async () => {
   try {
-    const response = await fetch('http://localhost:8000/api/labels')
+     const response = await fetch(apiUrl('/api/labels'))
     const data = await response.json()
     
     if (data.labels && data.labels.length > 0) {

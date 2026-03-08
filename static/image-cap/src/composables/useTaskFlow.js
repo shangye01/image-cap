@@ -1,6 +1,7 @@
 // composables/useTaskFlow.js
 import { ref, nextTick } from 'vue'
 import { supabase } from '@/supabase'
+import { apiUrl, resolveAssetUrl } from '@/config/api'
 
 export function useTaskFlow(store, imageObj, labelColorMap, dragTick) {  // 添加 dragTick 参数
   const taskLoading = ref(false)
@@ -92,7 +93,7 @@ export function useTaskFlow(store, imageObj, labelColorMap, dragTick) {  // 添�
       await new Promise((resolve, reject) => {
         img.onload = () => resolve()
         img.onerror = () => reject(new Error('图片加载失败'))
-        img.src = data.image_url
+        imageUrl: resolveAssetUrl(data.image_url),
         setTimeout(() => reject(new Error('加载超时')), 10000)
       })
       
@@ -101,7 +102,7 @@ export function useTaskFlow(store, imageObj, labelColorMap, dragTick) {  // 添�
       store.setCurrentTask({
         id: data.id,
         projectId: data.project_id,
-        imageUrl: data.image_url,
+         imageUrl: resolveAssetUrl(data.image_url),
         imageStoragePath: data.image_storage_path,
         yoloVersion: data.yolo_version
       })
@@ -158,7 +159,7 @@ export function useTaskFlow(store, imageObj, labelColorMap, dragTick) {  // 添�
     submitLoading.value = true
     
     try {
-      const response = await fetch(`http://localhost:8000/api/annotations/${store.currentTaskId}`, {
+     const response = await fetch(apiUrl(`/api/annotations/${store.currentTaskId}`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -193,7 +194,7 @@ export function useTaskFlow(store, imageObj, labelColorMap, dragTick) {  // 添�
     if (!store.currentTaskId || store.annotations.length === 0) return
     
     try {
-      const response = await fetch(`http://localhost:8000/api/annotations/${store.currentTaskId}`, {
+     const response = await fetch(apiUrl(`/api/annotations/${store.currentTaskId}`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -241,7 +242,7 @@ export function useTaskFlow(store, imageObj, labelColorMap, dragTick) {  // 添�
   const restoreTask = async (taskId) => {
     try {
       console.log('🔄 开始恢复任务:', taskId)
-      const response = await fetch(`http://localhost:8000/api/tasks/${taskId}`)
+      const response = await fetch(apiUrl(`/api/tasks/${taskId}`))
       
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`)
@@ -252,7 +253,7 @@ export function useTaskFlow(store, imageObj, labelColorMap, dragTick) {  // 添�
       if (data.task) {
         const taskInfo = {
           ...data.task,
-          imageUrl: data.task.image_url,
+          imageUrl: resolveAssetUrl(data.task.image_url),
           imageStoragePath: data.task.image_storage_path,
           projectId: data.task.project_id,
           yoloVersion: data.task.yolo_version
