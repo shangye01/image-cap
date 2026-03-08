@@ -975,7 +975,7 @@ const handleFileUpload = async (event) => {
     
     const img = new Image()
     img.crossOrigin = 'anonymous'
-    img.src = data.image_url
+    
     
     img.onload = async () => {
       imageObj.value = img
@@ -1060,6 +1060,7 @@ const handleFileUpload = async (event) => {
       taskError.value = '❌ 图片加载失败'
       console.error('图片加载失败:', data.image_url)
     }
+    img.src = data.image_url
     
   } catch (error) {
     console.error('上传失败:', error)
@@ -1666,7 +1667,7 @@ onMounted(async () => {
         
         const img = new Image()
         img.crossOrigin = 'anonymous'
-        img.src = store.taskInfo.imageUrl
+
         
         try {
           await new Promise((resolve, reject) => {
@@ -1676,6 +1677,7 @@ onMounted(async () => {
               resolve()
             }
             img.onerror = () => reject(new Error('图片加载失败'))
+            img.src = store.taskInfo.imageUrl
             setTimeout(() => reject(new Error('超时')), 10000)
           })
           

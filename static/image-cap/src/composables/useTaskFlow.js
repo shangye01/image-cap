@@ -13,7 +13,8 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
     taskError.value = ''
     const img = new Image()
     img.crossOrigin = 'anonymous'
-    img.src = '/public/test.jpg'
+
+    // 先绑定事件再设置 src，避免缓存命中（304）时 onload 丢失
     
     img.onload = () => {
       imageObj.value = img
@@ -24,6 +25,9 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
     img.onerror = () => {
       taskError.value = '测试图片加载失败'
     }
+    
+    // Vite public 目录资源应从根路径访问
+    img.src = '/test.jpg'
   }
 
   // 加载下一个任务
@@ -49,8 +53,8 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
       // 加载图片
       const img = new Image()
       img.crossOrigin = 'anonymous'
-      img.src = data.image_url
-      
+
+      // 先绑定事件再设置 src，避免命中缓存导致 onload 未触发      
       img.onload = () => {
         imageObj.value = img
         store.setCurrentTask({
@@ -71,6 +75,8 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
         taskLoading.value = false
         taskError.value = '图片加载失败'
       }
+      
+      img.src = data.image_url
       
     } catch (e) {
       taskLoading.value = false

@@ -85,7 +85,9 @@ export const useAnnotationStore = defineStore('annotation', () => {
         .from('drafts')
         .select('annotations_json')
         .eq('task_id', taskId)
-        .single()
+        .maybeSingle()
+
+      if (draftError) throw draftError
       
       let loadedAnnotations: Annotation[] = []
       if (draft?.annotations_json) {
