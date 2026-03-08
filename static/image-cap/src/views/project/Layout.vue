@@ -11,14 +11,22 @@
       <!-- 左侧导航 -->
       <aside class="aside">
         <nav>
+          <!-- 主要导航 -->
           <router-link to="/app/guide">首页</router-link>
           <router-link to="/app/project">创建</router-link>
           <router-link to="/app/history">列表</router-link>
+          
+          
+          
+          <!-- 独立功能路由 -->
+          <router-link to="/app/annotate">标注</router-link>
+          <router-link to="/app/tasks">任务</router-link>
+          <router-link to="/app/training">训练</router-link>
           <router-link to="/app/profile">个人中心</router-link>
         </nav>
       </aside>
 
-      <!-- 内容区 -->
+      <!-- 内容区（点击后在这里显示） -->
       <main class="main">
         <router-view />
       </main>
@@ -27,14 +35,12 @@
 </template>
 
 <style scoped>
-/* 整体 */
 .layout {
   height: 100vh;
   display: flex;
   flex-direction: column;
 }
 
-/* Header */
 .header {
   height: 56px;
   padding: 0 24px;
@@ -45,14 +51,12 @@
   justify-content: space-between;
 }
 
-/* 主体区域 */
 .container {
   flex: 1;
   display: flex;
   overflow: hidden;
 }
 
-/* 左侧导航 */
 .aside {
   width: 200px;
   background: #f8fafc;
@@ -80,11 +84,15 @@
   font-weight: 500;
 }
 
-/* 内容区 */
+.nav-divider {
+  height: 1px;
+  background: #e5e7eb;
+  margin: 8px 0;
+}
+
 .main {
   flex: 1;
   padding: 24px;
   overflow-y: auto;
-  
 }
 </style>

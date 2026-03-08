@@ -1,5 +1,6 @@
 from passlib.context import CryptContext
 
+
 def _build_password_context() -> CryptContext:
     """Build a password context that works even when optional backends are missing."""
     try:

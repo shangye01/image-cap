@@ -1,25 +1,18 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useUserStore } from '@/stores/user'
- 
-// // 导入视图组件
-
-// import AnnotateView from '../views/AnnotateView.vue'
-// import TrainingView from '../views/TrainingView.vue'
-// import TaskListView from '../views/TaskListView.vue'
-// import ProfileView from '../views/ProfileView.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     /* ========= 公开路由（无需登录） ========= */
-     {
+    {
       path: '/',
-       name: 'home',
-       component: () => import('@/views/home/Home.vue'),
-       meta: { requiresAuth: false }
-     },
-     
-    /* ========= 需要登录的路由 ========= */
+      name: 'home',
+      component: () => import('@/views/home/Home.vue'),
+      meta: { requiresAuth: false }
+    },
+    
+    /* ========= 需要登录的路由（带 Layout 布局） ========= */
     {
       path: '/app',
       component: () => import('@/views/project/Layout.vue'),
@@ -44,39 +37,33 @@ const router = createRouter({
           name: 'history',
           component: () => import('@/views/history/History.vue')
         },
+        // 独立功能路由改为子路由
+        {
+          path: 'annotate',
+          name: 'annotate',
+          component: () => import('@/views/annotate/AnnotateView.vue'),
+          meta: { requiresAuth: true }
+        },
+        {
+          path: 'tasks',
+          name: 'tasks',
+          component: () => import('@/views/tasks/TaskListView.vue'),
+          meta: { requiresAuth: true }
+        },
+        {
+          path: 'training',
+          name: 'training',
+          component: () => import('@/views/training/TrainingView.vue'),
+          meta: { requiresAuth: true }
+        },
         {
           path: 'profile',
-          name: 'app-profile',
-          component: () => import('@/views/profile/Profile.vue')
+          name: 'profile',
+          component: () => import('@/views/profile/ProfileView.vue'),
+          meta: { requiresAuth: true }
         }
       ]
-    },
-    
-    // /* ========= 独立功能路由（需要登录） ========= */
-    // {
-    //   path: '/annotate',
-    //   name: 'annotate',
-    //   component: AnnotateView,
-    //   meta: { requiresAuth: true }
-    // },
-    // {
-    //   path: '/tasks',
-    //   name: 'tasks',
-    //   component: TaskListView,
-    //   meta: { requiresAuth: true }
-    // },
-    // {
-    //   path: '/training',
-    //   name: 'training',
-    //   component: TrainingView,
-    //   meta: { requiresAuth: true }
-    // },
-    // {
-    //   path: '/profile',
-    //   name: 'profile',
-    //   component: ProfileView,
-    //   meta: { requiresAuth: true }
-    // }
+    }
   ]
 })
 
@@ -84,9 +71,7 @@ const router = createRouter({
 router.beforeEach((to, from, next) => {
   const userStore = useUserStore()
   
-  // 检查路由是否需要登录
   if (to.meta.requiresAuth && !userStore.isLogin) {
-    // 未登录跳回首页
     next('/')
   } else {
     next()

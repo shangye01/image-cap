@@ -1,34 +1,22 @@
 # config.py
 import os
-from supabase import create_client, Client
-from dotenv import load_dotenv
+
 from pathlib import Path
+from dotenv import load_dotenv
+from supabase import Client, create_client
 
 # 强制加载项目根目录的 .env
-env_path = Path(__file__).parent.parent / '.env'
+env_path = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
-supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-print(f"DEBUG: env_path = {env_path}")
-print(f"DEBUG: SUPABASE_URL = {SUPABASE_URL[:30]}..." if SUPABASE_URL else "None")
-print(f"DEBUG: SUPABASE_SERVICE_KEY exists = {bool(SUPABASE_SERVICE_KEY)}")
-
-# 先定义默认值，防止导入失败
-supabase = None
-
-if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-    print("WARNING: 缺少 Supabase 配置，使用空客户端")
-else:
+supabase: Client | None = None
+if SUPABASE_URL and SUPABASE_SERVICE_KEY:
     try:
-        supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-        print("DEBUG: Supabase 客户端创建成功")
-    except Exception as e:
-        print(f"ERROR: 创建 Supabase 客户端失败: {e}")
-        import traceback
-        traceback.print_exc()
-        # 不抛出异常，让导入继续
+        supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+    except Exception:
+        # 保持为 None，由认证接口返回清晰错误
         supabase = None
 
 # 训练配置
@@ -60,5 +48,5 @@ TRAINING_CONFIG = {
         "batch": 16,
         "imgsz": 640,
         "amp": True,
-    }
+    },
 }
