@@ -647,16 +647,23 @@ const {
 } = useTaskFlow(store, imageObj, labelColorMap, dragTick)
 
 // ✅ 监听 imageObj 变化
-watch(imageObj, async (newImg) => {
-  if (!newImg) return
+// ✅ 合并后的单个 watch(imageObj)
+watch(imageObj, async (newImg, oldImg) => {
+  if (!newImg) {
+    console.log('👁️ imageObj 被清空')
+    return
+  }
   
-  console.log('👁️ imageObj watch 触发')
+  console.log('👁️ imageObj watch 触发, src:', newImg.src?.substring(0, 50))
   
+  // 1. 等待图片完全加载
   if (!newImg.complete || newImg.naturalWidth === 0) {
+    console.log('⏳ 等待图片加载完成...')
     await new Promise((resolve) => {
       const onLoad = () => {
         newImg.removeEventListener('load', onLoad)
         newImg.removeEventListener('error', onError)
+        console.log('✅ 图片 onload 触发, 尺寸:', newImg.naturalWidth, 'x', newImg.naturalHeight)
         resolve()
       }
       const onError = () => {
@@ -670,23 +677,42 @@ watch(imageObj, async (newImg) => {
     })
   }
   
+  // 2. 等待 DOM 更新
   await nextTick()
+  
+  // 3. 触发刷新
   dragTick.value++
   
-setTimeout(() => {
-  if (stageRef.value) {
-    // Vue Konva 3.x: ref 直接返回 Konva 节点
-    const stage = stageRef.value
-    if (stage && typeof stage.batchDraw === 'function') {
-      stage.batchDraw()
-      console.log('🎨 Stage batchDraw 完成')
-    } else {
-      console.error('❌ stageRef.value 不是有效的 Konva Stage:', stageRef.value)
-    }
+  // 4. 打印调试信息
+  if (canvasContainer.value) {
+    const container = canvasContainer.value
+    console.log('🖼️ 图片切换:', {
+      imgWidth: newImg.naturalWidth || newImg.width,
+      imgHeight: newImg.naturalHeight || newImg.height,
+      containerWidth: container.clientWidth,
+      containerHeight: container.clientHeight,
+      computedSize: containerSize.value
+    })
   }
-}, 50)
   
-}, { immediate: true })
+  // 5. 可选：尝试刷新 Stage（如果不需要可以删除这段）
+  setTimeout(() => {
+    if (!stageRef.value) {
+      console.warn('⚠️ stageRef.value 为空')
+      return
+    }
+    
+    const stageNode = typeof stageRef.value.getNode === 'function'
+      ? stageRef.value.getNode()
+      : stageRef.value
+
+    if (stageNode && typeof stageNode.batchDraw === 'function') {
+      stageNode.batchDraw()
+      console.log('🎨 Stage batchDraw 完成')
+    }
+  }, 100)
+  
+}, { immediate: true })  // 保留 immediate: true
 
 const {
   isDrawing,
@@ -1620,13 +1646,26 @@ const updateSelectedAnnotationColor = async () => {
   setTimeout(() => taskSuccess.value = '', 2000)
 }
 
+// 在 AnnotateView.vue 中替换 loadSavedLabels 函数
 const loadSavedLabels = async () => {
+  console.log('📦 开始从后端加载标签...')
+  
   try {
-     const response = await fetch(apiUrl('/api/labels'))
-    const data = await response.json()
+    const url = apiUrl('/api/labels')
+    console.log('🌐 请求 URL:', url)
     
-    if (data.labels && data.labels.length > 0) {
-      console.log('📦 从后端加载标签:', data.labels)
+    const response = await fetch(url)
+    console.log('📥 响应状态:', response.status, response.statusText)
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+    }
+    
+    const data = await response.json()
+    console.log('📦 后端返回数据:', data)
+    
+    if (data.labels && Array.isArray(data.labels) && data.labels.length > 0) {
+      console.log(`✅ 从后端加载 ${data.labels.length} 个标签:`, data.labels)
       
       data.labels.forEach(label => {
         if (!labelColorMap.has(label.name)) {
@@ -1637,9 +1676,21 @@ const loadSavedLabels = async () => {
       })
       
       syncLabelsFromMap()
+      
+      // 更新当前标签为第一个
+      if (labels.value.length > 0 && currentLabel.value === 'object') {
+        currentLabel.value = labels.value[0].name
+        selectedColor.value = labelColorMap.get(currentLabel.value)
+      }
+      
+      console.log('✅ 标签加载完成，当前标签:', currentLabel.value)
+    } else {
+      console.warn('⚠️ 后端没有返回标签或格式错误:', data)
     }
   } catch (error) {
-    console.error('加载后端标签失败:', error)
+    console.error('❌ 加载后端标签失败:', error)
+    // 使用默认标签
+    console.log('ℹ️ 使用前端默认标签')
   }
 }
 
@@ -1652,14 +1703,19 @@ const centerImage = () => {
 // ========== 生命周期 ==========
 onMounted(async () => {
   console.log('🚀 组件挂载完成')
-  
+    
+  // 1. 先初始化默认标签（确保有备选）
   const defaultLabels = [
     { name: 'person', color: '#ff0000' },
     { name: 'car', color: '#0000ff' },
     { name: 'dog', color: '#00ff00' }
   ]
   defaultLabels.forEach(label => ensureLabelColor(label.name, label.color))
+  syncLabelsFromMap()
+  
+  // 2. 然后从后端加载（会覆盖或添加）
   await loadSavedLabels()
+
 
   let resizeObserver = null
   if (canvasContainer.value) {
@@ -1817,20 +1873,7 @@ onMounted(async () => {
   })
 })
 
-watch(imageObj, async (newImg) => {
-  if (newImg && canvasContainer.value) {
-    await nextTick()
-    const container = canvasContainer.value
-    console.log('🖼️ 图片切换:', {
-      imgWidth: newImg.width,
-      imgHeight: newImg.height,
-      containerWidth: container.clientWidth,
-      containerHeight: container.clientHeight,
-      computedSize: containerSize.value
-    })
-    dragTick.value++
-  }
-}, { immediate: false })
+
 </script>
 
 <style scoped>
