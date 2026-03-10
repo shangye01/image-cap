@@ -671,7 +671,40 @@ async def predict(request: Request, file: UploadFile = File(...)):
                 "user_id": "current_user",
                 "saved_at": datetime.now().isoformat()
             }).execute()
+        # ========== 在 return 前添加这段调试代码 ==========
+        print(f"\n{'=' * 60}")
+        print(f"🔥 [DEBUG] /api/predict 准备返回响应")
+        print(f"🔥 [DEBUG] task_id: {task_id}")
+        print(f"🔥 [DEBUG] image_url: {image_url}")
+        print(f"🔥 [DEBUG] image_url 类型: {type(image_url)}")
+        print(f"🔥 [DEBUG] annotations 数量: {len(annotations)}")
+        print(f"🔥 [DEBUG] model_version: {version}")
 
+        print(f"{'=' * 60}")
+
+        # 验证 image_url 是否可访问
+        if image_url:
+            if image_url.startswith("http"):
+                print(f"🔥 [DEBUG] 图片URL是远程地址")
+            else:
+                print(f"🔥 [DEBUG] 图片URL是本地路径，检查文件...")
+                # 提取文件名
+                local_file = UPLOAD_DIR / Path(image_url).name
+                print(f"🔥 [DEBUG] 本地文件检查: {local_file} -> 存在: {local_file.exists()}")
+
+        return {
+            "success": True,
+            "task_id": task_id,
+            "image_url": image_url,
+            "annotations": annotations,
+            "model_version": version,
+            "stats": {
+                "raw_count": len(raw_annotations),
+                "final_count": len(annotations),
+                "removed_duplicates": removed_count
+            },
+            "message": f"检测到 {len(annotations)} 个目标{'（已去重）' if removed_count > 0 else ''}"
+        }
         return {
             "success": True,
             "task_id": task_id,
@@ -914,19 +947,59 @@ async def switch_model(payload: dict):
 
 @app.get("/api/tasks/{task_id}")
 async def get_task(task_id: str):
+    print(f"\n{'=' * 60}")
+    print(f"🔥 [DEBUG] /api/tasks/{task_id} 被调用")
+    print(f"{'=' * 60}")
+
     try:
-        task = supabase.table("tasks").select("*").eq("id", task_id).single().execute().data
+        print(f"🔥 [DEBUG] 查询 tasks 表...")
+        task_result = supabase.table("tasks").select("*").eq("id", task_id).execute()
+        print(f"🔥 [DEBUG] 查询结果: {task_result}")
+        print(f"🔥 [DEBUG] 数据条数: {len(task_result.data) if task_result.data else 0}")
+
+        task = task_result.data[0] if task_result.data else None
+
         if not task:
-            raise HTTPException(404, detail="任务不存在")
+            print(f"❌ [DEBUG] 任务不存在: {task_id}")
+            raise HTTPException(status_code=404, detail="任务不存在")
 
-        draft = supabase.table("drafts").select("*").eq("task_id", task_id).maybe_single().execute().data
+        print(f"✅ [DEBUG] 找到任务:")
+        print(f"   - id: {task.get('id')}")
+        print(f"   - image_url: {task.get('image_url')}")
+        print(f"   - status: {task.get('status')}")
+
+        # 查询草稿
+        print(f"🔥 [DEBUG] 查询 drafts 表...")
+        draft_result = supabase.table("drafts").select("*").eq("task_id", task_id).maybe_single().execute()
+        draft = draft_result.data
+
         if draft:
-            return {"task": task, "annotations": draft["annotations_json"], "source": "draft"}
+            print(f"✅ [DEBUG] 找到草稿，annotations 数量: {len(draft.get('annotations_json', []))}")
+            return {
+                "task": task,
+                "annotations": draft["annotations_json"],
+                "source": "draft"
+            }
 
-        anns = supabase.table("annotations").select("*").eq("task_id", task_id).execute().data
-        return {"task": task, "annotations": anns or [], "source": "database"}
+        # 查询标注
+        print(f"🔥 [DEBUG] 查询 annotations 表...")
+        anns_result = supabase.table("annotations").select("*").eq("task_id", task_id).execute()
+        anns = anns_result.data or []
+        print(f"✅ [DEBUG] 找到 {len(anns)} 个标注")
+
+        return {
+            "task": task,
+            "annotations": anns,
+            "source": "database"
+        }
+
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(404, detail=str(e))
+        print(f"❌ [DEBUG] 获取任务失败: {e}")
+        import traceback
+        print(f"❌ [DEBUG] 堆栈: {traceback.format_exc()}")
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @app.post("/api/annotations/{task_id}")
@@ -982,11 +1055,87 @@ async def save_annotations(task_id: str, payload: dict):
 
 @app.get("/api/labels")
 async def get_labels():
+    print(f"\n{'=' * 60}")
+    print(f"🔥 [DEBUG] /api/labels 被调用")
+    print(f"🔥 [DEBUG] supabase 对象类型: {type(supabase)}")
+    print(f"🔥 [DEBUG] supabase 是否为 None: {supabase is None}")
+    print(f"🔥 [DEBUG] SUPABASE_URL: {SUPABASE_URL}")
+    print(f"{'=' * 60}")
+
+    # 默认标签数据（备用）
+    default_labels = [
+        {"id": 1, "name": "person", "color": "#ff0000", "category": "human"},
+        {"id": 2, "name": "car", "color": "#0000ff", "category": "vehicle"},
+        {"id": 3, "name": "dog", "color": "#00ff00", "category": "animal"},
+        {"id": 4, "name": "cat", "color": "#ffa500", "category": "animal"},
+        {"id": 5, "name": "bird", "color": "#ffff00", "category": "animal"}
+    ]
+
     try:
+        # 检查 supabase 是否初始化
+        if supabase is None:
+            print(f"❌ [DEBUG] supabase 为 None，返回默认标签")
+            return {
+                "labels": default_labels,
+                "source": "default",
+                "warning": "Supabase 未连接，使用默认标签"
+            }
+
+        print(f"🔥 [DEBUG] 正在查询 label_configs 表...")
+
+        # 执行查询
         res = supabase.table("label_configs").select("*").order("name").execute()
-        return {"labels": res.data or []}
-    except:
-        return {"labels": []}
+
+        print(f"✅ [DEBUG] 查询成功")
+        print(f"🔥 [DEBUG] 返回数据类型: {type(res.data)}")
+        print(f"🔥 [DEBUG] 返回记录数: {len(res.data) if res.data else 0}")
+        print(f"🔥 [DEBUG] 原始数据: {res.data}")
+
+        # 如果数据库为空，返回默认标签
+        if not res.data or len(res.data) == 0:
+            print(f"⚠️ [DEBUG] 数据库为空，返回默认标签")
+            return {
+                "labels": default_labels,
+                "source": "default",
+                "warning": "数据库无标签，使用默认标签"
+            }
+
+        # 确保每条记录都有必要的字段
+        processed_labels = []
+        for idx, item in enumerate(res.data):
+            print(f"🔥 [DEBUG] 处理记录 {idx}: {item}")
+
+            # 处理可能的字段名差异
+            label_name = item.get("name") or item.get("label_name") or f"label_{idx}"
+            label_color = item.get("color") or item.get("label_color") or "#1890ff"
+            label_id = item.get("id") or idx
+
+            processed_labels.append({
+                "id": label_id,
+                "name": label_name,
+                "color": label_color,
+                "category": item.get("category")
+            })
+
+        print(f"✅ [DEBUG] 处理完成，返回 {len(processed_labels)} 条标签")
+        return {
+            "labels": processed_labels,
+            "source": "database",
+            "count": len(processed_labels)
+        }
+
+    except Exception as e:
+        print(f"❌ [DEBUG] 查询失败: {str(e)}")
+        import traceback
+        print(f"❌ [DEBUG] 错误堆栈:\n{traceback.format_exc()}")
+
+        # 出错时返回默认标签
+        return {
+            "labels": default_labels,
+            "source": "default",
+            "error": str(e),
+            "warning": f"查询失败({str(e)})，使用默认标签"
+        }
 
 
 @app.post("/api/labels")
@@ -1029,11 +1178,66 @@ async def delete_label(name: str):
 
 
 @app.get("/local-uploads/{filename}", name="get_local_upload")
-async def get_local_upload(filename: str):
-    path = UPLOAD_DIR / filename
+async def get_local_upload(filename: str, request: Request):
+    print(f"\n{'=' * 60}")
+    print(f"🔥 [DEBUG] /local-uploads/{filename} 被调用")
+    print(f"🔥 [DEBUG] 请求方法: {request.method}")
+    print(f"🔥 [DEBUG] 请求头: {dict(request.headers)}")
+    print(f"{'=' * 60}")
+
+    # 解码 URL 编码的文件名
+    from urllib.parse import unquote
+    decoded_filename = unquote(filename)
+    print(f"🔥 [DEBUG] 原始文件名: {filename}")
+    print(f"🔥 [DEBUG] 解码后文件名: {decoded_filename}")
+
+    # 构建完整路径
+    path = UPLOAD_DIR / decoded_filename
+    print(f"🔥 [DEBUG] UPLOAD_DIR: {UPLOAD_DIR.absolute()}")
+    print(f"🔥 [DEBUG] 完整路径: {path.absolute()}")
+    print(f"🔥 [DEBUG] 父目录是否存在: {path.parent.exists()}")
+    print(f"🔥 [DEBUG] 父目录内容: {list(path.parent.glob('*')) if path.parent.exists() else 'N/A'}")
+    print(f"🔥 [DEBUG] 文件是否存在: {path.exists()}")
+
     if path.exists():
-        return FileResponse(path)
-    raise HTTPException(404, detail="文件不存在")
+        file_stat = path.stat()
+        print(f"✅ [DEBUG] 文件存在!")
+        print(f"🔥 [DEBUG] 文件大小: {file_stat.st_size} bytes")
+        print(f"🔥 [DEBUG] 修改时间: {datetime.fromtimestamp(file_stat.st_mtime)}")
+        print(f"🔥 [DEBUG] 是否为文件: {path.is_file()}")
+
+        # 检测文件类型
+        import mimetypes
+        content_type, _ = mimetypes.guess_type(str(path))
+        print(f"🔥 [DEBUG] 推测的 Content-Type: {content_type}")
+
+        # 返回文件，禁用缓存防止 304 问题
+        response = FileResponse(
+            path,
+            media_type=content_type or "image/jpeg",
+            filename=decoded_filename
+        )
+
+        # 添加禁用缓存的头部
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        response.headers["ETag"] = str(file_stat.st_mtime)  # 使用修改时间作为 ETag
+
+        print(f"✅ [DEBUG] 返回文件响应，已禁用缓存")
+        return response
+
+    # 文件不存在，尝试查找相似文件
+    print(f"❌ [DEBUG] 文件不存在: {path}")
+
+    # 列出 uploads 目录所有文件
+    if UPLOAD_DIR.exists():
+        all_files = list(UPLOAD_DIR.glob("*"))
+        print(f"🔥 [DEBUG] uploads 目录现有文件 ({len(all_files)}个):")
+        for f in all_files:
+            print(f"   - {f.name}")
+
+    raise HTTPException(status_code=404, detail=f"文件不存在: {decoded_filename}")
 
 
 @app.post("/api/models/{model_name}/upload")

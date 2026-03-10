@@ -3,70 +3,88 @@ import { ref, nextTick } from 'vue'
 import { supabase } from '@/supabase'
 import { apiUrl, resolveAssetUrl } from '@/config/api'
 
-export function useTaskFlow(store, imageObj, labelColorMap, dragTick) {  // 添加 dragTick 参数
+export function useTaskFlow(store, imageObj, labelColorMap, dragTick) {  
   const taskLoading = ref(false)
   const submitLoading = ref(false)
   const taskError = ref('')
   const taskSuccess = ref('')
 
-  // 加载测试图片 - 修复版
-  const loadTestImage = async () => {
-    console.log('🖼️ useTaskFlow: 开始加载测试图片...')
-    taskLoading.value = true
-    taskError.value = ''
-    taskSuccess.value = ''
+  // 加载测试图片
+  // ========== 加载测试图片（完整修复版） ==========
+const loadTestImage = async () => {
+  console.log('🖼️ [loadTestImage] 开始加载测试图片...')
+  taskLoading.value = true
+  taskError.value = ''
+  taskSuccess.value = ''
+  
+  try {
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
     
-    try {
-      const img = new Image()
-      img.crossOrigin = 'anonymous'
-
-      // 使用 Promise 包装图片加载
-      await new Promise((resolve, reject) => {
-        img.onload = () => {
-          console.log('✅ useTaskFlow: 图片加载成功', img.width, 'x', img.height)
-          resolve()
-        }
-        img.onerror = () => reject(new Error('图片加载失败'))
-        
-        // 添加超时处理
-        setTimeout(() => reject(new Error('加载超时')), 5000)
-        
-        img.src = '/test.jpg'
-      })
-
-      // 关键：设置 imageObj
-      imageObj.value = img
-      
-      console.log('✅ useTaskFlow: imageObj.value 已设置', imageObj.value ? '成功' : '失败')
-      
-      // 清空标注和设置任务
-      store.clearAnnotations()
-      store.setCurrentTask({ 
-        id: 'test', 
-        imageUrl: '/test.jpg',
-        imageStoragePath: ''
-      })
-      
-      // ✅ 关键：触发画布刷新
-      await nextTick()
-      
-      // ✅ 触发 dragTick 强制刷新 Konva 画布
-      if (dragTick) {
-        dragTick.value++
-        console.log('✅ useTaskFlow: dragTick 已触发', dragTick.value)
+    // 等待图片完全加载（关键修复）
+    await new Promise((resolve, reject) => {
+      img.onload = () => {
+        console.log('✅ [loadTestImage] 图片 onload 触发')
+        console.log(`   尺寸: ${img.naturalWidth} x ${img.naturalHeight}`)
+        console.log(`   complete: ${img.complete}`)
+        resolve()
       }
       
-      taskSuccess.value = '✅ 测试图片加载成功'
-      setTimeout(() => taskSuccess.value = '', 2000)
+      img.onerror = (e) => {
+        console.error('❌ [loadTestImage] 图片加载失败:', e)
+        reject(new Error('图片加载失败'))
+      }
       
-    } catch (error) {
-      console.error('❌ useTaskFlow: 加载测试图片失败', error)
-      taskError.value = `❌ 加载失败: ${error.message}`
-      setTimeout(() => taskError.value = '', 3000)
-    } finally {
-      taskLoading.value = false
+      // 5秒超时
+      setTimeout(() => {
+        if (!img.complete) {
+          console.error('❌ [loadTestImage] 加载超时')
+          reject(new Error('加载超时'))
+        }
+      }, 5000)
+      
+      // 添加时间戳防止 304 缓存
+      const timestamp = Date.now()
+      img.src = `/test.jpg?t=${timestamp}`
+      console.log(`🔥 [loadTestImage] 设置 src: ${img.src}`)
+    })
+
+    // 确保图片已完全解码（关键）
+    if (img.decode) {
+      await img.decode()
+      console.log('✅ [loadTestImage] 图片 decode 完成')
     }
+    
+    // 使用 shallowRef 赋值（关键修复）
+    console.log('🔥 [loadTestImage] 赋值给 imageObj (shallowRef)')
+    imageObj.value = img
+    
+    // 强制等待 Vue 更新
+    await nextTick()
+    
+    // 触发重绘
+    dragTick.value++
+    console.log('✅ [loadTestImage] imageObj 赋值完成，dragTick:', dragTick.value)
+    
+    // 清空旧标注
+    store.clearAnnotations()
+    store.setCurrentTask({ 
+      id: 'test', 
+      imageUrl: `/test.jpg?t=${Date.now()}`,  // 也更新时间戳
+      imageStoragePath: ''
+    })
+    
+    taskSuccess.value = '✅ 测试图片加载成功'
+    setTimeout(() => taskSuccess.value = '', 2000)
+    
+  } catch (error) {
+    console.error('❌ [loadTestImage] 错误:', error)
+    taskError.value = `❌ 加载失败: ${error.message}`
+    setTimeout(() => taskError.value = '', 3000)
+  } finally {
+    taskLoading.value = false
   }
+}
 
   // 加载下一个任务
   const loadNextTask = async () => {
@@ -93,7 +111,8 @@ export function useTaskFlow(store, imageObj, labelColorMap, dragTick) {  // 添�
       await new Promise((resolve, reject) => {
         img.onload = () => resolve()
         img.onerror = () => reject(new Error('图片加载失败'))
-        imageUrl: resolveAssetUrl(data.image_url),
+        // ✅ 关键修复：修正语法错误，确保 src 被正确赋值
+        img.src = resolveAssetUrl(data.image_url)
         setTimeout(() => reject(new Error('加载超时')), 10000)
       })
       
@@ -102,7 +121,7 @@ export function useTaskFlow(store, imageObj, labelColorMap, dragTick) {  // 添�
       store.setCurrentTask({
         id: data.id,
         projectId: data.project_id,
-         imageUrl: resolveAssetUrl(data.image_url),
+        imageUrl: resolveAssetUrl(data.image_url),
         imageStoragePath: data.image_storage_path,
         yoloVersion: data.yolo_version
       })
@@ -124,10 +143,7 @@ export function useTaskFlow(store, imageObj, labelColorMap, dragTick) {  // 添�
 
   // 加载标注数据
   const loadAnnotations = async (taskId) => {
-    if (!taskId) {
-      console.warn('⚠️ loadAnnotations: taskId 为空')
-      return
-    }
+    if (!taskId) return
     
     try {
       const { data: draft } = await supabase
@@ -216,7 +232,6 @@ export function useTaskFlow(store, imageObj, labelColorMap, dragTick) {  // 添�
     }
   }
 
-  // 放弃任务
   const abandonTask = async () => {
     if (!store.currentTaskId) return
     
@@ -238,7 +253,6 @@ export function useTaskFlow(store, imageObj, labelColorMap, dragTick) {  // 添�
     }
   }
 
-  // 恢复任务
   const restoreTask = async (taskId) => {
     try {
       console.log('🔄 开始恢复任务:', taskId)
