@@ -1,256 +1,560 @@
 <template>
-  <div class="create-board-card" data-gd-click="button_click" data-button-name="create">
-    <div class="upload-box" @click="openDialog">
-      <div class="plus">+</div>
-    </div>
+  <div class="project-content-page">
+    <!-- 项目列表页 -->
+    <template v-if="!currentProject">
+      <div class="project-grid">
+        <CreateBoardCard
+          :existing-project-names="projectList.map((item) => item.projectName)"
+          @create="handleCreateProject"
+        />
 
-    <div class="title">创建</div>
-    <div class="desc">创建你的项目</div>
-  </div>
-
-  <teleport to="body">
-    <transition name="fade-mask">
-      <div v-if="visible" class="modal-mask" @click="closeDialog">
-        <transition name="zoom-dialog" appear>
-          <div class="modal-panel" @click.stop>
-            <div class="modal-header">
-              <div class="modal-title">创建</div>
-              <button class="close-btn" @click="closeDialog">×</button>
-            </div>
-
-            <div class="modal-body">
-              <div class="form-item">
-                <label class="form-label">项目名<span class="required">*</span></label>
-                <input v-model="form.projectName" class="text-input" />
-              </div>
-
-              <div class="form-item">
-                <label class="form-label">备注<span class="required">*</span></label>
-                <textarea v-model="form.remark" class="textarea-input"></textarea>
-              </div>
-
-              <div class="mode-row">
-                <label class="radio-item" @click="form.mode = 'keyword'">
-                  <span class="radio-dot" :class="{ active: form.mode === 'keyword' }"></span>
-                  <span class="radio-text strong">关键词模型</span>
-                </label>
-
-                <label class="radio-item" @click="form.mode = 'nonKeyword'">
-                  <span class="radio-dot" :class="{ active: form.mode === 'nonKeyword' }"></span>
-                  <span class="radio-text">非关键词模型</span>
-                </label>
-              </div>
-
-              <div class="tag-panel">
-                <div class="selected-title">已选择的标签</div>
-
-                <div class="selected-box">
-                  <template v-if="selectedTags.length">
-                    <div
-                      v-for="tag in selectedTags"
-                      :key="tag.id"
-                      class="tag-chip selected"
-                      :style="{ backgroundColor: tag.color }"
-                    >
-                      <span>{{ tag.name }}</span>
-                      <button class="tag-remove" @click="removeTag(tag.id)">×</button>
-                    </div>
-                  </template>
-
-                  <div v-else class="empty-text">请选择下方标签</div>
-                </div>
-
-                <div v-for="scene in scenes" :key="scene.id" class="scene-block">
-                  <div class="scene-title">{{ scene.name }}</div>
-
-                  <div class="scene-tags">
-                    <button
-                      v-for="tag in scene.tags"
-                      :key="tag.id"
-                      class="tag-chip scene-chip"
-                      :class="{ active: isSelected(tag.id) }"
-                      :style="{ backgroundColor: tag.color }"
-                      @click="toggleTag(tag)"
-                    >
-                      <span>{{ tag.name }}</span>
-                      <span v-if="isSelected(tag.id)" class="tag-remove small">×</span>
-                    </button>
-                  </div>
+        <div
+          v-for="project in projectList"
+          :key="project.id"
+          class="project-folder-card"
+          @click="enterProject(project)"
+          @mouseenter="showRemark(project.id)"
+          @mouseleave="hideRemark"
+        >
+          <div class="folder-preview">
+            <transition name="mask-fade">
+              <div
+                v-if="hoveredProjectId === project.id && project.remark"
+                class="folder-remark-mask"
+              >
+                <div class="folder-remark-text">
+                  {{ project.remark }}
                 </div>
               </div>
-              <div class="modal-footer">
-                <button class="create-btn" @click="submitCreate">创建</button>
-              </div>
+            </transition>
+
+            <div class="folder-shape">
+              <div class="folder-tab"></div>
             </div>
           </div>
-        </transition>
+
+          <div class="folder-name">
+            {{ project.projectName }}
+          </div>
+        </div>
       </div>
-    </transition>
-  </teleport>
+    </template>
+
+    <!-- 项目内部页 -->
+    <template v-else>
+      <div class="project-detail-header">
+        <div class="project-nav">
+          <button
+            class="back-btn"
+            type="button"
+            @click="backToProjectList"
+            aria-label="返回项目列表"
+          >
+            <span class="back-btn-icon">←</span>
+          </button>
+
+          <div class="breadcrumb">
+            <span class="breadcrumb-link" @click="backToProjectList">项目列表</span>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">{{ currentProject.projectName }}</span>
+          </div>
+        </div>
+
+        <div class="project-detail-title-wrap">
+          <div class="project-detail-title">{{ currentProject.projectName }}</div>
+          <div v-if="currentProject.remark" class="project-detail-remark">
+            {{ currentProject.remark }}
+          </div>
+        </div>
+      </div>
+
+      <div class="project-grid">
+        <div
+          v-for="folder in currentProject.folders"
+          :key="folder.id"
+          class="project-folder-card child-folder-card"
+          @click="toggleInnerFolder(folder.id)"
+        >
+          <div class="folder-preview small-folder-preview">
+            <div class="folder-shape">
+              <div class="folder-tab"></div>
+            </div>
+          </div>
+
+          <div class="folder-name">
+            {{ folder.name }}
+          </div>
+
+          <div class="folder-count">{{ folder.files.length }} 个文件</div>
+        </div>
+      </div>
+
+      <div v-if="openedInnerFolder" class="inner-folder-panel">
+        <div class="inner-folder-panel-title">
+          {{ openedInnerFolder.name }}
+        </div>
+
+        <div class="file-list">
+          <template v-if="openedInnerFolder.files.length">
+            <div v-for="file in openedInnerFolder.files" :key="file.id" class="file-item">
+              <div class="file-main">
+                <div class="file-icon">
+                  {{ isImageFile(file) ? '🖼️' : '📄' }}
+                </div>
+
+                <div class="file-info">
+                  <div class="file-name-text">{{ file.name }}</div>
+                  <div v-if="file.relativePath" class="file-path-text">
+                    {{ file.relativePath }}
+                  </div>
+                </div>
+
+                <div class="file-actions">
+                  <button
+                    v-if="isImageFile(file)"
+                    type="button"
+                    class="file-action-btn preview"
+                    @click.stop="previewFile(file)"
+                  >
+                    预览
+                  </button>
+
+                  <button type="button" class="file-action-btn work" @click.stop="handleWork(file)">
+                    工作
+                  </button>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <div v-else class="empty-folder-text">暂无文件</div>
+        </div>
+      </div>
+    </template>
+
+    <!-- 图片预览弹窗 -->
+    <teleport to="body">
+      <transition name="preview-fade">
+        <div v-if="previewVisible" class="preview-mask" @click="closePreview">
+          <div class="preview-panel" @click.stop>
+            <button class="preview-close-btn" type="button" @click="closePreview">×</button>
+
+            <div class="preview-content">
+              <img
+                v-if="previewImageUrl"
+                :src="previewImageUrl"
+                :alt="previewFileName"
+                class="preview-image"
+              />
+            </div>
+
+            <div class="preview-footer">
+              <div class="preview-file-name">{{ previewFileName }}</div>
+            </div>
+          </div>
+        </div>
+      </transition>
+    </teleport>
+  </div>
 </template>
 
 <script setup>
-import { computed, reactive, ref } from 'vue'
+import { computed, ref, onBeforeUnmount } from 'vue'
+import CreateBoardCard from '@/views/project/CreateBoardCard.vue'
 
-const emit = defineEmits(['create'])
+const projectList = ref([])
+const hoveredProjectId = ref(null)
 
-const visible = ref(false)
+const currentProjectId = ref(null)
+const openedInnerFolderId = ref(null)
 
-const form = reactive({
-  projectName: '',
-  remark: '',
-  mode: 'keyword',
-  selectedTagIds: [], // 不默认选择
+const previewVisible = ref(false)
+const previewImageUrl = ref('')
+const previewFileName = ref('')
+
+const currentProject = computed(() => {
+  return projectList.value.find((item) => item.id === currentProjectId.value) || null
 })
 
-const scenes = ref([
-  {
-    id: 1,
-    name: '场景1',
-    tags: [
-      { id: 1, name: '标签1', color: '#d9c2f2' },
-      { id: 2, name: '标签2', color: '#f4b4af' },
-      { id: 3, name: '标签3', color: '#b8c9f6' },
-      { id: 4, name: '标签4', color: '#ecd68d' },
-      { id: 5, name: '标签5', color: '#a9cf96' },
-    ],
-  },
-  {
-    id: 2,
-    name: '场景2',
-    tags: [
-      { id: 6, name: '标签1', color: '#aee9ec' },
-      { id: 7, name: '标签2', color: '#f2d562' },
-      { id: 8, name: '标签3', color: '#eea2ca' },
-    ],
-  },
-])
+const openedInnerFolder = computed(() => {
+  if (!currentProject.value) return null
+  return currentProject.value.folders.find((item) => item.id === openedInnerFolderId.value) || null
+})
 
-const allTags = computed(() => scenes.value.flatMap((scene) => scene.tags))
-
-const selectedTags = computed(() =>
-  allTags.value.filter((tag) => form.selectedTagIds.includes(tag.id))
-)
-
-const openDialog = () => {
-  visible.value = true
+const handleCreateProject = (projectData) => {
+  projectList.value.push(projectData)
 }
 
-const closeDialog = () => {
-  visible.value = false
+const enterProject = (project) => {
+  currentProjectId.value = project.id
+  openedInnerFolderId.value = null
 }
 
-const isSelected = (id) => {
-  return form.selectedTagIds.includes(id)
+const backToProjectList = () => {
+  currentProjectId.value = null
+  openedInnerFolderId.value = null
 }
 
-const toggleTag = (tag) => {
-  const index = form.selectedTagIds.indexOf(tag.id)
-  if (index > -1) {
-    form.selectedTagIds.splice(index, 1)
-  } else {
-    form.selectedTagIds.push(tag.id)
+const toggleInnerFolder = (folderId) => {
+  openedInnerFolderId.value = openedInnerFolderId.value === folderId ? null : folderId
+}
+
+const showRemark = (id) => {
+  hoveredProjectId.value = id
+}
+
+const hideRemark = () => {
+  hoveredProjectId.value = null
+}
+
+const isImageFile = (file) => {
+  return typeof file.type === 'string' && file.type.startsWith('image/')
+}
+
+const previewFile = (file) => {
+  if (!isImageFile(file) || !file.file) return
+
+  if (previewImageUrl.value) {
+    URL.revokeObjectURL(previewImageUrl.value)
+  }
+
+  previewImageUrl.value = URL.createObjectURL(file.file)
+  previewFileName.value = file.name
+  previewVisible.value = true
+}
+
+const closePreview = () => {
+  previewVisible.value = false
+  previewFileName.value = ''
+
+  if (previewImageUrl.value) {
+    URL.revokeObjectURL(previewImageUrl.value)
+    previewImageUrl.value = ''
   }
 }
 
-const removeTag = (id) => {
-  const index = form.selectedTagIds.indexOf(id)
-  if (index > -1) {
-    form.selectedTagIds.splice(index, 1)
-  }
+const handleWork = (file) => {
+  console.log('点击工作按钮：', file)
 }
 
-const resetForm = () => {
-  form.projectName = ''
-  form.remark = ''
-  form.mode = 'keyword'
-  form.selectedTagIds = []
-}
-
-const submitCreate = () => {
-  if (!form.projectName.trim()) {
-    alert('请输入项目名')
-    return
+onBeforeUnmount(() => {
+  if (previewImageUrl.value) {
+    URL.revokeObjectURL(previewImageUrl.value)
   }
-
-  if (!form.remark.trim()) {
-    alert('请输入备注')
-    return
-  }
-
-  emit('create', {
-    projectName: form.projectName.trim(),
-    remark: form.remark.trim(),
-    mode: form.mode,
-    selectedTags: selectedTags.value,
-  })
-
-  closeDialog()
-  resetForm()
-}
+})
 </script>
 
 <style scoped>
-.create-board-card {
+.project-content-page {
+  width: 100%;
+  padding: 24px;
+  box-sizing: border-box;
+}
+
+.project-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  align-items: flex-start;
+}
+
+.project-folder-card {
   width: 260px;
   cursor: pointer;
   user-select: none;
 }
 
-.upload-box {
+.folder-preview {
+  position: relative;
   width: 100%;
   height: 185px;
-  border: 2px dashed #d9d9d9;
   border-radius: 18px;
   background: #f7f7f7;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: border-color 0.2s ease, background-color 0.2s ease, transform 0.2s ease,
-    box-shadow 0.2s ease;
   box-sizing: border-box;
+  overflow: hidden;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
 }
 
-.plus {
-  font-size: 56px;
-  line-height: 1;
-  color: #222;
-  font-weight: 400;
-  transform: translateY(-2px);
-}
-
-.title {
-  margin-top: 16px;
-  font-size: 20px;
-  font-weight: 700;
-  line-height: 1.4;
-  color: #111827;
-}
-
-.desc {
-  margin-top: 8px;
-  font-size: 14px;
-  line-height: 1.6;
-  color: #6b7280;
-}
-
-.create-board-card:hover .upload-box {
-  border-color: #c7c7c7;
+.project-folder-card:hover .folder-preview {
   background: #f3f4f6;
   transform: translateY(-1px);
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.05);
 }
 
-.create-board-card:active .upload-box {
-  transform: translateY(0);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+.small-folder-preview {
+  height: 160px;
 }
 
-.modal-mask {
+.folder-shape {
+  position: relative;
+  width: 92px;
+  height: 60px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #f6cf70, #efbc46);
+  box-shadow: inset 0 -4px 0 rgba(0, 0, 0, 0.05);
+  z-index: 1;
+}
+
+.folder-tab {
+  position: absolute;
+  top: -10px;
+  left: 12px;
+  width: 34px;
+  height: 16px;
+  border-radius: 10px 10px 0 0;
+  background: #e9b94d;
+}
+
+.folder-name {
+  margin-top: 16px;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.4;
+  color: #111827;
+  word-break: break-word;
+}
+
+.folder-count {
+  margin-top: 8px;
+  font-size: 14px;
+  color: #6b7280;
+}
+
+.folder-remark-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: rgba(17, 24, 39, 0.58);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  box-sizing: border-box;
+}
+
+.folder-remark-text {
+  max-width: 100%;
+  max-height: 100%;
+  overflow-y: auto;
+  color: #ffffff;
+  font-size: 14px;
+  line-height: 1.7;
+  text-align: center;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.project-detail-header {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 28px;
+}
+
+.project-nav {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 44px;
+}
+
+.back-btn {
+  width: 40px;
+  height: 40px;
+  border: 1px solid #e5e7eb;
+  border-radius: 50%;
+  background: #ffffff;
+  color: #374151;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+  transition: transform 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease,
+    border-color 0.18s ease;
+}
+
+.back-btn:hover {
+  background: #f8fafc;
+  border-color: #d1d5db;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
+}
+
+.back-btn:active {
+  transform: translateY(0);
+}
+
+.back-btn-icon {
+  font-size: 18px;
+  line-height: 1;
+  transform: translateX(-1px);
+}
+
+.breadcrumb {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.breadcrumb-link {
+  color: #6b7280;
+  cursor: pointer;
+  transition: color 0.18s ease;
+}
+
+.breadcrumb-link:hover {
+  color: #111827;
+}
+
+.breadcrumb-separator {
+  color: #c0c4cc;
+}
+
+.breadcrumb-current {
+  color: #111827;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.project-detail-title-wrap {
+  min-width: 0;
+}
+
+.project-detail-title {
+  font-size: 28px;
+  font-weight: 800;
+  color: #111827;
+  line-height: 1.3;
+}
+
+.project-detail-remark {
+  margin-top: 8px;
+  font-size: 14px;
+  line-height: 1.7;
+  color: #6b7280;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.inner-folder-panel {
+  margin-top: 28px;
+  border: 1px solid #e5e7eb;
+  border-radius: 18px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.inner-folder-panel-title {
+  padding: 16px 18px;
+  font-size: 18px;
+  font-weight: 700;
+  color: #111827;
+  background: #f8fafc;
+  border-bottom: 1px solid #eef2f7;
+}
+
+.file-list {
+  padding: 14px;
+}
+
+.file-item + .file-item {
+  margin-top: 10px;
+}
+
+.file-item {
+  border-radius: 14px;
+  background: #f8fafc;
+  padding: 12px 14px;
+  transition: background-color 0.2s ease, transform 0.2s ease;
+}
+
+.file-item:hover {
+  background: #eef6fb;
+  transform: translateY(-1px);
+}
+
+.file-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.file-action-btn {
+  border: none;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  transition: transform 0.18s ease, filter 0.18s ease, box-shadow 0.18s ease;
+}
+
+.file-action-btn:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.02);
+}
+
+.file-action-btn.preview {
+  background: #e0f2fe;
+  color: #0369a1;
+}
+
+.file-action-btn.work {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.file-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.file-icon {
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+.file-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.file-name-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: #111827;
+  word-break: break-all;
+}
+
+.file-path-text {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #6b7280;
+  word-break: break-all;
+}
+
+.empty-folder-text {
+  font-size: 13px;
+  color: #9aa1a9;
+  padding: 6px 2px;
+}
+
+.preview-mask {
   position: fixed;
   inset: 0;
   z-index: 9999;
-  background: rgba(240, 240, 240, 0.72);
+  background: rgba(15, 23, 42, 0.72);
   backdrop-filter: blur(2px);
   display: flex;
   align-items: center;
@@ -259,362 +563,75 @@ const submitCreate = () => {
   box-sizing: border-box;
 }
 
-.modal-panel {
-  width: min(640px, 92vw);
-  max-height: 88vh;
-
+.preview-panel {
+  position: relative;
+  width: min(980px, 92vw);
+  max-height: 90vh;
+  background: #ffffff;
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.24);
   display: flex;
   flex-direction: column;
-
-  background: #fff;
-  border-radius: 24px;
-  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.12);
-
-  overflow: hidden;
 }
 
-.modal-header {
-  position: sticky;
-  top: 0;
+.preview-close-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
   z-index: 2;
-  background: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 20px 24px 16px;
-  border-bottom: 1px solid #ececec;
-  flex-shrink: 0;
-}
-
-.modal-title {
-  font-size: 24px;
-  font-weight: 700;
-  color: #5f6670;
-  margin: 0;
-}
-
-.modal-body {
-  flex: 1;
-  overflow-y: auto;
-
-  padding: 18px 24px 24px;
-}
-
-.modal-footer {
-  margin-top: 28px;
-  display: flex;
-  justify-content: flex-end;
-}
-
-.form-item {
-  margin-bottom: 18px;
-}
-
-.form-label {
-  display: block;
-  margin-bottom: 8px;
-  font-size: 16px;
-  font-weight: 700;
-  color: #2b2f36;
-}
-
-.required {
-  color: #c85c5c;
-  margin-left: 2px;
-}
-
-.text-input,
-.textarea-input {
-  width: 100%;
-  border: 2px solid #b8b8b8;
-  border-radius: 14px;
-  outline: none;
-  font-size: 14px;
-  color: #333;
-  box-sizing: border-box;
-  background: #fff;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
-}
-
-.text-input {
-  height: 46px;
-  padding: 0 14px;
-}
-
-.textarea-input {
-  min-height: 120px;
-  padding: 12px 14px;
-  resize: vertical;
-}
-
-.text-input:hover,
-.textarea-input:hover {
-  border-color: #9aa8b0;
-}
-
-.text-input:focus,
-.textarea-input:focus {
-  border-color: #45b8cb;
-  box-shadow: 0 0 0 4px rgba(69, 184, 203, 0.12);
-  background: #fcfeff;
-}
-
-.mode-row {
-  display: flex;
-  align-items: center;
-  gap: 48px;
-  margin: 8px 0 18px;
-  flex-wrap: wrap;
-}
-
-.radio-item {
-  display: inline-flex;
-  align-items: center;
-  cursor: pointer;
-}
-
-.radio-dot {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  border: 2px solid #a6a6a6;
-  margin-right: 10px;
-  box-sizing: border-box;
-  position: relative;
-  flex-shrink: 0;
-  transition: border-color 0.2s ease, transform 0.2s ease;
-}
-
-.radio-dot.active {
-  border-color: #3c8596;
-}
-
-.radio-dot.active::after {
-  content: '';
-  position: absolute;
-  inset: 3px;
-  border-radius: 50%;
-  background: #3c8596;
-}
-
-.radio-item:hover .radio-dot {
-  transform: scale(1.05);
-}
-
-.radio-text {
-  font-size: 15px;
-  color: #737373;
-}
-
-.radio-text.strong {
-  font-weight: 700;
-  color: #1f2937;
-}
-
-.tag-panel {
-  background: #fafafa;
-  border-radius: 10px;
-  padding: 16px;
-}
-
-.selected-title {
-  font-size: 15px;
-  color: #2b2f36;
-  margin-bottom: 10px;
-  font-weight: 600;
-}
-
-.selected-box {
-  min-height: 76px;
-  border: 2px solid #b8b8b8;
-  border-radius: 14px;
-  background: #fff;
-  padding: 14px;
-  box-sizing: border-box;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  gap: 10px;
-}
-
-.empty-text {
-  font-size: 13px;
-  color: #9aa1a9;
-}
-
-.scene-block {
-  padding-top: 18px;
-  margin-top: 18px;
-  border-top: 1px solid #dddddd;
-}
-
-.scene-title {
-  font-size: 15px;
-  font-weight: 700;
-  color: #2b2f36;
-  margin-bottom: 14px;
-}
-
-.scene-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-
-.tag-chip {
-  position: relative;
+  width: 36px;
+  height: 36px;
   border: none;
-  border-radius: 14px;
-  padding: 10px 14px;
-  font-size: 14px;
-  color: #2d3748;
-  cursor: pointer;
-  line-height: 1;
-  transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
-}
-
-.tag-chip:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.08);
-  filter: brightness(1.02);
-}
-
-.tag-chip.selected {
-  padding-right: 32px;
-}
-
-.scene-chip.active {
-  box-shadow: 0 0 0 2px rgba(88, 121, 91, 0.16);
-}
-
-.tag-remove {
-  position: absolute;
-  top: -8px;
-  right: -8px;
-  width: 22px;
-  height: 22px;
   border-radius: 50%;
-  border: 2px solid #95a47b;
-  background: #dce8cb;
-  color: #7d8e68;
-  font-size: 18px;
-  line-height: 16px;
-  cursor: pointer;
-  padding: 0;
-}
-
-.tag-remove.small {
-  position: absolute;
-  top: -8px;
-  right: -8px;
-}
-
-.create-btn {
-  border: none;
-  border-radius: 999px;
-  padding: 10px 26px;
-  font-size: 16px;
+  background: rgba(17, 24, 39, 0.72);
   color: #fff;
-  cursor: pointer;
-  background: linear-gradient(135deg, #43c7db, #2faec6);
-  box-shadow: 0 10px 20px rgba(47, 174, 198, 0.25);
-  transition: transform 0.2s ease, box-shadow 0.2s ease, filter 0.2s ease;
-}
-
-.create-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 12px 24px rgba(47, 174, 198, 0.3);
-  filter: brightness(1.02);
-}
-
-.create-btn:active {
-  transform: translateY(0);
-}
-
-.close-btn {
-  width: 34px;
-  height: 34px;
-  border: none;
-  border-radius: 50%;
-  background: transparent;
-  font-size: 26px;
+  font-size: 24px;
   line-height: 1;
-  color: #999;
   cursor: pointer;
-  transition: background-color 0.2s ease, color 0.2s ease;
-  flex-shrink: 0;
 }
 
-.close-btn:hover {
-  background: #f3f4f6;
-  color: #666;
+.preview-content {
+  flex: 1;
+  min-height: 0;
+  background: #f8fafc;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px 24px;
+  box-sizing: border-box;
 }
 
-.fade-mask-enter-active,
-.fade-mask-leave-active {
-  transition: opacity 0.22s ease;
+.preview-image {
+  max-width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+  border-radius: 12px;
 }
 
-.fade-mask-enter-from,
-.fade-mask-leave-to {
+.preview-footer {
+  padding: 14px 18px 18px;
+  border-top: 1px solid #eef2f7;
+}
+
+.preview-file-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #111827;
+  word-break: break-all;
+}
+
+.mask-fade-enter-active,
+.mask-fade-leave-active,
+.preview-fade-enter-active,
+.preview-fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.mask-fade-enter-from,
+.mask-fade-leave-to,
+.preview-fade-enter-from,
+.preview-fade-leave-to {
   opacity: 0;
-}
-
-.zoom-dialog-enter-active,
-.zoom-dialog-leave-active {
-  transition: opacity 0.22s ease, transform 0.22s ease;
-}
-
-.zoom-dialog-enter-from,
-.zoom-dialog-leave-to {
-  opacity: 0;
-  transform: scale(0.96) translateY(8px);
-}
-
-@media (max-width: 640px) {
-  .modal-mask {
-    padding: 14px;
-  }
-
-  .modal-panel {
-    width: 100%;
-    max-height: 90vh;
-    border-radius: 18px;
-  }
-
-  .modal-header {
-    padding: 16px 16px 12px;
-  }
-
-  .modal-body {
-    padding: 14px 16px;
-  }
-
-  .modal-footer {
-    padding: 12px 16px 16px;
-  }
-
-  .modal-title {
-    font-size: 20px;
-  }
-
-  .form-label,
-  .selected-title,
-  .scene-title {
-    font-size: 14px;
-  }
-
-  .mode-row {
-    gap: 18px;
-  }
-
-  .radio-text {
-    font-size: 14px;
-  }
-
-  .create-btn {
-    font-size: 15px;
-    padding: 10px 22px;
-  }
 }
 </style>
