@@ -411,13 +411,42 @@ const submitCreate = () => {
     return
   }
 
+  const pendingFiles = uploadedFiles.value.map((item) => ({
+    id: `${item.name}_${item.size}_${item.file.lastModified}_${Math.random()
+      .toString(36)
+      .slice(2)}`,
+    name: item.name,
+    relativePath: item.relativePath || '',
+    type: item.type,
+    size: item.size,
+    file: item.file,
+  }))
+
+  const ts = Date.now()
+
   emit('create', {
-    id: Date.now(),
+    id: ts,
     projectName: form.projectName.trim(),
     remark: form.remark.trim(),
     mode: form.mode,
     selectedTags: selectedTags.value,
-    uploadedFiles: uploadedFiles.value.map((item) => item.file),
+    folders: [
+      {
+        id: `pending_${ts}`,
+        name: '待标注',
+        files: pendingFiles,
+      },
+      {
+        id: `labeling_${ts}`,
+        name: '标注中',
+        files: [],
+      },
+      {
+        id: `done_${ts}`,
+        name: '已标注',
+        files: [],
+      },
+    ],
   })
 
   closeDialog()
