@@ -1,6 +1,6 @@
 <template>
   <div class="project-content-page">
-    <!-- 项目列表页 -->
+    <!-- 1. 项目列表页 -->
     <template v-if="!currentProject">
       <div class="project-toolbar">
         <div class="toolbar-left">
@@ -99,8 +99,8 @@
       <div v-if="!filteredProjectList.length" class="empty-project-state">没有匹配的项目</div>
     </template>
 
-    <!-- 项目内部页 -->
-    <template v-else>
+    <!-- 2. 项目内部：文件夹列表页 -->
+    <template v-else-if="currentProject && !currentFolder">
       <div class="project-detail-header">
         <div class="project-nav">
           <button
@@ -122,14 +122,6 @@
         <div class="project-detail-title-wrap">
           <div class="project-detail-title-row">
             <div class="project-detail-title">{{ currentProject.projectName }}</div>
-
-            <button class="mini-action-btn" type="button" @click="openRenameDialog(currentProject)">
-              重命名
-            </button>
-
-            <button class="mini-action-btn danger" type="button" @click="deleteCurrentProject">
-              删除项目
-            </button>
           </div>
 
           <div v-if="currentProject.remark" class="project-detail-remark">
@@ -143,7 +135,7 @@
           v-for="folder in currentProject.folders"
           :key="folder.id"
           class="project-folder-card child-folder-card"
-          @click="toggleInnerFolder(folder.id)"
+          @click="enterFolder(folder)"
         >
           <div class="folder-preview small-folder-preview">
             <div class="folder-shape">
@@ -158,48 +150,85 @@
           <div class="folder-count">{{ folder.files.length }} 个文件</div>
         </div>
       </div>
+    </template>
 
-      <div v-if="openedInnerFolder" class="inner-folder-panel">
-        <div class="inner-folder-panel-title">
-          {{ openedInnerFolder.name }}
+    <!-- 3. 文件夹内部：图片文件宫格页 -->
+    <template v-else-if="currentProject && currentFolder">
+      <div class="project-detail-header">
+        <div class="project-nav">
+          <button
+            class="back-btn"
+            type="button"
+            @click="backToFolderList"
+            aria-label="返回文件夹列表"
+          >
+            <span class="back-btn-icon">←</span>
+          </button>
+
+          <div class="breadcrumb">
+            <span class="breadcrumb-link" @click="backToProjectList">项目列表</span>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-link" @click="backToFolderList">
+              {{ currentProject.projectName }}
+            </span>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-current">{{ currentFolder.name }}</span>
+          </div>
         </div>
 
-        <div class="file-list">
-          <template v-if="openedInnerFolder.files.length">
-            <div v-for="file in openedInnerFolder.files" :key="file.id" class="file-item">
-              <div class="file-main">
-                <div class="file-icon">
-                  {{ isImageFile(file) ? '🖼️' : '📄' }}
-                </div>
+        <div class="project-detail-title-wrap">
+          <div class="project-detail-title-row">
+            <div class="project-detail-title">{{ currentFolder.name }}</div>
+          </div>
 
-                <div class="file-info">
-                  <div class="file-name-text">{{ file.name }}</div>
-                  <div v-if="file.relativePath" class="file-path-text">
-                    {{ file.relativePath }}
-                  </div>
-                </div>
-
-                <div class="file-actions">
-                  <button
-                    v-if="isImageFile(file)"
-                    type="button"
-                    class="file-action-btn preview"
-                    @click.stop="previewFile(file)"
-                  >
-                    预览
-                  </button>
-
-                  <button type="button" class="file-action-btn work" @click.stop="handleWork(file)">
-                    工作
-                  </button>
-                </div>
-              </div>
-            </div>
-          </template>
-
-          <div v-else class="empty-folder-text">暂无文件</div>
+          <div class="project-detail-remark">共 {{ currentFolder.files.length }} 个文件</div>
         </div>
       </div>
+
+      <div v-if="currentFolder.files.length" class="image-grid">
+        <div v-for="file in currentFolder.files" :key="file.id" class="image-card">
+          <div
+            class="image-card-preview"
+            @click.stop="isImageFile(file) ? previewFile(file) : undefined"
+          >
+            <template v-if="isImageFile(file) && getFilePreviewUrl(file)">
+              <img :src="getFilePreviewUrl(file)" :alt="file.name" class="image-thumb" />
+            </template>
+
+            <template v-else-if="isImageFile(file)">
+              <div class="image-placeholder">图片不可预览</div>
+            </template>
+
+            <template v-else>
+              <div class="file-placeholder">📄</div>
+            </template>
+          </div>
+
+          <div class="image-card-info">
+            <div class="file-name-text">{{ file.name }}</div>
+            <div v-if="file.relativePath" class="file-path-text">
+              {{ file.relativePath }}
+            </div>
+          </div>
+
+          <div class="image-card-actions">
+            <button
+              v-if="isImageFile(file)"
+              type="button"
+              class="file-action-btn preview"
+              @click.stop="previewFile(file)"
+            >
+              预览
+            </button>
+
+            <button type="button" class="file-action-btn work" @click.stop="handleWork(file)">
+              工作
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div v-else class="empty-folder-page">该文件夹暂无文件</div>
     </template>
 
     <!-- 工作弹窗 -->
@@ -358,7 +387,7 @@ const projectList = ref([])
 const hoveredProjectId = ref(null)
 
 const currentProjectId = ref(null)
-const openedInnerFolderId = ref(null)
+const currentFolderId = ref(null)
 const openedProjectMenuId = ref(null)
 
 const searchKeyword = ref('')
@@ -378,6 +407,8 @@ const workForm = reactive({
   mode: 'keyword',
   selectedTagIds: [],
 })
+
+const previewUrlMap = new Map()
 
 const scenes = ref([
   {
@@ -410,9 +441,9 @@ const currentProject = computed(() => {
   return projectList.value.find((item) => item.id === currentProjectId.value) || null
 })
 
-const openedInnerFolder = computed(() => {
-  if (!currentProject.value) return null
-  return currentProject.value.folders.find((item) => item.id === openedInnerFolderId.value) || null
+const currentFolder = computed(() => {
+  if (!currentProject.value || !currentFolderId.value) return null
+  return currentProject.value.folders.find((item) => item.id === currentFolderId.value) || null
 })
 
 const currentWorkFile = computed(() => {
@@ -540,17 +571,21 @@ const handleCreateProject = (projectData) => {
 const enterProject = (project) => {
   closeProjectMenu()
   currentProjectId.value = project.id
-  openedInnerFolderId.value = null
+  currentFolderId.value = null
 }
 
 const backToProjectList = () => {
   closeProjectMenu()
   currentProjectId.value = null
-  openedInnerFolderId.value = null
+  currentFolderId.value = null
 }
 
-const toggleInnerFolder = (folderId) => {
-  openedInnerFolderId.value = openedInnerFolderId.value === folderId ? null : folderId
+const enterFolder = (folder) => {
+  currentFolderId.value = folder.id
+}
+
+const backToFolderList = () => {
+  currentFolderId.value = null
 }
 
 const showRemark = (id) => {
@@ -563,6 +598,18 @@ const hideRemark = () => {
 
 const isImageFile = (file) => {
   return typeof file.type === 'string' && file.type.startsWith('image/')
+}
+
+const getFilePreviewUrl = (file) => {
+  if (!isImageFile(file) || !file.file) return ''
+
+  if (previewUrlMap.has(file.id)) {
+    return previewUrlMap.get(file.id)
+  }
+
+  const url = URL.createObjectURL(file.file)
+  previewUrlMap.set(file.id, url)
+  return url
 }
 
 const previewFile = (file) => {
@@ -678,11 +725,6 @@ const deleteProject = (projectId) => {
   }
 }
 
-const deleteCurrentProject = () => {
-  if (!currentProject.value) return
-  deleteProject(currentProject.value.id)
-}
-
 const formatDate = (timestamp) => {
   if (!timestamp) return ''
   const date = new Date(timestamp)
@@ -712,6 +754,10 @@ onBeforeUnmount(() => {
   if (previewImageUrl.value) {
     URL.revokeObjectURL(previewImageUrl.value)
   }
+
+  previewUrlMap.forEach((url) => URL.revokeObjectURL(url))
+  previewUrlMap.clear()
+
   window.removeEventListener('click', handleGlobalClick)
 })
 
@@ -797,6 +843,7 @@ const handleDeleteFromMenu = (projectId) => {
 }
 
 .project-folder-card {
+  position: relative;
   width: 260px;
   user-select: none;
 }
@@ -827,6 +874,7 @@ const handleDeleteFromMenu = (projectId) => {
 
 .small-folder-preview {
   height: 160px;
+  cursor: pointer;
 }
 
 .folder-shape {
@@ -865,40 +913,6 @@ const handleDeleteFromMenu = (projectId) => {
   gap: 8px;
   font-size: 12px;
   color: #6b7280;
-}
-
-.mini-action-btn,
-.dialog-btn,
-.file-action-btn {
-  border: none;
-  border-radius: 999px;
-  cursor: pointer;
-  transition: transform 0.18s ease, filter 0.18s ease, box-shadow 0.18s ease;
-}
-
-.mini-action-btn {
-  padding: 8px 14px;
-  font-size: 13px;
-  background: #eef2f7;
-  color: #374151;
-}
-
-.mini-action-btn:hover,
-.dialog-btn:hover,
-.file-action-btn:hover {
-  transform: translateY(-1px);
-  filter: brightness(1.02);
-}
-
-.mini-action-btn.danger {
-  background: #fee2e2;
-  color: #b91c1c;
-}
-
-.project-folder-card {
-  position: relative;
-  width: 260px;
-  user-select: none;
 }
 
 .project-card-menu-wrap {
@@ -1114,48 +1128,102 @@ const handleDeleteFromMenu = (projectId) => {
   word-break: break-word;
 }
 
-.inner-folder-panel {
-  margin-top: 28px;
+.image-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 18px;
+}
+
+.image-card {
+  border-radius: 16px;
+  background: #ffffff;
   border: 1px solid #e5e7eb;
-  border-radius: 18px;
-  background: #fff;
   overflow: hidden;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
-.inner-folder-panel-title {
-  padding: 16px 18px;
-  font-size: 18px;
-  font-weight: 700;
-  color: #111827;
+.image-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+}
+
+.image-card-preview {
+  width: 100%;
+  aspect-ratio: 1 / 1;
   background: #f8fafc;
-  border-bottom: 1px solid #eef2f7;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  cursor: pointer;
 }
 
-.file-list {
-  padding: 14px;
-}
-
-.file-item + .file-item {
-  margin-top: 10px;
-}
-
-.file-item {
-  border-radius: 14px;
+.image-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
   background: #f8fafc;
-  padding: 12px 14px;
-  transition: background-color 0.2s ease, transform 0.2s ease;
 }
 
-.file-item:hover {
-  background: #eef6fb;
-  transform: translateY(-1px);
+.image-placeholder,
+.file-placeholder {
+  font-size: 14px;
+  color: #9aa1a9;
 }
 
-.file-actions {
+.file-placeholder {
+  font-size: 40px;
+}
+
+.image-card-info {
+  padding: 12px 12px 8px;
+}
+
+.image-card-actions {
+  padding: 0 12px 12px;
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-shrink: 0;
+}
+
+.file-name-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: #111827;
+  word-break: break-all;
+}
+
+.file-path-text {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #6b7280;
+  word-break: break-all;
+}
+
+.empty-folder-page,
+.empty-project-state {
+  font-size: 14px;
+  color: #9aa1a9;
+  padding: 12px 2px;
+}
+
+.empty-project-state {
+  margin-top: 24px;
+}
+
+.dialog-btn,
+.file-action-btn {
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: transform 0.18s ease, filter 0.18s ease, box-shadow 0.18s ease;
+}
+
+.dialog-btn:hover,
+.file-action-btn:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.02);
 }
 
 .file-action-btn {
@@ -1174,50 +1242,32 @@ const handleDeleteFromMenu = (projectId) => {
   color: #166534;
 }
 
-.file-main {
+.dialog-mask,
+.preview-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(15, 23, 42, 0.72);
+  backdrop-filter: blur(2px);
   display: flex;
-  align-items: flex-start;
-  gap: 10px;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  box-sizing: border-box;
 }
 
-.file-icon {
-  font-size: 16px;
-  line-height: 1.2;
-}
-
-.file-info {
-  min-width: 0;
-  flex: 1;
-}
-
-.file-name-text {
-  font-size: 14px;
-  font-weight: 600;
-  color: #111827;
-  word-break: break-all;
-}
-
-.file-path-text {
-  margin-top: 4px;
-  font-size: 12px;
-  color: #6b7280;
-  word-break: break-all;
-}
-
-.empty-folder-text,
-.empty-project-state {
-  font-size: 13px;
-  color: #9aa1a9;
-  padding: 6px 2px;
-}
-
-.empty-project-state {
-  margin-top: 24px;
+.dialog-panel {
+  width: min(420px, 92vw);
+  background: #fff;
+  border-radius: 18px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.24);
+  padding: 22px;
+  box-sizing: border-box;
 }
 
 .dialog-panel.work-dialog-panel {
   width: min(840px, 96vw);
-  max-height: 200vh;
+  max-height: 90vh;
   display: flex;
   flex-direction: column;
   padding: 0;
@@ -1249,6 +1299,16 @@ const handleDeleteFromMenu = (projectId) => {
 .work-dialog-close:hover {
   background: #f3f4f6;
   color: #666;
+}
+
+.dialog-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: #111827;
+}
+
+.dialog-body {
+  margin-top: 16px;
 }
 
 .work-dialog-body {
@@ -1418,39 +1478,6 @@ const handleDeleteFromMenu = (projectId) => {
   color: #9aa1a9;
 }
 
-.dialog-mask,
-.preview-mask {
-  position: fixed;
-  inset: 0;
-  z-index: 9999;
-  background: rgba(15, 23, 42, 0.72);
-  backdrop-filter: blur(2px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  box-sizing: border-box;
-}
-
-.dialog-panel {
-  width: min(420px, 92vw);
-  background: #fff;
-  border-radius: 18px;
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.24);
-  padding: 22px;
-  box-sizing: border-box;
-}
-
-.dialog-title {
-  font-size: 20px;
-  font-weight: 700;
-  color: #111827;
-}
-
-.dialog-body {
-  margin-top: 16px;
-}
-
 .dialog-input {
   width: 100%;
   height: 44px;
@@ -1478,6 +1505,12 @@ const handleDeleteFromMenu = (projectId) => {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+}
+
+.work-dialog-panel .dialog-footer {
+  margin-top: 0;
+  padding: 20px 32px 28px;
+  justify-content: flex-end;
 }
 
 .dialog-btn {
@@ -1583,11 +1616,10 @@ const handleDeleteFromMenu = (projectId) => {
   .project-detail-title {
     font-size: 24px;
   }
-}
 
-.work-dialog-panel .dialog-footer {
-  margin-top: 0;
-  padding: 20px 32px 28px;
-  justify-content: flex-end;
+  .image-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
 }
 </style>
