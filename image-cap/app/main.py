@@ -46,11 +46,23 @@ logger = logging.getLogger(__name__)
 
 # ========== FastAPI 应用 ==========
 
+def _get_allowed_origins() -> List[str]:
+    """从环境变量读取允许跨域的来源，便于本地和局域网联调。"""
+    default_origins = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]
+    raw_origins = os.getenv("CORS_ALLOW_ORIGINS", "")
+    if not raw_origins:
+        return default_origins
+
+    origins = [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
+    return origins or default_origins
+
 
 # CORS - 允许前端域名
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

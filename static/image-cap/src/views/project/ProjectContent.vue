@@ -202,6 +202,95 @@
       </div>
     </template>
 
+    <!-- 工作弹窗 -->
+    <teleport to="body">
+      <transition name="preview-fade">
+        <div v-if="workVisible" class="dialog-mask" @click="closeWorkDialog">
+          <div class="dialog-panel work-dialog-panel" @click.stop>
+            <div class="work-dialog-header">
+              <div class="dialog-title">工作</div>
+              <button class="work-dialog-close" type="button" @click="closeWorkDialog">×</button>
+            </div>
+
+            <div class="dialog-body work-dialog-body">
+              <div class="work-file-summary">
+                当前文件：<span>{{ currentWorkFile?.name || '' }}</span>
+              </div>
+
+              <div class="mode-row">
+                <label class="radio-item" @click="workForm.mode = 'keyword'">
+                  <span class="radio-dot" :class="{ active: workForm.mode === 'keyword' }"></span>
+                  <span class="radio-text" :class="{ strong: workForm.mode === 'keyword' }">
+                    关键词模型
+                  </span>
+                </label>
+
+                <label class="radio-item" @click="workForm.mode = 'nonKeyword'">
+                  <span
+                    class="radio-dot"
+                    :class="{ active: workForm.mode === 'nonKeyword' }"
+                  ></span>
+                  <span class="radio-text" :class="{ strong: workForm.mode === 'nonKeyword' }">
+                    非关键词模型
+                  </span>
+                </label>
+              </div>
+
+              <div v-if="workForm.mode === 'keyword'" class="tag-panel">
+                <div class="selected-title">已选择的标签</div>
+
+                <div class="selected-box">
+                  <template v-if="workSelectedTags.length">
+                    <div
+                      v-for="tag in workSelectedTags"
+                      :key="tag.id"
+                      class="tag-chip selected"
+                      :style="{ backgroundColor: tag.color }"
+                    >
+                      <span>{{ tag.name }}</span>
+                      <button class="tag-remove" type="button" @click="removeWorkTag(tag.id)">
+                        ×
+                      </button>
+                    </div>
+                  </template>
+
+                  <div v-else class="empty-text">请选择下方标签</div>
+                </div>
+
+                <div v-for="scene in scenes" :key="scene.id" class="scene-block">
+                  <div class="scene-title">{{ scene.name }}</div>
+
+                  <div class="scene-tags">
+                    <button
+                      v-for="tag in scene.tags"
+                      :key="tag.id"
+                      type="button"
+                      class="tag-chip scene-chip"
+                      :class="{ active: isWorkSelected(tag.id) }"
+                      :style="{ backgroundColor: tag.color }"
+                      @click="toggleWorkTag(tag)"
+                    >
+                      <span>{{ tag.name }}</span>
+                      <span v-if="isWorkSelected(tag.id)" class="tag-remove small">×</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="dialog-footer">
+              <button class="dialog-btn secondary" type="button" @click="closeWorkDialog">
+                取消
+              </button>
+              <button class="dialog-btn primary" type="button" @click="confirmWorkDialog">
+                确定
+              </button>
+            </div>
+          </div>
+        </div>
+      </transition>
+    </teleport>
+
     <!-- 重命名弹窗 -->
     <teleport to="body">
       <transition name="preview-fade">
@@ -260,7 +349,7 @@
 </template>
 
 <script setup>
-import { computed, ref, onBeforeUnmount, onMounted, watch } from 'vue'
+import { computed, reactive, ref, onBeforeUnmount, onMounted, watch } from 'vue'
 import CreateBoardCard from '@/views/project/CreateBoardCard.vue'
 
 const STORAGE_KEY = 'image-cap-projects-v1'
@@ -283,6 +372,36 @@ const previewVisible = ref(false)
 const previewImageUrl = ref('')
 const previewFileName = ref('')
 
+const workVisible = ref(false)
+const currentWorkFileId = ref(null)
+const workForm = reactive({
+  mode: 'keyword',
+  selectedTagIds: [],
+})
+
+const scenes = ref([
+  {
+    id: 1,
+    name: '场景1',
+    tags: [
+      { id: 1, name: '标签1', color: '#d9c2f2' },
+      { id: 2, name: '标签2', color: '#f4b4af' },
+      { id: 3, name: '标签3', color: '#b8c9f6' },
+      { id: 4, name: '标签4', color: '#ecd68d' },
+      { id: 5, name: '标签5', color: '#a9cf96' },
+    ],
+  },
+  {
+    id: 2,
+    name: '场景2',
+    tags: [
+      { id: 6, name: '标签1', color: '#aee9ec' },
+      { id: 7, name: '标签2', color: '#f2d562' },
+      { id: 8, name: '标签3', color: '#eea2ca' },
+    ],
+  },
+])
+
 const handleGlobalClick = () => {
   closeProjectMenu()
 }
@@ -295,6 +414,23 @@ const openedInnerFolder = computed(() => {
   if (!currentProject.value) return null
   return currentProject.value.folders.find((item) => item.id === openedInnerFolderId.value) || null
 })
+
+const currentWorkFile = computed(() => {
+  if (!currentProject.value || !currentWorkFileId.value) return null
+
+  for (const folder of currentProject.value.folders || []) {
+    const matched = (folder.files || []).find((file) => file.id === currentWorkFileId.value)
+    if (matched) return matched
+  }
+
+  return null
+})
+
+const allTags = computed(() => scenes.value.flatMap((scene) => scene.tags))
+
+const workSelectedTags = computed(() =>
+  allTags.value.filter((tag) => workForm.selectedTagIds.includes(tag.id))
+)
 
 const filteredProjectList = computed(() => {
   const keyword = searchKeyword.value.trim().toLowerCase()
@@ -336,6 +472,8 @@ const persistProjects = () => {
   try {
     const serializable = projectList.value.map((project) => ({
       ...project,
+      selectedTagIds: Array.isArray(project.selectedTagIds) ? [...project.selectedTagIds] : [],
+      selectedTags: Array.isArray(project.selectedTags) ? [...project.selectedTags] : [],
       folders: (project.folders || []).map((folder) => ({
         ...folder,
         files: (folder.files || []).map((file) => ({
@@ -361,7 +499,16 @@ const loadProjects = () => {
 
     const parsed = JSON.parse(raw)
     if (Array.isArray(parsed)) {
-      projectList.value = parsed
+      projectList.value = parsed.map((project) => ({
+        ...project,
+        mode: project.mode || 'keyword',
+        selectedTagIds: Array.isArray(project.selectedTagIds)
+          ? project.selectedTagIds
+          : Array.isArray(project.selectedTags)
+          ? project.selectedTags.map((tag) => tag.id)
+          : [],
+        selectedTags: Array.isArray(project.selectedTags) ? project.selectedTags : [],
+      }))
     }
   } catch (error) {
     console.error('读取项目失败：', error)
@@ -381,6 +528,11 @@ const handleCreateProject = (projectData) => {
 
   projectList.value.push({
     ...projectData,
+    mode: projectData.mode || 'keyword',
+    selectedTagIds: Array.isArray(projectData.selectedTagIds)
+      ? [...projectData.selectedTagIds]
+      : [],
+    selectedTags: Array.isArray(projectData.selectedTags) ? [...projectData.selectedTags] : [],
     createdAt: Date.now(),
   })
 }
@@ -435,8 +587,56 @@ const closePreview = () => {
   }
 }
 
+const isWorkSelected = (id) => {
+  return workForm.selectedTagIds.includes(id)
+}
+
+const toggleWorkTag = (tag) => {
+  const index = workForm.selectedTagIds.indexOf(tag.id)
+  if (index > -1) {
+    workForm.selectedTagIds.splice(index, 1)
+  } else {
+    workForm.selectedTagIds.push(tag.id)
+  }
+}
+
+const removeWorkTag = (id) => {
+  const index = workForm.selectedTagIds.indexOf(id)
+  if (index > -1) {
+    workForm.selectedTagIds.splice(index, 1)
+  }
+}
+
 const handleWork = (file) => {
-  console.log('点击工作按钮：', file)
+  if (!currentProject.value) return
+
+  currentWorkFileId.value = file.id
+  workForm.mode = currentProject.value.mode || 'keyword'
+  workForm.selectedTagIds = []
+  workVisible.value = true
+}
+
+const closeWorkDialog = () => {
+  workVisible.value = false
+  currentWorkFileId.value = null
+  workForm.mode = 'keyword'
+  workForm.selectedTagIds = []
+}
+
+const confirmWorkDialog = () => {
+  if (!currentProject.value) return
+
+  currentProject.value.mode = workForm.mode
+
+  if (workForm.mode === 'nonKeyword') {
+    currentProject.value.selectedTagIds = []
+    currentProject.value.selectedTags = []
+  } else {
+    currentProject.value.selectedTagIds = [...workForm.selectedTagIds]
+    currentProject.value.selectedTags = [...workSelectedTags.value]
+  }
+
+  closeWorkDialog()
 }
 
 const openRenameDialog = (project) => {
@@ -491,6 +691,15 @@ const formatDate = (timestamp) => {
   const d = String(date.getDate()).padStart(2, '0')
   return `${y}-${m}-${d}`
 }
+
+watch(
+  () => workForm.mode,
+  (newMode) => {
+    if (newMode === 'nonKeyword') {
+      workForm.selectedTagIds = []
+    }
+  }
+)
 
 watch(projectList, persistProjects, { deep: true })
 
@@ -1006,6 +1215,209 @@ const handleDeleteFromMenu = (projectId) => {
   margin-top: 24px;
 }
 
+.dialog-panel.work-dialog-panel {
+  width: min(840px, 96vw);
+  max-height: 200vh;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.work-dialog-header {
+  padding: 22px 22px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.work-dialog-close {
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  font-size: 26px;
+  line-height: 1;
+  color: #999;
+  cursor: pointer;
+  transition: background-color 0.2s ease, color 0.2s ease;
+  flex-shrink: 0;
+}
+
+.work-dialog-close:hover {
+  background: #f3f4f6;
+  color: #666;
+}
+
+.work-dialog-body {
+  padding: 18px 22px 0;
+  overflow-y: auto;
+}
+
+.work-file-summary {
+  margin-bottom: 16px;
+  font-size: 14px;
+  color: #6b7280;
+  word-break: break-all;
+}
+
+.work-file-summary span {
+  color: #111827;
+  font-weight: 600;
+}
+
+.mode-row {
+  display: flex;
+  align-items: center;
+  gap: 48px;
+  margin: 8px 0 18px;
+  flex-wrap: wrap;
+}
+
+.radio-item {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.radio-dot {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid #a6a6a6;
+  margin-right: 10px;
+  box-sizing: border-box;
+  position: relative;
+  flex-shrink: 0;
+  transition: border-color 0.2s ease, transform 0.2s ease;
+}
+
+.radio-dot.active {
+  border-color: #3c8596;
+}
+
+.radio-dot.active::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  background: #3c8596;
+}
+
+.radio-item:hover .radio-dot {
+  transform: scale(1.05);
+}
+
+.radio-text {
+  font-size: 15px;
+  color: #737373;
+}
+
+.radio-text.strong {
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.tag-panel {
+  background: #fafafa;
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.selected-title {
+  font-size: 15px;
+  color: #2b2f36;
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+
+.selected-box {
+  min-height: 76px;
+  border: 2px solid #b8b8b8;
+  border-radius: 14px;
+  background: #fff;
+  padding: 14px;
+  box-sizing: border-box;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.scene-block {
+  padding-top: 18px;
+  margin-top: 18px;
+  border-top: 1px solid #dddddd;
+}
+
+.scene-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #2b2f36;
+  margin-bottom: 14px;
+}
+
+.scene-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.tag-chip {
+  position: relative;
+  border: none;
+  border-radius: 14px;
+  padding: 10px 14px;
+  font-size: 14px;
+  color: #2d3748;
+  cursor: pointer;
+  line-height: 1;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
+}
+
+.tag-chip:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.08);
+  filter: brightness(1.02);
+}
+
+.tag-chip.selected {
+  padding-right: 32px;
+}
+
+.scene-chip.active {
+  box-shadow: 0 0 0 2px rgba(88, 121, 91, 0.16);
+}
+
+.tag-remove {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid #95a47b;
+  background: #dce8cb;
+  color: #7d8e68;
+  font-size: 18px;
+  line-height: 16px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.tag-remove.small {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+}
+
+.empty-text {
+  font-size: 13px;
+  color: #9aa1a9;
+}
+
 .dialog-mask,
 .preview-mask {
   position: fixed;
@@ -1171,5 +1583,11 @@ const handleDeleteFromMenu = (projectId) => {
   .project-detail-title {
     font-size: 24px;
   }
+}
+
+.work-dialog-panel .dialog-footer {
+  margin-top: 0;
+  padding: 20px 32px 28px;
+  justify-content: flex-end;
 }
 </style>

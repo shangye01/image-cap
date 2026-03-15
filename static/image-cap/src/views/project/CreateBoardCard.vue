@@ -38,121 +38,7 @@
                 <textarea v-model="form.remark" class="textarea-input"></textarea>
               </div>
 
-              <div class="mode-row">
-                <label class="radio-item" @click="form.mode = 'keyword'">
-                  <span class="radio-dot" :class="{ active: form.mode === 'keyword' }"></span>
-                  <span class="radio-text strong">关键词模型</span>
-                </label>
-
-                <label class="radio-item" @click="form.mode = 'nonKeyword'">
-                  <span class="radio-dot" :class="{ active: form.mode === 'nonKeyword' }"></span>
-                  <span class="radio-text">非关键词模型</span>
-                </label>
-              </div>
-
-              <!-- 关键词模型：显示标签 + 上传 -->
-              <div v-if="form.mode === 'keyword'" class="tag-panel">
-                <div class="selected-title">已选择的标签</div>
-
-                <div class="selected-box">
-                  <template v-if="selectedTags.length">
-                    <div
-                      v-for="tag in selectedTags"
-                      :key="tag.id"
-                      class="tag-chip selected"
-                      :style="{ backgroundColor: tag.color }"
-                    >
-                      <span>{{ tag.name }}</span>
-                      <button class="tag-remove" type="button" @click="removeTag(tag.id)">×</button>
-                    </div>
-                  </template>
-
-                  <div v-else class="empty-text">请选择下方标签</div>
-                </div>
-
-                <div v-for="scene in scenes" :key="scene.id" class="scene-block">
-                  <div class="scene-title">{{ scene.name }}</div>
-
-                  <div class="scene-tags">
-                    <button
-                      v-for="tag in scene.tags"
-                      :key="tag.id"
-                      type="button"
-                      class="tag-chip scene-chip"
-                      :class="{ active: isSelected(tag.id) }"
-                      :style="{ backgroundColor: tag.color }"
-                      @click="toggleTag(tag)"
-                    >
-                      <span>{{ tag.name }}</span>
-                      <span v-if="isSelected(tag.id)" class="tag-remove small">×</span>
-                    </button>
-                  </div>
-                </div>
-
-                <div class="upload-section">
-                  <div class="upload-title">上传素材</div>
-
-                  <div class="upload-actions">
-                    <button class="upload-trigger-btn" type="button" @click="triggerImageUpload">
-                      上传图片
-                    </button>
-                    <button
-                      class="upload-trigger-btn folder"
-                      type="button"
-                      @click="triggerFolderUpload"
-                    >
-                      上传文件夹
-                    </button>
-                  </div>
-
-                  <input
-                    ref="imageInputRef"
-                    class="hidden-input"
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    @change="handleImageUpload"
-                  />
-
-                  <input
-                    ref="folderInputRef"
-                    class="hidden-input"
-                    type="file"
-                    webkitdirectory
-                    multiple
-                    @change="handleFolderUpload"
-                  />
-
-                  <div class="upload-file-list">
-                    <template v-if="uploadedFiles.length">
-                      <div
-                        v-for="(file, index) in uploadedFiles"
-                        :key="file.uid"
-                        class="upload-file-item"
-                      >
-                        <div class="file-info">
-                          <div class="file-name">{{ file.name }}</div>
-                          <div class="file-path" v-if="file.relativePath">
-                            {{ file.relativePath }}
-                          </div>
-                        </div>
-                        <button
-                          class="file-remove-btn"
-                          type="button"
-                          @click="removeUploadedFile(index)"
-                        >
-                          ×
-                        </button>
-                      </div>
-                    </template>
-
-                    <div v-else class="empty-text">暂未上传文件，可上传图片或整个文件夹</div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- 非关键词模型：只显示上传 -->
-              <div v-else class="tag-panel">
+              <div class="tag-panel">
                 <div class="upload-section no-border-top">
                   <div class="upload-title">上传素材</div>
 
@@ -227,7 +113,7 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, reactive, ref } from 'vue'
 
 const props = defineProps({
   existingProjectNames: {
@@ -271,40 +157,9 @@ const folderInputRef = ref(null)
 const form = reactive({
   projectName: '',
   remark: '',
-  mode: 'keyword',
-  selectedTagIds: [],
 })
 
 const uploadedFiles = ref([])
-
-const scenes = ref([
-  {
-    id: 1,
-    name: '场景1',
-    tags: [
-      { id: 1, name: '标签1', color: '#d9c2f2' },
-      { id: 2, name: '标签2', color: '#f4b4af' },
-      { id: 3, name: '标签3', color: '#b8c9f6' },
-      { id: 4, name: '标签4', color: '#ecd68d' },
-      { id: 5, name: '标签5', color: '#a9cf96' },
-    ],
-  },
-  {
-    id: 2,
-    name: '场景2',
-    tags: [
-      { id: 6, name: '标签1', color: '#aee9ec' },
-      { id: 7, name: '标签2', color: '#f2d562' },
-      { id: 8, name: '标签3', color: '#eea2ca' },
-    ],
-  },
-])
-
-const allTags = computed(() => scenes.value.flatMap((scene) => scene.tags))
-
-const selectedTags = computed(() =>
-  allTags.value.filter((tag) => form.selectedTagIds.includes(tag.id))
-)
 
 const openDialog = () => {
   visible.value = true
@@ -312,26 +167,6 @@ const openDialog = () => {
 
 const closeDialog = () => {
   visible.value = false
-}
-
-const isSelected = (id) => {
-  return form.selectedTagIds.includes(id)
-}
-
-const toggleTag = (tag) => {
-  const index = form.selectedTagIds.indexOf(tag.id)
-  if (index > -1) {
-    form.selectedTagIds.splice(index, 1)
-  } else {
-    form.selectedTagIds.push(tag.id)
-  }
-}
-
-const removeTag = (id) => {
-  const index = form.selectedTagIds.indexOf(id)
-  if (index > -1) {
-    form.selectedTagIds.splice(index, 1)
-  }
 }
 
 const triggerImageUpload = () => {
@@ -394,8 +229,7 @@ const removeUploadedFile = (index) => {
 const resetForm = () => {
   form.projectName = ''
   form.remark = ''
-  form.mode = 'keyword'
-  form.selectedTagIds = []
+
   uploadedFiles.value = []
   projectNameTouched.value = false
 }
@@ -428,8 +262,7 @@ const submitCreate = () => {
     id: ts,
     projectName: form.projectName.trim(),
     remark: form.remark.trim(),
-    mode: form.mode,
-    selectedTags: selectedTags.value,
+
     folders: [
       {
         id: `pending_${ts}`,
@@ -452,15 +285,6 @@ const submitCreate = () => {
   closeDialog()
   resetForm()
 }
-
-watch(
-  () => form.mode,
-  (newMode) => {
-    if (newMode === 'nonKeyword') {
-      form.selectedTagIds = []
-    }
-  }
-)
 </script>
 
 <style scoped>
