@@ -35,9 +35,22 @@ const router = createRouter({
         {
           path: 'history',
           name: 'history',
-          component: () => import('@/views/history/History.vue')
+          component: () => import('@/views/history/History.vue') // 这是你的列表页
         },
-        // 独立功能路由改为子路由
+        /* --- 新增：创建/发布项目页面 --- */
+        {
+          path: 'publish',
+          name: 'publish',
+          component: () => import('@/views/project/ProjectContent.vue'), // 确保路径对应你创建页的文件名
+          meta: { requiresAuth: true }
+        },
+        /* --- 新增：项目详情页面（查看文件夹图片分布） --- */
+        {
+          path: 'project-detail/:id',
+          name: 'project-detail',
+          component: () => import('@/views/history/ProjectDetail.vue'), // 对应刚才写的详情页
+          meta: { requiresAuth: true }
+        },
         {
           path: 'annotate',
           name: 'annotate',
@@ -67,10 +80,9 @@ const router = createRouter({
   ]
 })
 
-// 全局路由守卫
+// 全局路由守卫保持不变
 router.beforeEach((to, from, next) => {
   const userStore = useUserStore()
-  
   if (to.meta.requiresAuth && !userStore.isLogin) {
     next('/')
   } else {

@@ -12,21 +12,15 @@ Object.keys(import.meta.env).forEach(key => {
 })
 
 // 使用环境变量或备用值（注意 .trim() 去除空格！）
-const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL || '').trim()
-const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim()
+const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL || 'http://127.0.0.1:54321').trim()
+const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_ACJWlzQHLZjBrEguHvF0xg_3BJgxAaH').trim()
 
-if (!supabaseUrl || !supabaseAnonKey) {
-  console.warn('⚠️ 缺少 Supabase 环境变量，请在 .env 中配置 VITE_SUPABASE_URL 和 VITE_SUPABASE_ANON_KEY')
-}
 console.log('⚙️  最终配置:')
-console.log('  URL:', supabaseUrl || '(未配置)')
-console.log('  Key 已加载:', !!supabaseAnonKey)
+console.log('  URL:', supabaseUrl)
+console.log('  Key 已加载:', !!import.meta.env.VITE_SUPABASE_ANON_KEY)
 
 // ✅ 创建客户端（有类型定义）
-const supabase: SupabaseClient = createClient(
-  supabaseUrl || 'http://127.0.0.1:54321',
-  supabaseAnonKey || 'public-anon-key-missing'
-)
+const supabase: SupabaseClient = createClient(supabaseUrl, supabaseAnonKey)
 console.log('✅ Supabase 客户端创建成功')
 
 // 自动保存功能（添加类型）

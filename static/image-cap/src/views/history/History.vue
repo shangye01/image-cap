@@ -11,13 +11,12 @@
           @click="activeNav = item"
         >
           {{ item }}
-          <span v-if="item === '分享管理'" class="upgrade"></span>
         </button>
       </nav>
 
       <div class="header-actions">
-        <button class="invite-btn" type="button">邀请成员<span class="dot"></span></button>
-        <button class="add-btn" type="button">＋ 添加</button>
+        <button class="invite-btn" type="button">邀请成员</button>
+        <button class="add-btn" type="button" @click="$router.push('/app/publish')">＋ 添加</button>
       </div>
     </header>
 
@@ -28,242 +27,265 @@
           :key="tab"
           class="tab"
           :class="{ active: activeTab === tab }"
-          type="button"
           @click="activeTab = tab"
         >
-          {{ tab }}
+          {{ tab === '全部' ? `全部 (${projectList.length})` : tab }}
         </button>
       </div>
 
       <div class="filters">
-        <button v-for="filter in filters" :key="filter" class="filter-btn" type="button">
-          {{ filter }}
-          <span class="arrow">⌄</span>
+        <button v-for="filter in filters" :key="filter" class="filter-btn">
+          {{ filter }} <span class="arrow">⌄</span>
         </button>
-
-        <button class="icon-btn" type="button" aria-label="排序">↕</button>
-        <button class="icon-btn" type="button" aria-label="网格">◫</button>
+        <button class="icon-btn" @click="toggleSort" title="切换排序">↕</button>
       </div>
     </section>
 
-    <main class="empty-state">
-      <img class="empty-image" src="/image/uploadFolder.svg" alt="empty" />
-      <h2>拖放文件到这里，开始图片标注</h2>
-      <p>点击上传文件，支持上传本地文件</p>
-      <div class="empty-actions">
-        <button type="button" class="primary">上传文件</button>
+    <main class="content-area">
+      <div v-if="projectList.length > 0" class="project-grid">
+        <div 
+          v-for="project in projectList" 
+          :key="project.id" 
+          class="project-card" 
+          @click="$router.push(`/app/project-detail/${project.id}`)"
+        >
+          <div class="folder-visual">
+            <div class="folder-icon-wrapper">
+              <svg width="64" height="64" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M4 9C4 7.89543 4.89543 7 6 7H19L24 13H42C43.1046 13 44 13.8954 44 15V41C44 42.1046 43.1046 43 42 43H6C4.89543 43 4 42.1046 4 41V9Z" fill="#FFD466" stroke="#E8B339" stroke-width="2" stroke-linejoin="round"/>
+              </svg>
+              <span class="file-count-badge">{{ project.fileCount || 0 }}</span>
+            </div>
+          </div>
+
+          <div class="project-info">
+            <div class="project-name">{{ project.name }}</div>
+            <div class="project-meta">
+              {{ project.createTime }} · {{ project.category || '标注项目' }}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div v-else class="empty-state">
+        <img class="empty-image" src="/image/uploadFolder.svg" alt="empty" />
+        <h2>拖放文件夹到这里，开始项目</h2>
+        <p>点击下方按钮，支持上传本地文件夹</p>
+        <div class="empty-actions">
+          <button type="button" class="primary" @click="$router.push('/app/publish')">去上传</button>
+        </div>
       </div>
     </main>
   </div>
 </template>
+
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 
 const navItems = ['我的空间', '最近', '草稿箱', '回收站', '分享管理']
-const tabs = ['全部 (0)', '作品', '我上传的']
+const tabs = ['全部', '作品', '我上传的']
 const filters = ['颜色', '类别', '类型', '标签', '添加时间']
 
-const activeNav = ref('回收站')
-const activeTab = ref('全部 (0)')
-const showChildren = ref(false)
+const activeNav = ref('我的空间')
+const activeTab = ref('全部')
+
+// 核心数据状态
+const projectList = ref<any[]>([])
+
+// 页面加载时从本地缓存获取数据
+onMounted(() => {
+  const data = localStorage.getItem('my_projects')
+  if (data) {
+    projectList.value = JSON.parse(data)
+  }
+})
+
+// 排序功能逻辑
+const toggleSort = () => {
+  projectList.value.reverse()
+}
 </script>
 
 <style scoped>
+/* 页面基础背景 */
 .history-page {
   background: #f5f5f7;
-  padding: 20px 18px;
+  min-height: 100vh;
+  padding: 20px 24px;
   color: #1f2329;
 }
 
-.top-nav,
-.toolbar {
+/* 布局通用类 */
+.top-nav, .toolbar {
   display: flex;
   justify-content: space-between;
   align-items: center;
 }
 
-.nav-list,
-.tabs,
-.filters,
-.header-actions {
+.nav-list, .tabs, .filters, .header-actions {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.nav-item,
-.tab,
-.filter-btn,
-.icon-btn {
+/* 导航项样式 */
+.nav-item, .tab {
   border: none;
   background: transparent;
   color: #666f7a;
-  font-size: 15px;
-  cursor: pointer;
-}
-
-.nav-item,
-.tab {
   font-size: 16px;
   padding: 8px 0;
   margin-right: 18px;
+  cursor: pointer;
+  position: relative;
 }
 
-.nav-item.active,
-.tab.active {
-  color: #222;
-  border-bottom: 2px solid #222;
+.nav-item.active, .tab.active {
+  color: #111;
+  font-weight: 600;
 }
 
-.upgrade {
-  margin-left: 6px;
-  font-size: 12px;
+.nav-item.active::after, .tab.active::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: #111;
+}
+
+/* 按钮样式 */
+.add-btn, .primary {
+  background: #2d5cff;
   color: #fff;
-  border-radius: 8px;
-  padding: 1px 6px;
-}
-
-.invite-btn,
-.add-btn,
-.primary {
   border: none;
   border-radius: 10px;
   height: 38px;
   padding: 0 16px;
-  font-size: 16px;
+  font-size: 14px;
+  font-weight: 600;
   cursor: pointer;
 }
 
 .invite-btn {
   background: #fff;
   border: 1px solid #e4e6eb;
-  position: relative;
+  border-radius: 10px;
+  height: 38px;
+  padding: 0 16px;
+  cursor: pointer;
 }
 
-.dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  position: absolute;
-  right: 12px;
-  top: 8px;
-}
-
-.add-btn,
-.primary {
-  background: #2d5cff;
-  color: #fff;
-}
-
+/* 工具栏 */
 .toolbar {
-  margin-top: 18px;
+  margin-top: 24px;
+  border-bottom: 1px solid #eef0f2;
+  padding-bottom: 8px;
 }
 
-.tab {
-  font-size: 16px;
-  margin-right: 8px;
-}
-
-.filters {
-  gap: 16px;
-}
-
-.filter-btn,
-.switch-text,
-.icon-btn {
-  font-size: 16px;
+.filter-btn {
+  background: transparent;
+  border: none;
   color: #2e3238;
+  font-size: 14px;
+  cursor: pointer;
 }
 
-.arrow {
-  margin-left: 6px;
-  color: #9ba0a8;
+.arrow { color: #9ba0a8; margin-left: 4px; }
+
+.icon-btn {
+  background: none;
+  border: 1px solid #e4e6eb;
+  border-radius: 6px;
+  width: 32px;
+  height: 32px;
+  cursor: pointer;
 }
 
-.switch-wrap {
+/* 项目网格布局 */
+.content-area {
+  margin-top: 24px;
+}
+
+.project-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 24px;
+}
+
+.project-card {
+  background: #fff;
+  border-radius: 16px;
+  padding: 12px;
+  border: 1px solid transparent;
+  transition: all 0.25s ease;
+  cursor: pointer;
+}
+
+.project-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 24px rgba(0,0,0,0.06);
+  border-color: #2d5cff;
+}
+
+/* 文件夹视觉风格 */
+.folder-visual {
+  width: 100%;
+  height: 140px;
+  background: #fcfcfd;
+  border-radius: 12px;
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: center;
+  margin-bottom: 12px;
 }
 
-.switch-input {
-  display: none;
-}
-
-.switch {
-  width: 36px;
-  height: 20px;
-  border-radius: 10px;
-  background: #d7dbe2;
+.folder-icon-wrapper {
   position: relative;
 }
 
-.switch::after {
-  content: '';
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: #fff;
+.file-count-badge {
   position: absolute;
-  top: 3px;
-  left: 3px;
-  transition: all 0.2s ease;
-}
-
-.switch-input:checked + .switch {
+  right: -8px;
+  bottom: 8px;
   background: #2d5cff;
+  color: white;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  border: 2px solid #fff;
 }
 
-.switch-input:checked + .switch::after {
-  left: 19px;
+.project-info {
+  padding: 4px;
 }
 
+.project-name {
+  font-weight: 600;
+  font-size: 15px;
+  color: #1f2329;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.project-meta {
+  font-size: 12px;
+  color: #8b93a1;
+  margin-top: 4px;
+}
+
+/* 空状态样式 */
 .empty-state {
-  height: calc(100vh - 190px);
+  height: 60vh;
   display: flex;
   flex-direction: column;
   justify-content: center;
   align-items: center;
-  text-align: center;
 }
 
-.empty-image {
-  width: 150px;
-  margin-bottom: 22px;
-}
-
-h2 {
-  margin: 0;
-  font-size: 36px;
-}
-
-p {
-  color: #8b93a1;
-  font-size: 16px;
-}
-
-.empty-actions {
-  display: flex;
-  gap: 14px;
-  margin-top: 14px;
-}
-
-.float-actions {
-  position: fixed;
-  right: 28px;
-  bottom: 94px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.float-actions button {
-  width: 50px;
-  height: 50px;
-  border-radius: 50%;
-  border: 1px solid #e5e7ec;
-  background: #fff;
-  cursor: pointer;
-  font-size: 22px;
-}
+.empty-image { width: 180px; margin-bottom: 20px; }
+h2 { font-size: 24px; margin-bottom: 10px; }
+p { color: #8b93a1; margin-bottom: 24px; }
 </style>

@@ -1,4 +1,5 @@
 <template>
+
   <div class="annotation-workspace">
     <aside class="toolbar-panel">
    
@@ -50,6 +51,7 @@
       {{ trainingMessage.text }}
     </div>
 
+    <!-- 模型列表 -->
     <div v-if="trainingStatus.local_models?.length" class="model-list">
       <h4>可用模型</h4>
       <div 
@@ -108,6 +110,7 @@
         </div>
       </section>
 
+      <!-- 图片操作区域 -->
       <section class="tool-section" :class="{ collapsed: collapsedSections.image }">
         <div class="section-header" @click="collapsedSections.image = !collapsedSections.image">
           <h3 class="section-title">📷 图片操作</h3>
@@ -123,7 +126,9 @@
           </button>
         </div>
       </section>
-       <section class="tool-section" :class="{ collapsed: collapsedSections.zoom }">
+       <!-- 视图控制区域 -->
+      <!-- 视图控制区域 -->
+<section class="tool-section" :class="{ collapsed: collapsedSections.zoom }">
   <div class="section-header" @click="collapsedSections.zoom = !collapsedSections.zoom">
     <h3 class="section-title">🔍 视图控制</h3>
     <span class="collapse-btn">▼</span>
@@ -136,6 +141,7 @@
       <button @click="resetZoom()" class="btn btn-secondary btn-small" title="重置">⟲</button>
     </div>
     
+    <!-- ✅ 新增：拖拽控制 -->
     <div class="pan-controls" style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #e8e8e8;">
       <div class="pan-info" style="font-size: 12px; color: #666; margin-bottom: 8px;">
         📍 位置: X: {{ Math.round(stageX) }}, Y: {{ Math.round(stageY) }}
@@ -170,6 +176,7 @@
   </div>
 </section>
 
+      <!-- 选中标注详情区域 -->
       <transition name="fade">
         <section 
           class="tool-section selected-annotation-section" 
@@ -206,6 +213,7 @@
         </section>
       </transition>
 
+      <!-- 标签管理区域 -->
       <section class="tool-section" :class="{ collapsed: collapsedSections.label }">
         <div class="section-header" @click="collapsedSections.label = !collapsedSections.label">
           <h3 class="section-title">🏷️ 标签管理</h3>
@@ -303,6 +311,7 @@
         </div>
       </section>
 
+      <!-- 统计信息区域 -->
       <section class="tool-section" :class="{ collapsed: collapsedSections.stats }">
         <div class="section-header" @click="collapsedSections.stats = !collapsedSections.stats">
           <h3 class="section-title">📊 统计信息</h3>
@@ -322,6 +331,7 @@
         </div>
       </section>
 
+      <!-- 标注操作区域 -->
       <section class="tool-section action-section">
         <button 
           @click.stop="handleDeleteAnnotation"
@@ -333,6 +343,7 @@
         <div class="divider"></div>
       </section>
 
+      <!-- 导出区域 -->
       <section class="tool-section export-section">
         <button @click.stop="clearAll()" class="btn btn-danger" :disabled="annotations.length === 0">
           清除所有标注
@@ -349,14 +360,14 @@
     <main class="canvas-container" ref="canvasContainer">
       <div v-if="imageObj" class="canvas-wrapper"   
       :class="{ panning: isSpacePressed || isPanning }">
-        <v-stage ref="stageRef" 
+        <v-stage ref="stage" 
          :config="scaledStageConfig" 
          @mousedown="handleMouseDown" 
          @mousemove="handleMouseMove" 
          @mouseup="handleMouseUp(currentLabel)" 
          @click="handleStageClick">
           <v-layer ref="layer">
-           <v-image :config="scaledImageConfig" />
+            <v-image :config="{ ...scaledImageConfig, name: 'background-image' }" />
             <v-rect
            v-if="isDrawing && drawingRect"
            :config="getDrawingRectConfig()"  
@@ -369,7 +380,7 @@
               @dragend="(e) => handleRectDragEnd(e, ann.id)" 
               @dragmove="() => handleRectDragMove(ann.id)" 
             />
-            <v-text v-for="ann in annotations" :key="`label-${ann.id}-${dragTick}`" :config="getTextConfig(ann)" />
+            <v-text v-for="ann in annotations" :key="`label-${ann.id}-${dragTick.value}`" :config="getTextConfig(ann)" />
             <v-transformer ref="transformer" :config="transformerConfig" @transformstart="handleTransformStart" @transformend="(e) => handleTransformEnd(e, selectedId)" />
           </v-layer>
         </v-stage>
@@ -382,10 +393,8 @@
     </main>
   </div>
 </template>
-
 <script setup>
-// ✅ 1. 引入 shallowRef (修复图片显示BUG的关键)
-import { ref, computed, reactive, onMounted, onUnmounted, watch, toRef, nextTick, shallowRef } from 'vue'
+import { ref, computed, reactive, onMounted, onUnmounted, watch, toRef, nextTick } from 'vue'
 import { useAnnotationStore } from '@/stores/annotation'
 import { useColorManager } from '@/composables/useColorManager'
 import { useCanvasEvents } from '@/composables/useCanvasEvents'
@@ -394,18 +403,27 @@ import { useAnnotationApi } from '@/composables/useAnnotationApi'
 import { confirmDialog, promptDialog, alertDialog } from '@/composables/useDialog'
 import { supabase } from '@/supabase'
 import { useAutoSave } from '@/supabase'
-import { apiUrl, resolveAssetUrl } from '@/config/api'
+
+import { useRoute } from 'vue-router'
+
+
+
+const route = useRoute()
 const store = useAnnotationStore()
 
+
+
+
+
+
+
 // ========== 响应式状态定义 ==========
-// ✅ 2. 修改 imageObj 为 shallowRef
-// 普通 ref 会深度代理 Image 对象，导致 Konva 无法识别，从而出现图片不显示的问题
-const imageObj = shallowRef(null)
+const imageObj = ref(null)
 const fileInput = ref(null)
 const transformer = ref(null)
 const layer = ref(null)
 const canvasContainer = ref(null)
-const stageRef = ref(null)  
+const stage = ref(null)
 const newLabel = ref('')
 const selectedColor = ref('#ff0000')
 const currentLabel = ref('object')
@@ -431,24 +449,22 @@ const MAX_ZOOM = 5
 const ZOOM_STEP = 0.1
 
 // ========== 容器尺寸计算 ==========
+// baseContainerSize: 基础尺寸（不包含 zoomScale，用于坐标计算）
 const baseContainerSize = computed(() => {
-  if (!canvasContainer.value) {
+  if (!canvasContainer.value || !imageObj.value) {
     return { width: 800, height: 600, scale: 1 }
   }
-  
-  // 使用 naturalWidth/naturalHeight 获取原始尺寸
-  const imgWidth = imageObj.value?.naturalWidth || imageObj.value?.width || 800
-  const imgHeight = imageObj.value?.naturalHeight || imageObj.value?.height || 600
-  
   const container = canvasContainer.value
   const padding = 40
-  const maxWidth = Math.max(100, container.clientWidth - padding)
-  const maxHeight = Math.max(100, container.clientHeight - padding)
+  const maxWidth = container.clientWidth - padding
+  const maxHeight = container.clientHeight - padding
+  
+  const imgWidth = imageObj.value.width
+  const imgHeight = imageObj.value.height
   
   const scale = Math.min(
     maxWidth / imgWidth,
-    maxHeight / imgHeight,
-    1
+    maxHeight / imgHeight
   )
   
   return {
@@ -458,6 +474,7 @@ const baseContainerSize = computed(() => {
   }
 })
 
+// containerSize: 实际显示尺寸（包含 zoomScale，用于 Stage 配置）
 const containerSize = computed(() => {
   const base = baseContainerSize.value
   return {
@@ -471,17 +488,15 @@ const containerSize = computed(() => {
 const scaledStageConfig = computed(() => {
   const base = baseContainerSize.value
   
-  const config = {
-    width: Math.max(1, base.width * zoomScale.value),
-    height: Math.max(1, base.height * zoomScale.value),
+  return {
+    width: base.width * zoomScale.value,
+    height: base.height * zoomScale.value,
+    // ✅ 关键：不使用 scaleX/scaleY，而是通过计算宽高来实现缩放
     scaleX: 1,
     scaleY: 1,
-    containerStyle: {
-      backgroundColor: '#e8e8e8'
-    }
+    x: 0,
+    y: 0
   }
-  
-  return config
 })
 
 // ========== 计算属性 ==========
@@ -501,15 +516,18 @@ const selectedAnnotation = computed(() => {
 })
 
 // ========== 缩放控制函数 ==========
+// ========== 缩放控制函数（以中心为锚点）==========
 const zoomIn = () => {
   if (zoomScale.value < MAX_ZOOM) {
     const oldScale = zoomScale.value
     zoomScale.value = Math.min(zoomScale.value + ZOOM_STEP, MAX_ZOOM)
     
+    // 以画布中心为锚点缩放
     const base = baseContainerSize.value
     const centerX = base.width / 2
     const centerY = base.height / 2
     
+    // 计算新的偏移，保持中心点不变
     stageX.value = centerX - (centerX - stageX.value) * (zoomScale.value / oldScale)
     stageY.value = centerY - (centerY - stageY.value) * (zoomScale.value / oldScale)
     
@@ -522,10 +540,12 @@ const zoomOut = () => {
     const oldScale = zoomScale.value
     zoomScale.value = Math.max(zoomScale.value - ZOOM_STEP, MIN_ZOOM)
     
+    // 以画布中心为锚点缩放
     const base = baseContainerSize.value
     const centerX = base.width / 2
     const centerY = base.height / 2
     
+    // 计算新的偏移，保持中心点不变
     stageX.value = centerX - (centerX - stageX.value) * (zoomScale.value / oldScale)
     stageY.value = centerY - (centerY - stageY.value) * (zoomScale.value / oldScale)
     
@@ -535,6 +555,7 @@ const zoomOut = () => {
 
 const resetZoom = () => {
   zoomScale.value = 1
+  // 重置时可以选择是否重置位置，这里保持位置不变
   updateZoom()
 }
 
@@ -550,6 +571,7 @@ const actualSize = () => {
   const baseScale = baseContainerSize.value.scale
   zoomScale.value = 1 / baseScale
   
+  // 以画布中心为锚点缩放
   const base = baseContainerSize.value
   const centerX = base.width / 2
   const centerY = base.height / 2
@@ -562,22 +584,12 @@ const actualSize = () => {
 
 const updateZoom = () => {
   dragTick.value++
-  
-  // ✅ 修复：安全获取 transformer 和 stage
-  nextTick(() => {
-    if (transformer.value) {
-      const tr = transformer.value.getNode?.() || transformer.value
-      if (tr && tr.forceUpdate) {
-        tr.forceUpdate()
-      }
-    }
-    
-    // 强制刷新 stage
-    const stageNode = stageRef.value?.getStage?.() || stageRef.value?.getNode?.()
-    if (stageNode && stageNode.batchDraw) {
-      stageNode.batchDraw()
-    }
-  })
+  if (transformer.value && selectedId.value) {
+    nextTick(() => {
+      const tr = transformer.value.getNode()
+      tr.forceUpdate()
+    })
+  }
 }
 
 const handleWheel = (e) => {
@@ -586,28 +598,28 @@ const handleWheel = (e) => {
   
   e.preventDefault()
   
-  // ✅ 修复：安全获取 stage 节点
-  const stageNode = stageRef.value?.getStage?.() || stageRef.value?.getNode?.()
-  if (!stageNode) {
-    console.warn('⚠️ handleWheel: 无法获取 stage 节点')
-    return
-  }
+  const stage = stage.value?.getNode()
+  if (!stage) return
   
   const oldScale = zoomScale.value
   const delta = e.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP
   const newScale = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoomScale.value + delta))
   
   if (newScale !== oldScale) {
-    const pointer = stageNode.getPointerPosition()
+    // 获取鼠标在画布上的位置
+    const pointer = stage.getPointerPosition()
     if (!pointer) return
     
     const base = baseContainerSize.value
     
+    // 计算鼠标在图片上的相对位置（考虑当前缩放和偏移）
     const mouseX = (pointer.x - stageX.value) / oldScale
     const mouseY = (pointer.y - stageY.value) / oldScale
     
+    // 设置新缩放
     zoomScale.value = newScale
     
+    // 调整偏移，使鼠标指向的点保持不变
     stageX.value = pointer.x - mouseX * newScale
     stageY.value = pointer.y - mouseY * newScale
     
@@ -629,8 +641,6 @@ const {
   { id: 3, name: 'dog', color: '#00ff00' }
 ])
 
-const dragTick = ref(0)
-
 const {
   taskLoading,
   submitLoading,
@@ -641,65 +651,14 @@ const {
   submitAnnotations,
   saveDraftHandler,
   abandonTask,
+  fetchProjectTask, 
   restoreTask
-} = useTaskFlow(store, imageObj, labelColorMap, dragTick)
-
-// ✅ 监听 imageObj 变化
-// ========== 修复后的 imageObj 监听器 ==========
-watch(imageObj, async (newImg, oldImg) => {
-  console.log('👁️ [watch imageObj] 变化触发')
-  console.log(`   新值: ${newImg ? '存在' : 'null'}`)
-  console.log(`   旧值: ${oldImg ? '存在' : 'null'}`)
-  
-  if (!newImg) {
-    console.log('   🚫 新图片为空，跳过')
-    return
-  }
-  
-  // 如果图片未完全加载，等待加载完成
-  if (!newImg.complete || newImg.naturalWidth === 0) {
-    console.log('⏳ [watch imageObj] 等待图片加载完成...')
-    await new Promise((resolve) => {
-      const onLoad = () => {
-        newImg.removeEventListener('load', onLoad)
-        newImg.removeEventListener('error', onError)
-        console.log('✅ [watch imageObj] 图片 onload 触发')
-        resolve()
-      }
-      const onError = () => {
-        console.error('❌ [watch imageObj] 图片加载失败')
-        newImg.removeEventListener('load', onLoad)
-        newImg.removeEventListener('error', onError)
-        resolve()
-      }
-      newImg.addEventListener('load', onLoad)
-      newImg.addEventListener('error', onError)
-    })
-  }
-  
-  console.log(`✅ [watch imageObj] 图片就绪: ${newImg.naturalWidth} x ${newImg.naturalHeight}`)
-  
-  // 强制刷新
-  await nextTick()
-  dragTick.value++
-  
-  // 延迟再次刷新确保渲染
-  setTimeout(() => {
-    dragTick.value++
-    if (stageRef.value) {
-      const stageNode = stageRef.value.getNode()
-      if (stageNode && typeof stageNode.batchDraw === 'function') {
-        stageNode.batchDraw()
-        console.log('🔄 [watch imageObj] Stage batchDraw 执行')
-      }
-    }
-  }, 100)
-  
-}, { immediate: true, flush: 'post' })
+} = useTaskFlow(store, imageObj, labelColorMap)
 
 const {
   isDrawing,
   drawingRect,
+  dragTick,
   isTransforming,
   isPanning,
   stageX,
@@ -746,15 +705,16 @@ watch(() => store.annotations, (newVal) => {
 }, { deep: true })
 
 // ========== 配置函数 ==========
+// 计算当前实际缩放比例
 const currentScale = computed(() => {
   return (baseContainerSize.value?.scale || 1) * zoomScale.value
 })
-
 const getDrawingRectConfig = () => {
   if (!drawingRect.value || !baseContainerSize.value) return {}
   
   const baseScale = baseContainerSize.value.scale || 1
   
+  // ✅ 所有坐标都乘以 zoomScale
   return {
     x: (drawingRect.value.x * baseScale + stageX.value) * zoomScale.value,
     y: (drawingRect.value.y * baseScale + stageY.value) * zoomScale.value,
@@ -783,7 +743,7 @@ const trainingMessage = ref(null)
 
 const checkTrainingStatus = async () => {
   try {
-    const res = await fetch(apiUrl('/api/training/status'))
+    const res = await fetch('/api/training/status')
     const data = await res.json()
     trainingStatus.value = data
   } catch (e) {
@@ -803,7 +763,7 @@ const startTraining = async () => {
       augmentation: true
     })
     
-   const res = await fetch(apiUrl(`/api/training/start?${params}`), {
+    const res = await fetch(`/api/training/start?${params}`, {
       method: 'POST'
     })
     const data = await res.json()
@@ -829,7 +789,7 @@ const startTraining = async () => {
 
 const switchModel = async (model) => {
   try {
-   const res = await fetch(apiUrl('/api/models/switch'), {
+    const res = await fetch('/api/models/switch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: model.path, name: model.name })
@@ -899,40 +859,20 @@ const getTextConfig = (ann) => {
   }
 }
 
-// ========== 修复后的 scaledImageConfig ==========
 const scaledImageConfig = computed(() => {
-  console.log('🔧 [scaledImageConfig] 重新计算...')
+  if (!imageObj.value) return {}
+  const { scale: baseScale } = baseContainerSize.value
   
-  if (!imageObj.value) {
-    console.log('   ⚠️ imageObj 为空，返回空配置')
-    return { image: null, width: 0, height: 0, x: 0, y: 0 }
-  }
-  
-  // 使用 naturalWidth/naturalHeight 获取原始尺寸
-  const imgWidth = imageObj.value.naturalWidth || imageObj.value.width || 0
-  const imgHeight = imageObj.value.naturalHeight || imageObj.value.height || 0
-  
-  console.log(`   图片原始尺寸: ${imgWidth} x ${imgHeight}`)
-  
-  if (imgWidth === 0 || imgHeight === 0) {
-    console.warn('   ⚠️ 图片尺寸为0，可能尚未加载完成')
-    return { image: null, width: 0, height: 0, x: 0, y: 0 }
-  }
-  
-  const base = baseContainerSize.value
-  
-  const config = {
+  return {
     image: imageObj.value,
     x: stageX.value * zoomScale.value,
     y: stageY.value * zoomScale.value,
-    width: imgWidth * base.scale * zoomScale.value,
-    height: imgHeight * base.scale * zoomScale.value,
-    name: 'background-image'
+    width: imageObj.value.width * baseScale * zoomScale.value,
+    height: imageObj.value.height * baseScale * zoomScale.value
   }
-  
-  console.log(`   最终配置: ${config.width.toFixed(1)} x ${config.height.toFixed(1)}`)
-  return config
 })
+
+
 
 const transformerConfig = computed(() => {
   if (!selectedId.value) {
@@ -953,9 +893,9 @@ const transformerConfig = computed(() => {
     centeredScaling: true,
     visible: true,
     boundBoxFunc: (oldBox, newBox) => {
+      // 使用当前 Stage 的实际尺寸作为边界
       const base = baseContainerSize.value
       const maxWidth = base.width * zoomScale.value
-
       const maxHeight = base.height * zoomScale.value
       
       if (newBox.x < 0) newBox.x = 0
@@ -1013,12 +953,10 @@ const exportForYOLO = async () => {
   URL.revokeObjectURL(classesUrl)
 }
 
-// ========== 文件上传处理（图片加载部分修复） ==========
 const handleFileUpload = async (event) => {
   const file = event.target.files[0]
   if (!file) return
   
-  console.log('📤 [handleFileUpload] 开始上传:', file.name, file.size)
   taskLoading.value = true
   taskError.value = ''
   
@@ -1026,140 +964,154 @@ const handleFileUpload = async (event) => {
     const formData = new FormData()
     formData.append('file', file)
     
-    const response = await fetch(apiUrl('/api/predict'), {
+    const response = await 	fetch('/api/predict', {
       method: 'POST',
       body: formData
     })
     
     const data = await response.json()
-    console.log('📥 [handleFileUpload] 后端响应:', data)
     
     if (!response.ok) {
       throw new Error(data.detail || '上传失败')
     }
     
-    // 保存任务信息
     localStorage.setItem('lastTaskId', data.task_id)
-    window.history.replaceState({}, '', `/app/annotate?task=${data.task_id}`)
+    window.history.replaceState({}, '', `?task=${data.task_id}`)
     
     store.clearAnnotations()
     store.setCurrentTask({ 
       id: data.task_id, 
-      imageUrl: resolveAssetUrl(data.image_url),
+      imageUrl: data.image_url,
       imageStoragePath: data.image_storage_path
     })
     
-    // 创建图片对象并等待加载
     const img = new Image()
     img.crossOrigin = 'anonymous'
+    img.src = data.image_url
     
-    // 关键修复：使用 Promise 等待图片加载
-    await new Promise((resolve, reject) => {
-      img.onload = () => {
-        console.log('✅ [handleFileUpload] 图片加载成功:', img.naturalWidth, 'x', img.naturalHeight)
-        resolve()
-      }
-      img.onerror = () => reject(new Error('图片加载失败'))
+    img.onload = async () => {
+      imageObj.value = img
       
-      // 添加时间戳防止缓存
-      const imageSrc = resolveAssetUrl(data.image_url)
-      const separator = imageSrc.includes('?') ? '&' : '?'
-      img.src = `${imageSrc}${separator}t=${Date.now()}`
-      console.log('🔥 [handleFileUpload] 图片 src:', img.src)
-    })
-    
-    // 等待解码
-    if (img.decode) await img.decode()
-    
-    // 赋值给 shallowRef
-    imageObj.value = img
-    console.log('✅ [handleFileUpload] imageObj 已设置')
-    
-    await nextTick()
-    dragTick.value++
-    
-    // 处理标注数据
-    if (data.annotations && data.annotations.length > 0) {
-      console.log(`📝 [handleFileUpload] 处理 ${data.annotations.length} 个标注`)
+      await nextTick()
+      dragTick.value++
+
+      setTimeout(() => {
+        dragTick.value++
+        console.log('📐 图片加载完成，强制刷新画布', {
+          containerWidth: canvasContainer.value?.clientWidth,
+          containerHeight: canvasContainer.value?.clientHeight,
+          imageWidth: img.width,
+          imageHeight: img.height,
+          computedSize: containerSize.value
+        })
+      }, 100)
       
-      // 处理标签颜色
-      const newLabelsToSave = []
-      data.annotations.forEach(ann => {
-        if (!ann.color) {
-          ann.color = labelColorMap.get(ann.label) || ensureLabelColor(ann.label)
+      if (data.annotations && data.annotations.length > 0) {
+        const newLabelsToSave = []
+        
+        data.annotations.forEach(ann => {
+          if (!ann.color) {
+            ann.color = labelColorMap.get(ann.label) || ensureLabelColor(ann.label)
+          }
+          
+          if (!labelColorMap.has(ann.label)) {
+            labelColorMap.set(ann.label, ann.color)
+            newLabelsToSave.push({ 
+              name: ann.label, 
+              color: ann.color 
+            })
+            console.log(`🆕 发现新标签: ${ann.label} -> ${ann.color}`)
+          } else {
+            const existingColor = labelColorMap.get(ann.label)
+            if (existingColor !== ann.color) {
+              console.log(`🎨 标签 ${ann.label} 颜色更新: ${existingColor} -> ${ann.color}`)
+              labelColorMap.set(ann.label, ann.color)
+              newLabelsToSave.push({ name: ann.label, color: ann.color })
+            }
+          }
+        })
+        
+        if (newLabelsToSave.length > 0) {
+          console.log('💾 批量保存AI识别的新标签到后端:', newLabelsToSave)
+          
+          for (const label of newLabelsToSave) {
+            try {
+              await saveLabelToBackend(label.name, label.color)
+            } catch (e) {
+              console.error(`❌ 保存标签 ${label.name} 失败:`, e)
+            }
+          }
         }
         
-        if (!labelColorMap.has(ann.label)) {
-          labelColorMap.set(ann.label, ann.color)
-          newLabelsToSave.push({ name: ann.label, color: ann.color })
+        const firstAnnotation = data.annotations[0]
+        const firstLabel = firstAnnotation.label
+        
+        if (!labelColorMap.has(firstLabel)) {
+          const color = firstAnnotation.color || ensureLabelColor(firstLabel)
+          labelColorMap.set(firstLabel, color)
+          await saveLabelToBackend(firstLabel, color)
         }
-      })
-      
-      // 保存新标签到后端
-      for (const label of newLabelsToSave) {
-        try {
-          await saveLabelToBackend(label.name, label.color)
-        } catch (e) {
-          console.error(`❌ 保存标签 ${label.name} 失败:`, e)
-        }
+        
+        currentLabel.value = firstLabel
+        selectedColor.value = labelColorMap.get(firstLabel)
+        
+        syncLabelsFromMap()
+        dragTick.value++
+        
+        console.log('🎯 当前标签已自动切换为:', firstLabel, '颜色:', selectedColor.value)
       }
       
-      // 设置当前标签为第一个标注的标签
-      if (data.annotations.length > 0) {
-        currentLabel.value = data.annotations[0].label
-        selectedColor.value = labelColorMap.get(currentLabel.value) || '#ff0000'
-      }
+      store.setAnnotations(data.annotations || [])
       
-      syncLabelsFromMap()
-      store.setAnnotations(data.annotations)
+      const stats = data.stats || {}
+      taskSuccess.value = `✅ 上传成功，检测到 ${stats.final_count || data.annotations?.length || 0} 个目标${stats.removed_duplicates > 0 ? `（已去重${stats.removed_duplicates}个）` : ''}`
+      setTimeout(() => taskSuccess.value = '', 3000)
     }
     
-    // 强制刷新 Stage
-    setTimeout(() => {
-      if (stageRef.value) {
-        const stageNode = stageRef.value.getNode()
-        if (stageNode) {
-          stageNode.batchDraw()
-          console.log('🔄 [handleFileUpload] Stage 已刷新')
-        }
-      }
-    }, 100)
-    
-    const stats = data.stats || {}
-    taskSuccess.value = `✅ 上传成功，检测到 ${stats.final_count || data.annotations?.length || 0} 个目标`
-    setTimeout(() => taskSuccess.value = '', 3000)
+    img.onerror = () => {
+      taskError.value = '❌ 图片加载失败'
+      console.error('图片加载失败:', data.image_url)
+    }
     
   } catch (error) {
-    console.error('❌ [handleFileUpload] 错误:', error)
+    console.error('上传失败:', error)
     taskError.value = `❌ 上传失败: ${error.message}`
   } finally {
     taskLoading.value = false
     event.target.value = ''
   }
 }
+
 const saveLabelToBackend = async (name, color) => {
   try {
-   const response = await fetch(apiUrl('/api/labels'), {
+    const response = await 	fetch('/api/labels', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
         name: name, 
-        color: color, 
+        color: color,
         category: null 
       })
     })
     
     if (response.ok) {
+      console.log(`✅ 标签 ${name} (${color}) 已保存到后端`)
       return
     }
     
     const errorData = await response.json()
     if (response.status === 409 || errorData.detail?.includes('已存在')) {
-      await fetch(apiUrl(`/api/labels/${encodeURIComponent(name)}`), {
+      console.log(`📝 标签 ${name} 已存在，更新颜色为 ${color}`)
+      
+      const updateRes = await fetch('/api/labels/${encodeURIComponent(name)}', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ color: color })
       })
+      
+      if (updateRes.ok) {
+        console.log(`✅ 标签 ${name} 颜色已更新为 ${color}`)
+      }
     }
   } catch (error) {
     console.error('保存标签失败:', error)
@@ -1200,6 +1152,7 @@ const addLabel = async () => {
 }
 
 const clearAll = async () => {
+  console.log('🔥 [ClearAll] 清除所有标注被触发')
   const result = await confirmDialog({
     title: '确认清除',
     content: '确定清除所有标注吗？此操作不可撤销。',
@@ -1238,7 +1191,10 @@ const exportAnnotations = async () => {
 }
 
 const handleDeleteAnnotation = async () => {
+  console.log('🔥 [Delete] 删除选中标注被触发')
+  
   if (!selectedId.value || dialogLock.value) {
+    console.log('🔥 [Delete] 操作被阻止：lock=', dialogLock.value, 'selectedId=', selectedId.value)
     return
   }
   
@@ -1246,6 +1202,7 @@ const handleDeleteAnnotation = async () => {
   if (!annotation) return
 
   dialogLock.value = true
+  console.log('🔥 [Delete] 锁定弹窗')
   
   try {
     const result = await confirmDialog({
@@ -1256,18 +1213,23 @@ const handleDeleteAnnotation = async () => {
     
     if (result.confirmed) {
       deleteAnnotation(selectedId.value)
-    } 
+      console.log('🔥 [Delete] 删除成功')
+    } else {
+      console.log('🔥 [Delete] 用户取消删除')
+    }
   } catch (error) {
     console.error('🔥 [Delete] 删除过程出错:', error)
   } finally {
     setTimeout(() => {
       dialogLock.value = false
+      console.log('🔥 [Delete] 解锁完成')
     }, 300)
   }
 }
 
 const handleKeydown = async (e) => {
   if (dialogLock.value) {
+    console.log('🔥 [Keydown] 键盘事件被阻止：弹窗锁定中')
     return
   }
 
@@ -1277,6 +1239,7 @@ const handleKeydown = async (e) => {
 
   if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId.value) {
     e.preventDefault()
+    console.log('🔥 [Keydown] Delete键触发删除')
     await handleDeleteAnnotation()
     return
   }
@@ -1303,6 +1266,8 @@ const handleKeydown = async (e) => {
 }
 
 const startEditLabel = (label) => {
+  console.log('开始编辑标签:', label.name, 'label对象:', label)
+  
   editingLabel.value = label.id
   editLabelName.value = label.name
   
@@ -1317,10 +1282,15 @@ const startEditLabel = (label) => {
   }
   
   editingOriginalColor.value = color
+  
+  console.log('✅ 保存的原始颜色:', editingOriginalColor.value, '标签:', label.name)
 }
 
 const saveLabelEdit = async (oldName) => {
   const newName = editLabelName.value.trim()
+  
+  console.log('保存标签编辑:', oldName, '->', newName)
+  console.log('保存的原始颜色:', editingOriginalColor.value)
   
   if (!newName) {
     await alertDialog({ title: '提示', content: '标签名称不能为空', variant: 'error' })
@@ -1342,20 +1312,24 @@ const saveLabelEdit = async (oldName) => {
   
   if (!color) {
     color = labelColorMap.get(oldName)
+    console.log('从 labelColorMap 获取颜色:', color)
   }
   
   if (!color) {
     const annotation = store.annotations.find(ann => ann.label === oldName)
     color = annotation?.color
+    console.log('从标注获取颜色:', color)
   }
   
   if (!color) {
     color = '#ff0000'
+    console.warn('使用默认红色')
   }
   
+  console.log('✅ 最终使用的颜色:', color, '用于新标签:', newName)
 
   try {
-    const createRes = await fetch(apiUrl('/api/labels'), {
+    const createRes = await 	fetch('/api/labels',{
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
@@ -1368,7 +1342,8 @@ const saveLabelEdit = async (oldName) => {
     if (!createRes.ok) {
       const errorData = await createRes.json()
       if (errorData.detail?.includes('已存在')) {
-       await fetch(apiUrl(`/api/labels/${encodeURIComponent(newName)}`), {
+        console.log('标签已存在，更新颜色:', color)
+        await fetch('/api/labels/${encodeURIComponent(name)}', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ color: color })
@@ -1379,7 +1354,7 @@ const saveLabelEdit = async (oldName) => {
     }
     
     try {
-      await fetch(apiUrl(`/api/labels/${encodeURIComponent(oldName)}`), {
+      await fetch('/api/labels/${encodeURIComponent(name)}', {
         method: 'DELETE'
       })
     } catch (e) {
@@ -1388,6 +1363,7 @@ const saveLabelEdit = async (oldName) => {
     
     labelColorMap.delete(oldName)
     labelColorMap.set(newName, color)
+    console.log('✅ 更新 labelColorMap:', newName, '->', color)
     
     const oldLabelIndex = labels.value.findIndex(l => l.name === oldName)
     if (oldLabelIndex !== -1) {
@@ -1396,6 +1372,7 @@ const saveLabelEdit = async (oldName) => {
         name: newName,
         color: color
       }
+      console.log('✅ 更新 labels 数组索引', oldLabelIndex, ':', labels.value[oldLabelIndex])
     } else {
       labels.value.push({
         id: `label_${Date.now()}`,
@@ -1412,10 +1389,12 @@ const saveLabelEdit = async (oldName) => {
         updatedCount++
       }
     })
+    console.log(`✅ 更新了 ${updatedCount} 个标注的标签`)
     
     if (currentLabel.value === oldName) {
       currentLabel.value = newName
       selectedColor.value = color
+      console.log('✅ 当前标签已更新为:', newName, '颜色:', color)
     }
     
     dragTick.value++
@@ -1424,7 +1403,7 @@ const saveLabelEdit = async (oldName) => {
     editLabelName.value = ''
     editingOriginalColor.value = ''
     
-    taskSuccess.value = `✅ 已重命名为 "${newName}"`
+    taskSuccess.value = `✅ 已重命名为 "${newName}"，颜色保持不变`
     setTimeout(() => taskSuccess.value = '', 2000)
     
   } catch (error) {
@@ -1467,13 +1446,15 @@ const removeLabel = async (labelName) => {
   
   if (result.confirmed) {
     try {
-      const response = await fetch(apiUrl(`/api/labels/${encodeURIComponent(labelName)}`), {
+      const response = await fetch('/api/labels/${encodeURIComponent(name)}', {
         method: 'DELETE'
       })
       
       if (!response.ok) {
         const errorData = await response.json()
         console.error('后端删除标签失败:', errorData)
+      } else {
+        console.log(`✅ 后端标签 ${labelName} 已删除`)
       }
     } catch (error) {
       console.error('删除标签请求失败:', error)
@@ -1593,117 +1574,30 @@ const updateSelectedAnnotationColor = async () => {
   syncLabelsFromMap()
   dragTick.value++
   
-  taskSuccess.value = `✅ 标签 "${annotation.label}" 颜色已修改`
+  taskSuccess.value = `✅ 标签 "${annotation.label}" 颜色已修改，影响 ${store.annotations.filter(a => a.label === annotation.label).length} 个标注`
   setTimeout(() => taskSuccess.value = '', 2000)
 }
 
-// 修复后的 loadSavedLabels
-// ========== 从后端加载标签（完整修复版） ==========
 const loadSavedLabels = async () => {
-  console.log('📦 [loadSavedLabels] 开始从后端加载标签...')
-  
   try {
-    const url = apiUrl('/api/labels')
-    console.log('🌐 [loadSavedLabels] 请求 URL:', url)
-    
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Accept': 'application/json',
-        'Cache-Control': 'no-cache'
-      }
-    })
-    
-    console.log('📥 [loadSavedLabels] 响应状态:', response.status, response.statusText)
-    
-    if (!response.ok) {
-      const errorText = await response.text()
-      console.error('❌ [loadSavedLabels] HTTP 错误:', errorText)
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-    }
-    
+    const response = await 	fetch('/api/labels')
     const data = await response.json()
-    console.log('📦 [loadSavedLabels] 后端返回数据:', JSON.stringify(data, null, 2))
     
-    // 检查是否有警告信息
-    if (data.warning) {
-      console.warn('⚠️ [loadSavedLabels] 后端警告:', data.warning)
-      taskError.value = `⚠️ ${data.warning}`
-      setTimeout(() => taskError.value = '', 5000)
-    }
-    
-    // 处理标签数据
-    if (data.labels && Array.isArray(data.labels) && data.labels.length > 0) {
-      console.log(`✅ [loadSavedLabels] 从后端加载 ${data.labels.length} 个标签`)
+    if (data.labels && data.labels.length > 0) {
+      console.log('📦 从后端加载标签:', data.labels)
       
-      // 清空现有标签映射
-      labelColorMap.clear()
-      
-      // 添加每个标签
-      data.labels.forEach((label, index) => {
-        console.log(`   [${index}] ${label.name}: ${label.color}`)
-        
-        if (label.name && label.color) {
-          labelColorMap.set(label.name, label.color)
-        } else {
-          console.warn(`   ⚠️ 跳过无效标签:`, label)
+      data.labels.forEach(label => {
+        if (!labelColorMap.has(label.name)) {
+          const color = label.color || ensureLabelColor(label.name)
+          labelColorMap.set(label.name, color)
+          console.log(`✅ 加载标签: ${label.name} -> ${color}`)
         }
       })
       
-      // 同步到 labels 数组
       syncLabelsFromMap()
-      
-      // 设置当前标签为第一个
-      if (labels.value.length > 0 && (currentLabel.value === 'object' || !labelColorMap.has(currentLabel.value))) {
-        currentLabel.value = labels.value[0].name
-        selectedColor.value = labels.value[0].color
-        console.log('🎯 [loadSavedLabels] 设置当前标签为:', currentLabel.value)
-      }
-      
-      // 触发刷新
-      dragTick.value++
-      
-    } else {
-      console.warn('⚠️ [loadSavedLabels] 后端返回空标签列表，使用默认标签')
-      
-      // 使用默认标签
-      const defaultLabels = [
-        { name: 'person', color: '#ff0000' },
-        { name: 'car', color: '#0000ff' },
-        { name: 'dog', color: '#00ff00' }
-      ]
-      
-      defaultLabels.forEach(label => {
-        labelColorMap.set(label.name, label.color)
-      })
-      
-      syncLabelsFromMap()
-      currentLabel.value = 'person'
-      selectedColor.value = '#ff0000'
     }
-    
   } catch (error) {
-    console.error('❌ [loadSavedLabels] 加载失败:', error)
-    taskError.value = `⚠️ 加载标签失败: ${error.message} (检查后端连接)`
-    setTimeout(() => taskError.value = '', 5000)
-    
-    // 出错时使用默认标签
-    console.log('🔄 [loadSavedLabels] 使用默认标签作为备用')
-    const defaultLabels = [
-      { name: 'person', color: '#ff0000' },
-      { name: 'car', color: '#0000ff' },
-      { name: 'dog', color: '#00ff00' }
-    ]
-    
-    labelColorMap.clear()
-    defaultLabels.forEach(label => {
-      labelColorMap.set(label.name, label.color)
-    })
-    
-    syncLabelsFromMap()
-    currentLabel.value = 'person'
-    selectedColor.value = '#ff0000'
-    dragTick.value++
+    console.error('加载后端标签失败:', error)
   }
 }
 
@@ -1713,24 +1607,23 @@ const centerImage = () => {
   dragTick.value++
 }
 
-
-
 // ========== 生命周期 ==========
 onMounted(async () => {
+  console.log('🚀 组件挂载完成')
+  
   const defaultLabels = [
     { name: 'person', color: '#ff0000' },
     { name: 'car', color: '#0000ff' },
     { name: 'dog', color: '#00ff00' }
   ]
   defaultLabels.forEach(label => ensureLabelColor(label.name, label.color))
-  syncLabelsFromMap()
-  
   await loadSavedLabels()
 
   let resizeObserver = null
   if (canvasContainer.value) {
     resizeObserver = new ResizeObserver(() => {
       dragTick.value++
+      console.log('📐 容器尺寸变化，重绘画布')
     })
     resizeObserver.observe(canvasContainer.value)
   }
@@ -1752,15 +1645,20 @@ onMounted(async () => {
   if (!taskId) {
     taskId = localStorage.getItem('lastTaskId')
     if (taskId) {
-      window.history.replaceState({}, '', `/app/annotate?task=${taskId}`)
+      window.history.replaceState({}, '', `?task=${taskId}`)
     }
   }
 
   if (taskId) {
+    console.log('🔍 尝试恢复任务:', taskId)
+    
     try {
       const restored = await restoreTask(taskId)
+      console.log('恢复结果:', restored, 'store.taskInfo:', store.taskInfo)
       
       if (restored && store.taskInfo?.imageUrl) {
+        console.log('✅ 任务恢复成功，加载原图:', store.taskInfo.imageUrl)
+        
         syncLabelsFromMap()
         dragTick.value++
         
@@ -1774,20 +1672,22 @@ onMounted(async () => {
           if (lastAnnotation) {
             currentLabel.value = lastAnnotation.label
             selectedColor.value = labelColorMap.get(lastAnnotation.label) || lastAnnotation.color || '#ff0000'
+            console.log('🎯 恢复任务，当前标签设置为最后一个标注:', lastAnnotation.label)
           }
         }
         
         const img = new Image()
         img.crossOrigin = 'anonymous'
-
+        img.src = store.taskInfo.imageUrl
+        
         try {
           await new Promise((resolve, reject) => {
             img.onload = () => {
               imageObj.value = img
+              console.log('✅ 原图加载成功')
               resolve()
             }
             img.onerror = () => reject(new Error('图片加载失败'))
-            img.src = store.taskInfo.imageUrl
             setTimeout(() => reject(new Error('超时')), 10000)
           })
           
@@ -1800,6 +1700,7 @@ onMounted(async () => {
         }
         
       } else {
+        console.warn('⚠️ 任务恢复失败，加载测试图片')
         loadTestImage()
         localStorage.removeItem('lastTaskId')
       }
@@ -1817,8 +1718,13 @@ onMounted(async () => {
     if (e.target?.closest('.dialog-container')) return
     if (isDrawing.value) {
       const mouseUpHandler = handleMouseUp(currentLabel.value)
-      mouseUpHandler({ target: stageRef.value?.getNode() })
+      mouseUpHandler({ target: stage.value?.getNode() })
     }
+  }
+   const projectId = route.params.id
+  if (projectId) {
+    // 🚀 这里就是你需要的：接收项目ID并自动加载第一张图
+    fetchProjectTask(projectId)
   }
   
   checkTrainingStatus()
@@ -1835,7 +1741,7 @@ onMounted(async () => {
       e.preventDefault()
       setSpacePressed(true)
       
-      const stageNode = stageRef.value?.getNode()
+      const stageNode = stage.value?.getNode()
       if (stageNode && !isPanning.value) {
         stageNode.container().style.cursor = 'grab'
       }
@@ -1846,7 +1752,7 @@ onMounted(async () => {
     if (e.code === 'Space') {
       setSpacePressed(false)
       
-      const stageNode = stageRef.value?.getNode()
+      const stageNode = stage.value?.getNode()
       if (stageNode && !isPanning.value) {
         stageNode.container().style.cursor = 'default'
       }
@@ -1857,6 +1763,8 @@ onMounted(async () => {
   window.addEventListener('keyup', handleKeyUp)
   
   onUnmounted(() => {
+    console.log('🧹 组件卸载，清理事件监听')
+    
     window.removeEventListener('keydown', handleKeydown)
     window.removeEventListener('mouseup', globalMouseUpHandler)
     window.removeEventListener('keydown', handleKeyDown)
@@ -1871,6 +1779,21 @@ onMounted(async () => {
     }
   })
 })
+
+watch(imageObj, async (newImg) => {
+  if (newImg && canvasContainer.value) {
+    await nextTick()
+    const container = canvasContainer.value
+    console.log('🖼️ 图片切换:', {
+      imgWidth: newImg.width,
+      imgHeight: newImg.height,
+      containerWidth: container.clientWidth,
+      containerHeight: container.clientHeight,
+      computedSize: containerSize.value
+    })
+    dragTick.value++
+  }
+}, { immediate: false })
 </script>
 
 <style scoped>

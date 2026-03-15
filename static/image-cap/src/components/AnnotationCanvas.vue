@@ -46,7 +46,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, markRaw } from 'vue' // 引入 markRaw
 import { useAnnotationStore } from '@/stores/annotation'
 import { predictAnnotations } from '@/api/annotation'
 
@@ -104,7 +104,8 @@ watch(imageUrl, (newUrl) => {
   if (newUrl) {
     const img = new Image()
     img.onload = () => {
-      imageObj.value = img
+      imageObj.value = markRaw(img)
+      
       imageSize.value = { width: img.width, height: img.height }
       console.log('🖼️ 图片加载完成:', imageSize.value)
     }
