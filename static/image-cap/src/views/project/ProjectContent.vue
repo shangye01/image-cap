@@ -1,6 +1,5 @@
 <template>
   <div class="project-content-page">
-    <!-- 1. 项目列表页 -->
     <template v-if="!currentProject">
       <div class="project-toolbar">
         <div class="toolbar-left">
@@ -99,7 +98,6 @@
       <div v-if="!filteredProjectList.length" class="empty-project-state">没有匹配的项目</div>
     </template>
 
-    <!-- 2. 项目内部：文件夹列表页 -->
     <template v-else-if="currentProject && !currentFolder">
       <div class="project-detail-header">
         <div class="project-nav">
@@ -152,7 +150,6 @@
       </div>
     </template>
 
-    <!-- 3. 文件夹内部：图片文件宫格页 -->
     <template v-else-if="currentProject && currentFolder">
       <div class="project-detail-header">
         <div class="project-nav">
@@ -180,17 +177,44 @@
           <div class="project-detail-title-row">
             <div class="project-detail-title">{{ currentFolder.name }}</div>
           </div>
-
           <div class="project-detail-remark">共 {{ currentFolder.files.length }} 个文件</div>
         </div>
       </div>
 
-      <div v-if="currentFolder.files.length" class="image-grid">
-        <div v-for="file in currentFolder.files" :key="file.id" class="image-card">
-          <div
-            class="image-card-preview"
-            @click.stop="isImageFile(file) ? previewFile(file) : undefined"
+      <div v-if="currentFolder.files.length" class="batch-action-toolbar">
+        <div class="batch-toolbar-left">
+          <label class="checkbox-wrapper" @click.stop="toggleSelectAll">
+            <div class="custom-checkbox" :class="{ checked: isAllSelected }">
+              <span v-if="isAllSelected">✓</span>
+            </div>
+            <span class="checkbox-label">全选图片</span>
+          </label>
+          <div class="selection-info">已选择 {{ selectedFileIds.length }} 张图片</div>
+        </div>
+        <div class="batch-toolbar-right">
+          <button 
+            class="batch-label-btn" 
+            :disabled="selectedFileIds.length === 0"
+            @click="openAutoLabelDialog"
           >
+            ✨ 一键自动标注
+          </button>
+        </div>
+      </div>
+
+    <div v-if="currentFolder.files.length" class="image-grid">
+        <div 
+          v-for="file in currentFolder.files" 
+          :key="file.id" 
+          class="image-card"
+          :class="{ 'is-selected': selectedFileIds.includes(file.id) }"
+          @click="toggleFileSelection(file.id)"
+        >
+          <div v-if="selectedFileIds.includes(file.id)" class="selection-badge">
+            ✓
+          </div>
+
+          <div class="image-card-preview">
             <template v-if="isImageFile(file) && getFilePreviewUrl(file)">
               <img :src="getFilePreviewUrl(file)" :alt="file.name" class="image-thumb" />
             </template>
@@ -231,8 +255,85 @@
       <div v-else class="empty-folder-page">该文件夹暂无文件</div>
     </template>
 
-    <!-- 工作弹窗 -->
     <teleport to="body">
+      <transition name="preview-fade">
+        <div v-if="autoLabelVisible" class="dialog-mask" @click="autoLabelVisible = false">
+          <div class="dialog-panel" @click.stop>
+            <div class="dialog-title">AI 自动标注</div>
+            <div class="dialog-body">
+              <div class="dialog-field">
+                <label class="field-label">选择识别模型</label>
+                <select v-model="autoLabelModel" class="dialog-input">
+                  <option value="general">通用场景模型 (V3)</option>
+                  <option value="detail">高精度细节模型 (Pro)</option>
+                  <option value="aesthetic">艺术/审美评分模型</option>
+                </select>
+              </div>
+              <div class="dialog-remark-box">
+                提示：即将对 <strong>{{ selectedFileIds.length }}</strong> 张图片进行批量标注，这需要花费一定时间。
+              </div>
+            </div>
+            <div class="dialog-footer">
+              <button class="dialog-btn secondary" type="button" @click="autoLabelVisible = false">
+                取消
+              </button>
+              <button class="dialog-btn primary" type="button" @click="confirmAutoLabel">
+                开始标注
+              </button>
+            </div>
+          </div>
+        </div>
+      </transition>
+
+      <transition name="preview-fade">
+        <div v-if="renameVisible" class="dialog-mask" @click="closeRenameDialog">
+          <div class="dialog-panel" @click.stop>
+            <div class="dialog-title">重命名项目</div>
+
+            <div class="dialog-body">
+              <input
+                v-model="renameValue"
+                class="dialog-input"
+                type="text"
+                placeholder="请输入新的项目名"
+              />
+
+              <div v-if="renameError" class="dialog-error">
+                {{ renameError }}
+              </div>
+            </div>
+
+            <div class="dialog-footer">
+              <button class="dialog-btn secondary" type="button" @click="closeRenameDialog">
+                取消
+              </button>
+              <button class="dialog-btn primary" type="button" @click="confirmRename">确定</button>
+            </div>
+          </div>
+        </div>
+      </transition>
+
+      <transition name="preview-fade">
+        <div v-if="previewVisible" class="preview-mask" @click="closePreview">
+          <div class="preview-panel" @click.stop>
+            <button class="preview-close-btn" type="button" @click="closePreview">×</button>
+
+            <div class="preview-content">
+              <img
+                v-if="previewImageUrl"
+                :src="previewImageUrl"
+                :alt="previewFileName"
+                class="preview-image"
+              />
+            </div>
+
+            <div class="preview-footer">
+              <div class="preview-file-name">{{ previewFileName }}</div>
+            </div>
+          </div>
+        </div>
+      </transition>
+
       <transition name="preview-fade">
         <div v-if="workVisible" class="dialog-mask" @click="closeWorkDialog">
           <div class="dialog-panel work-dialog-panel" @click.stop>
@@ -319,61 +420,6 @@
         </div>
       </transition>
     </teleport>
-
-    <!-- 重命名弹窗 -->
-    <teleport to="body">
-      <transition name="preview-fade">
-        <div v-if="renameVisible" class="dialog-mask" @click="closeRenameDialog">
-          <div class="dialog-panel" @click.stop>
-            <div class="dialog-title">重命名项目</div>
-
-            <div class="dialog-body">
-              <input
-                v-model="renameValue"
-                class="dialog-input"
-                type="text"
-                placeholder="请输入新的项目名"
-              />
-
-              <div v-if="renameError" class="dialog-error">
-                {{ renameError }}
-              </div>
-            </div>
-
-            <div class="dialog-footer">
-              <button class="dialog-btn secondary" type="button" @click="closeRenameDialog">
-                取消
-              </button>
-              <button class="dialog-btn primary" type="button" @click="confirmRename">确定</button>
-            </div>
-          </div>
-        </div>
-      </transition>
-    </teleport>
-
-    <!-- 图片预览弹窗 -->
-    <teleport to="body">
-      <transition name="preview-fade">
-        <div v-if="previewVisible" class="preview-mask" @click="closePreview">
-          <div class="preview-panel" @click.stop>
-            <button class="preview-close-btn" type="button" @click="closePreview">×</button>
-
-            <div class="preview-content">
-              <img
-                v-if="previewImageUrl"
-                :src="previewImageUrl"
-                :alt="previewFileName"
-                class="preview-image"
-              />
-            </div>
-
-            <div class="preview-footer">
-              <div class="preview-file-name">{{ previewFileName }}</div>
-            </div>
-          </div>
-        </div>
-      </transition>
-    </teleport>
   </div>
 </template>
 
@@ -392,6 +438,11 @@ const openedProjectMenuId = ref(null)
 
 const searchKeyword = ref('')
 const sortType = ref('created_desc')
+
+// --- 批量选择与标注 (新增) ---
+const selectedFileIds = ref([]) // 用于存储选中的图片ID
+const autoLabelVisible = ref(false)
+const autoLabelModel = ref('general')
 
 const renameVisible = ref(false)
 const renameProjectId = ref(null)
@@ -445,6 +496,41 @@ const currentFolder = computed(() => {
   if (!currentProject.value || !currentFolderId.value) return null
   return currentProject.value.folders.find((item) => item.id === currentFolderId.value) || null
 })
+
+// --- 批量逻辑计算与方法 (新增) ---
+const isAllSelected = computed(() => {
+  if (!currentFolder.value || currentFolder.value.files.length === 0) return false
+  return selectedFileIds.value.length === currentFolder.value.files.length
+})
+
+const toggleFileSelection = (id) => {
+  const index = selectedFileIds.value.indexOf(id)
+  if (index > -1) {
+    selectedFileIds.value.splice(index, 1) // 已存在则取消选中
+  } else {
+    selectedFileIds.value.push(id) // 不存在则添加选中
+  }
+}
+
+const toggleSelectAll = () => {
+  if (isAllSelected.value) {
+    selectedFileIds.value = [] // 取消全选
+  } else {
+    selectedFileIds.value = currentFolder.value.files.map(f => f.id) // 全选
+  }
+}
+
+const openAutoLabelDialog = () => {
+  autoLabelVisible.value = true
+}
+
+const confirmAutoLabel = () => {
+  console.log('执行标注, 文件IDs:', selectedFileIds.value, '模型:', autoLabelModel.value)
+  // 此处可接入真实的 API 调用
+  autoLabelVisible.value = false
+  alert(`成功提交 ${selectedFileIds.value.length} 张图片的自动标注请求！`)
+  selectedFileIds.value = [] // 标注后清空选中状态
+}
 
 const currentWorkFile = computed(() => {
   if (!currentProject.value || !currentWorkFileId.value) return null
@@ -745,6 +831,11 @@ watch(
 
 watch(projectList, persistProjects, { deep: true })
 
+// --- 切换路径时自动清空选择 (防止跨层级误操作) ---
+watch([currentProjectId, currentFolderId], () => {
+  selectedFileIds.value = []
+})
+
 onMounted(() => {
   loadProjects()
   window.addEventListener('click', handleGlobalClick)
@@ -781,6 +872,141 @@ const handleDeleteFromMenu = (projectId) => {
 </script>
 
 <style scoped>
+/* ========================================= */
+/* --- 新增：批量标注工具栏样式 --- */
+/* ========================================= */
+.batch-action-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 20px;
+  background: #f0f9fa; /* 呼应主题的青色背景 */
+  border: 1px solid #d1e9ec;
+  border-radius: 14px;
+  margin-bottom: 24px;
+}
+
+.batch-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.checkbox-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.custom-checkbox {
+  width: 20px;
+  height: 20px;
+  border: 2px solid #a6cdd4;
+  border-radius: 6px;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 14px;
+  transition: all 0.2s ease;
+}
+
+.custom-checkbox.checked {
+  background: #45b8cb;
+  border-color: #45b8cb;
+}
+
+.checkbox-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #3c8596;
+}
+
+.selection-info {
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.selection-info span {
+  color: #45b8cb;
+  font-weight: 700;
+}
+
+.batch-label-btn {
+  border: none;
+  background: linear-gradient(135deg, #43c7db, #2faec6);
+  color: #fff;
+  padding: 8px 20px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.batch-label-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(69, 184, 203, 0.3);
+}
+
+.batch-label-btn:disabled {
+  background: #d1d5db;
+  cursor: not-allowed;
+}
+
+/* --- 新增：卡片选中样式 --- */
+.image-card.is-selected {
+  border: 2px solid #45b8cb;
+  box-shadow: 0 0 0 4px rgba(69, 184, 203, 0.1);
+}
+
+.selection-badge {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 5;
+  width: 24px;
+  height: 24px;
+  background: #45b8cb;
+  color: #fff;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: bold;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+}
+
+.dialog-field {
+  margin-bottom: 16px;
+}
+
+.field-label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #374151;
+}
+
+.dialog-remark-box {
+  margin-top: 12px;
+  font-size: 13px;
+  color: #4b5563;
+  padding: 10px;
+  background: #f8fafc;
+  border-radius: 8px;
+  border-left: 4px solid #45b8cb;
+}
+
+/* ========================================= */
+/* --- 以下为原有样式 (保持不变) --- */
+/* ========================================= */
+
 .project-content-page {
   width: 100%;
   padding: 24px;
@@ -1135,11 +1361,12 @@ const handleDeleteFromMenu = (projectId) => {
 }
 
 .image-card {
+  position: relative;
   border-radius: 16px;
   background: #ffffff;
   border: 1px solid #e5e7eb;
   overflow: hidden;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transition: all 0.2s ease;
 }
 
 .image-card:hover {
