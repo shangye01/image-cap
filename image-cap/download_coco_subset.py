@@ -6,24 +6,25 @@ from tqdm import tqdm
 import multiprocessing as mp
 
 # 你想训练的类别（COCO类别ID映射）
+# 已补充完整的10个目标类别以及其他常见类别
 COCO_CLASSES = {
-    "person": 1,
+    "person": 1,  # 人
     "bicycle": 2,
-    "car": 3,
+    "car": 3,  # 汽车
     "motorcycle": 4,
     "airplane": 5,
-    "bus": 6,
+    "bus": 6,  # 公交车
     "train": 7,
-    "truck": 8,
+    "truck": 8,  # 卡车
     "boat": 9,
-    "traffic light": 10,
+    "traffic light": 10,  # 红绿灯
     "fire hydrant": 11,
     "stop sign": 13,
     "parking meter": 14,
     "bench": 15,
     "bird": 16,
-    "cat": 17,
-    "dog": 18,
+    "cat": 17,  # 猫
+    "dog": 18,  # 狗
     "horse": 19,
     "sheep": 20,
     "cow": 21,
@@ -31,6 +32,9 @@ COCO_CLASSES = {
     "bear": 23,
     "zebra": 24,
     "giraffe": 25,
+    "bottle": 44,  # 瓶子
+    "chair": 62,  # 椅子
+    "dining table": 67  # 桌子/餐桌 (COCO中叫dining table)
 }
 
 
@@ -89,6 +93,7 @@ def create_coco_subset(
     cat_id_to_yolo = {cat_id: idx for idx, cat_id in enumerate(target_cat_ids)}
 
     # 保存类别名称文件
+    Path("datasets/custom").mkdir(parents=True, exist_ok=True)  # 确保目录存在，防止报错
     with open("datasets/custom/classes.txt", 'w') as f:
         f.write('\n'.join(target_classes))
     print(f"✅ 类别文件已保存: datasets/custom/classes.txt")
@@ -129,7 +134,6 @@ def create_coco_subset(
 
         # 准备下载任务
         download_tasks = []
-        base_url = "http://images.cocodataset.org/zips/train2017" if split == "train" else "http://images.cocodataset.org/zips/val2017"
 
         for img_id in selected_imgs:
             img_info = img_dict[img_id]
@@ -184,9 +188,23 @@ def create_coco_subset(
 
 
 if __name__ == "__main__":
-    # 示例：下载 person, car, dog, cat 四个类别，每类最多500张
+    # 你指定的10个类别
+    my_10_classes = [
+        "person",
+        "car",
+        "chair",
+        "dining table",
+        "dog",
+        "cat",
+        "bottle",
+        "traffic light",
+        "bus",
+        "truck"
+    ]
+
+    # max_images_per_class 可根据你的需要调整，这里默认设置为500
     create_coco_subset(
-        target_classes=["person", "car", "dog", "cat"],
+        target_classes=my_10_classes,
         max_images_per_class=500,
         num_workers=4
     )

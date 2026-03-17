@@ -868,3 +868,75 @@ html, body, #app {
   font-family: monospace;
   font-size: 11px;
 }
+
+
+
+
+/* 弹窗及单选框样式 */
+.work-dialog-panel { background: #fff; width: 640px; max-width: 90vw; border-radius: 12px; padding: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
+.work-dialog-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid #f0f0f0; padding-bottom: 15px; }
+.dialog-title { font-size: 18px; font-weight: bold; color: #333; }
+.work-dialog-close { background: none; border: none; font-size: 26px; cursor: pointer; color: #999; }
+.work-file-summary { margin-bottom: 16px; font-size: 14px; color: #666; }
+
+.mode-row { display: flex; gap: 24px; margin-bottom: 20px; }
+.radio-item { display: flex; align-items: center; cursor: pointer; gap: 8px; font-size: 15px; }
+.radio-dot { width: 18px; height: 18px; border-radius: 50%; border: 2px solid #ccc; position: relative; }
+.radio-dot.active { border-color: #3b82f6; }
+.radio-dot.active::after { content: ''; position: absolute; inset: 3px; background: #3b82f6; border-radius: 50%; }
+
+.tag-panel { border: 1px solid #eee; border-radius: 8px; padding: 16px; background: #fafafa; }
+.selected-title { font-size: 14px; margin-bottom: 10px; color: #333; font-weight: 600;}
+.selected-box { min-height: 60px; background: #fff; border: 1px dashed #ccc; border-radius: 6px; padding: 12px; display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
+
+.tag-chip { display: inline-flex; align-items: center; padding: 6px 12px; border-radius: 16px; font-size: 13px; color: #333; gap: 6px; border: none; cursor: pointer; transition: all 0.2s; }
+.tag-chip.selected { box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+.tag-remove { background: rgba(0,0,0,0.1); border: none; border-radius: 50%; width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; color: inherit; margin-left: 4px; }
+.scene-title { font-size: 14px; margin-bottom: 12px; color: #666; border-top: 1px solid #eee; padding-top: 12px; }
+.scene-tags { display: flex; flex-wrap: wrap; gap: 10px; }
+.scene-chip { opacity: 0.5; outline: 2px solid transparent; }
+.scene-chip.active { opacity: 1; outline: 2px solid #3b82f6; outline-offset: 2px; }
+
+
+
+
+/* 强制绝对居中弹窗样式 */
+.smart-dialog-overlay {
+  position: fixed;
+  top: 0; left: 0; width: 100vw; height: 100vh;
+  background-color: rgba(0, 0, 0, 0.5); /* 半透明黑底 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999999;
+}
+.smart-dialog-box {
+  background: #fff;
+  width: 500px;
+  border-radius: 12px;
+  padding: 24px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+}
+.smart-dialog-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  border-bottom: 1px solid #f0f0f0;
+  padding-bottom: 12px;
+}
+.smart-dialog-header h3 { margin: 0; font-size: 18px; color: #333; }
+.smart-dialog-close { background: none; border: none; font-size: 24px; cursor: pointer; color: #999; }
+.selected-tags-box {
+  min-height: 60px; border: 1px dashed #ccc; border-radius: 8px; padding: 12px; display: flex; flex-wrap: wrap; gap: 8px; background: #fafafa;
+}
+.available-tags-box { display: flex; flex-wrap: wrap; gap: 8px; }
+.smart-tag {
+  padding: 6px 14px; border-radius: 15px; color: #fff; font-size: 13px; cursor: pointer; opacity: 0.4; transition: all 0.2s;
+}
+.smart-tag.active { opacity: 1; box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.5); }
+.smart-tag.selected { opacity: 1; cursor: default; }
+.remove-tag { margin-left: 6px; cursor: pointer; font-weight: bold; }
+.smart-dialog-footer { margin-top: 24px; display: flex; justify-content: flex-end; gap: 12px; }
+
+

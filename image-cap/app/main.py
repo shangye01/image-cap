@@ -18,7 +18,10 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 from urllib.parse import quote
 import numpy as np
+import urllib.request
 import torch
+
+from typing import Optional
 from PIL import Image
 from ultralytics import YOLO
 from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Query, Form, Depends, Request
@@ -614,8 +617,12 @@ async def get_tasks(
 
 
 @app.post("/api/predict")
-async def predict(request: Request, file: UploadFile = File(...)):
-    """上传图片 → AI预测 → 返回结果"""
+async def predict(
+        request: Request,
+        file: UploadFile = File(...),
+        keywords: Optional[str] = Form(None)  # 👈 接收前端传来的关键词参数
+):
+    """上传图片 → AI预测 → 返回结果（支持关键词过滤）"""
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(400, detail="必须是图片文件")
 
@@ -656,11 +663,19 @@ async def predict(request: Request, file: UploadFile = File(...)):
         image = Image.open(io.BytesIO(contents)).convert("RGB")
         results = model(image, conf=0.25, iou=0.45)
 
+        # 🎯 核心逻辑 1：解析前端传来的关键词 (逗号分隔并转小写)
+        target_keywords = [k.strip().lower() for k in keywords.split(",")] if keywords else []
+
         raw_annotations = []
         for r in results:
             for box in r.boxes:
                 x1, y1, x2, y2 = box.xyxy[0].tolist()
                 label = model.names[int(box.cls[0])]
+
+                # 🎯 核心逻辑 2：如果传了关键词，且当前预测的 label 不在关键词内，则直接跳过
+                if target_keywords and label.lower() not in target_keywords:
+                    continue
+
                 assigned_color = get_label_color(label)
 
                 raw_annotations.append({
@@ -684,40 +699,26 @@ async def predict(request: Request, file: UploadFile = File(...)):
                 "user_id": "current_user",
                 "saved_at": datetime.now().isoformat()
             }).execute()
-        # ========== 在 return 前添加这段调试代码 ==========
+
+        # ========== 调试代码 ==========
         print(f"\n{'=' * 60}")
         print(f"🔥 [DEBUG] /api/predict 准备返回响应")
         print(f"🔥 [DEBUG] task_id: {task_id}")
         print(f"🔥 [DEBUG] image_url: {image_url}")
-        print(f"🔥 [DEBUG] image_url 类型: {type(image_url)}")
+        print(f"🔥 [DEBUG] 过滤关键词: {target_keywords}")
         print(f"🔥 [DEBUG] annotations 数量: {len(annotations)}")
         print(f"🔥 [DEBUG] model_version: {version}")
-
         print(f"{'=' * 60}")
 
-        # 验证 image_url 是否可访问
+        # 验证 image_url 是否可访问 (保留你原有的排错逻辑)
         if image_url:
             if image_url.startswith("http"):
                 print(f"🔥 [DEBUG] 图片URL是远程地址")
             else:
                 print(f"🔥 [DEBUG] 图片URL是本地路径，检查文件...")
-                # 提取文件名
                 local_file = UPLOAD_DIR / Path(image_url).name
                 print(f"🔥 [DEBUG] 本地文件检查: {local_file} -> 存在: {local_file.exists()}")
 
-        return {
-            "success": True,
-            "task_id": task_id,
-            "image_url": image_url,
-            "annotations": annotations,
-            "model_version": version,
-            "stats": {
-                "raw_count": len(raw_annotations),
-                "final_count": len(annotations),
-                "removed_duplicates": removed_count
-            },
-            "message": f"检测到 {len(annotations)} 个目标{'（已去重）' if removed_count > 0 else ''}"
-        }
         return {
             "success": True,
             "task_id": task_id,
@@ -739,6 +740,72 @@ async def predict(request: Request, file: UploadFile = File(...)):
 
 
 
+
+
+@app.post("/api/tasks/{task_id}/predict")
+async def predict_existing_task(task_id: str, payload: dict):
+    """对已存在的任务进行智能标注，支持关键词过滤"""
+    keywords = payload.get("keywords", [])
+    # 统一转小写以便匹配
+    target_keywords = [k.strip().lower() for k in keywords] if keywords else []
+
+    # 1. 查找数据库中对应的任务，获取图片地址
+    task_res = supabase.table("tasks").select("*").eq("id", task_id).execute()
+    if not task_res.data:
+        raise HTTPException(404, detail="任务不存在")
+
+    task = task_res.data[0]
+    image_url = task.get("image_url")
+    image_storage_path = task.get("image_storage_path")
+
+    try:
+        # 2. 读取图片 (优先尝试本地，否则拉取网络图片)
+        if image_storage_path and os.path.exists(image_storage_path):
+            image = Image.open(image_storage_path).convert("RGB")
+        else:
+            req = urllib.request.Request(image_url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req) as response:
+                image_data = response.read()
+            image = Image.open(io.BytesIO(image_data)).convert("RGB")
+
+        # 3. 运行 YOLO 模型进行预测
+        model, version = model_manager.get()
+        results = model(image, conf=0.25, iou=0.45)
+
+        raw_annotations = []
+        for r in results:
+            for box in r.boxes:
+                label = model.names[int(box.cls[0])]
+
+                # 🎯 核心逻辑：如果开启了关键词模式，且当前预测标签不在关键词内，则跳过
+                if target_keywords and label.lower() not in target_keywords:
+                    continue
+
+                x1, y1, x2, y2 = box.xyxy[0].tolist()
+                assigned_color = get_label_color(label)
+
+                raw_annotations.append({
+                    "id": f"ann_{uuid.uuid4().hex[:6]}",
+                    "label": label,
+                    "x": round(max(0, x1), 2),
+                    "y": round(max(0, y1), 2),
+                    "width": round(x2 - x1, 2),
+                    "height": round(y2 - y1, 2),
+                    "confidence": round(float(box.conf[0]), 3),
+                    "color": assigned_color
+                })
+
+        annotations = remove_duplicate_annotations(raw_annotations, iou_threshold=0.85)
+
+        return {
+            "success": True,
+            "annotations": annotations,
+            "model_version": version,
+            "message": f"成功识别 {len(annotations)} 个目标"
+        }
+    except Exception as e:
+        logger.error(f"预测现有任务失败: {e}")
+        raise HTTPException(500, detail=str(e))
 
 @app.get("/api/training/status")
 async def training_status():

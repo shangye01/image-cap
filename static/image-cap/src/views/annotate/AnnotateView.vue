@@ -121,8 +121,8 @@
           <input type="file" ref="fileInput" @change="handleFileUpload" accept="image/*" style="display: none">
           <button @click="$refs.fileInput.click()" class="btn btn-secondary">上传本地图片</button>
           <div class="divider"></div>
-          <button @click="runSmartAnnotation()" class="btn btn-success" :disabled="!imageObj || predicting">
-            {{ predicting ? '⏳ 识别中...' : '🤖 智能预标注' }}
+          <button @click="openSmartAnnotateDialog()" class="btn btn-success" :disabled="!imageObj || isPredicting">
+            {{ isPredicting ? '⏳ 识别中...' : '🤖 智能预标注' }}
           </button>
         </div>
       </section>
@@ -392,6 +392,71 @@
       </div>
     </main>
   </div>
+
+<teleport to="body">
+        <transition name="fade">
+          <div v-if="smartAnnotateVisible" class="smart-dialog-overlay" @click="smartAnnotateVisible = false">
+            <div class="smart-dialog-box" @click.stop>
+              
+              <div class="smart-dialog-header">
+                <h3>🤖 智能预标注设置</h3>
+                <button class="smart-dialog-close" @click="smartAnnotateVisible = false">×</button>
+              </div>
+
+              <div class="smart-dialog-body">
+                <div class="form-group" style="margin-bottom: 24px; display: flex; gap: 20px;">
+                  <label style="cursor: pointer; display: flex; align-items: center; gap: 6px;">
+                    <input type="radio" v-model="smartAnnotateMode" value="all" /> 识别所有目标
+                  </label>
+                  <label style="cursor: pointer; display: flex; align-items: center; gap: 6px; color: #1890ff; font-weight: bold;">
+                    <input type="radio" v-model="smartAnnotateMode" value="keyword" /> 仅标注指定关键词
+                  </label>
+                </div>
+
+                <div v-if="smartAnnotateMode === 'keyword'">
+                  <div style="margin-bottom: 8px; font-size: 13px; font-weight: bold; color: #333;">已选择的标签：</div>
+                  <div class="selected-tags-box">
+                    <span 
+                      v-for="tag in selectedSmartKeywords" :key="tag" 
+                      class="smart-tag selected" 
+                      :style="{ backgroundColor: labelColorMap.get(tag) || '#f56c6c' }"
+                    >
+                      {{ tag }} <span class="remove-tag" @click="removeSmartKeyword(tag)">×</span>
+                    </span>
+                    <span v-if="selectedSmartKeywords.length === 0" style="color:#999; font-size:12px;">请从下方点选</span>
+                  </div>
+
+                  <div style="margin-bottom: 8px; margin-top: 16px; font-size: 13px; font-weight: bold; color: #333;">可用标签库：</div>
+                  <div class="available-tags-box">
+                    <span 
+                      v-for="label in labels" :key="label.id" 
+                      class="smart-tag" 
+                      :class="{ active: selectedSmartKeywords.includes(label.name) }"
+                      :style="{ backgroundColor: labelColorMap.get(label.name) || label.color }"
+                      @click="toggleSmartKeyword(label.name)"
+                    >
+                      {{ label.name }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="smart-dialog-footer">
+                <button class="btn btn-secondary" style="width: auto; padding: 8px 24px;" @click="smartAnnotateVisible = false">取消</button>
+                <button 
+                  class="btn btn-primary" 
+                  style="width: auto; padding: 8px 24px;" 
+                  :disabled="smartAnnotateMode === 'keyword' && selectedSmartKeywords.length === 0" 
+                  @click="executeSmartAnnotation"
+                >
+                  确定开始
+                </button>
+              </div>
+              
+            </div>
+          </div>
+        </transition>
+      </teleport>
 </template>
 <script setup>
 import { ref, computed, reactive, onMounted, onUnmounted, watch, toRef, nextTick } from 'vue'
@@ -410,7 +475,6 @@ import { useRoute } from 'vue-router'
 
 const route = useRoute()
 const store = useAnnotationStore()
-
 
 
 
@@ -912,6 +976,83 @@ const transformerConfig = computed(() => {
 })
 
 // ========== 业务函数 ==========
+// ==========================================
+// 🤖 智能预标注相关逻辑
+// ==========================================
+const smartAnnotateVisible = ref(false)
+const smartAnnotateMode = ref('keyword') // 默认选定关键词模式
+const selectedSmartKeywords = ref([])
+
+const openSmartAnnotateDialog = () => {
+  if (!imageObj.value) {
+    alert("请先上传或加载图片");
+    return;
+  }
+  if (selectedSmartKeywords.value.length === 0 && labels.value.length > 0) {
+    selectedSmartKeywords.value = [labels.value[0].name]
+  }
+  smartAnnotateVisible.value = true
+}
+
+const toggleSmartKeyword = (name) => {
+  const index = selectedSmartKeywords.value.indexOf(name)
+  if (index > -1) selectedSmartKeywords.value.splice(index, 1)
+  else selectedSmartKeywords.value.push(name)
+}
+
+const removeSmartKeyword = (name) => toggleSmartKeyword(name)
+
+const executeSmartAnnotation = async () => {
+  if (!imageObj.value) return;
+  smartAnnotateVisible.value = false;
+  predicting.value = true;
+  
+  try {
+    const res = await fetch(imageObj.value.src);
+    const blob = await res.blob();
+    const formData = new FormData();
+    formData.append('file', blob, 'image.jpg');
+    
+    if (smartAnnotateMode.value === 'keyword' && selectedSmartKeywords.value.length > 0) {
+      formData.append('keywords', selectedSmartKeywords.value.join(','));
+    }
+    
+    const response = await fetch('/api/predict', {
+      method: 'POST',
+      body: formData
+    });
+    
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || '识别失败');
+    
+    if (data.success && data.annotations) {
+      data.annotations.forEach(ann => {
+        if (!labelColorMap.has(ann.label)) {
+          labelColorMap.set(ann.label, ann.color || '#ff0000')
+          saveLabelToBackend(ann.label, ann.color || '#ff0000')
+        } else {
+          ann.color = labelColorMap.get(ann.label)
+        }
+      });
+      syncLabelsFromMap();
+      
+      store.setAnnotations([...store.annotations, ...data.annotations]);
+      taskSuccess.value = `🤖 智能识别完成，新增 ${data.annotations.length} 个目标！`;
+      setTimeout(() => taskSuccess.value = '', 3000);
+      dragTick.value++;
+    }
+  } catch (error) {
+    console.error(error);
+    taskError.value = `❌ 智能标注失败: ${error.message}`;
+    setTimeout(() => taskError.value = '', 3000);
+  } finally {
+    predicting.value = false;
+  }
+}
+
+// ==========================================
+// 💾 YOLO 导出逻辑
+// ==========================================
 const exportForYOLO = async () => {
   if (annotations.value.length === 0) {
     await alertDialog({
@@ -922,6 +1063,13 @@ const exportForYOLO = async () => {
     return
   }
   
+  // ✅ 加上安全判断，防止意外报错
+  if (!imageObj.value) {
+    console.error("无图片对象");
+    return;
+  }
+  
+  // ✅ 这几行代码必须在这个大括号里面！
   const imgWidth = imageObj.value.width
   const imgHeight = imageObj.value.height
   
@@ -952,6 +1100,7 @@ const exportForYOLO = async () => {
   classesA.click()
   URL.revokeObjectURL(classesUrl)
 }
+
 
 const handleFileUpload = async (event) => {
   const file = event.target.files[0]
