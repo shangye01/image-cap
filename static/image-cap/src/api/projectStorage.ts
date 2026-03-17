@@ -38,3 +38,6 @@ export const listProjectFiles = (projectId: string) =>
   request.get<BackendProjectFile[]>(`/projects/${projectId}/files`)
 
 export const getProjectFileDownloadUrl = (fileId: string) => `/api/projects/files/${fileId}/download`
+
+export const deleteProjectApi = (projectId: string) =>
+  request.delete(`/projects/${projectId}`)

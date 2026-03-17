@@ -217,10 +217,7 @@
           </div>
 
           <div class="image-card-info">
-            <div class="file-name-text">{{ file.name }}</div>
-            <div v-if="file.relativePath" class="file-path-text">
-              {{ file.relativePath }}
-            </div>
+            <div class="file-name-text" :title="file.name">{{ file.name }}</div>
           </div>
 
           <div class="image-card-actions">
@@ -394,6 +391,7 @@ import {
   listProjectFiles,
   uploadProjectFile,
   getProjectFileDownloadUrl,
+  deleteProjectApi,
 } from '@/api/projectStorage'
 import { useUserStore } from '@/stores/user'
 
@@ -422,6 +420,8 @@ const workForm = reactive({
   selectedTagIds: [],
 })
 const selectedFileIds = ref([])
+
+const deletingProjectId = ref(null)
 
 const userStore = useUserStore()
 const previewUrlMap = new Map()
@@ -490,8 +490,9 @@ const workSelectedTags = computed(() =>
 const filteredProjectList = computed(() => {
   const keyword = searchKeyword.value.trim().toLowerCase()
   let list = [...projectList.value]
-  if (keyword)
+  if (keyword) {
     list = list.filter((project) => project.projectName.trim().toLowerCase().includes(keyword))
+  }
 
   if (sortType.value === 'created_desc')
     list.sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0))
@@ -560,6 +561,7 @@ const loadProjects = async () => {
     projectList.value = projectData
   } catch (error) {
     console.error('读取项目失败：', error)
+    window.alert(error?.response?.data?.detail || '读取项目失败')
   }
 }
 
@@ -574,6 +576,7 @@ const handleCreateProject = async (projectData) => {
 
     const pendingFolder = projectData.folders.find((folder) => folder.name === '待标注')
     const pendingFiles = pendingFolder?.files || []
+
     for (const item of pendingFiles) {
       if (item.file) {
         await uploadProjectFile(data.id, item.file, owner_id)
@@ -583,6 +586,7 @@ const handleCreateProject = async (projectData) => {
     await loadProjects()
   } catch (error) {
     console.error('创建项目失败：', error)
+    window.alert(error?.response?.data?.detail || '创建项目失败')
   }
 }
 
@@ -603,13 +607,16 @@ const enterFolder = (folder) => {
   currentFolderId.value = folder.id
   selectedFileIds.value = []
 }
+
 const backToFolderList = () => {
   currentFolderId.value = null
   selectedFileIds.value = []
 }
+
 const showRemark = (id) => {
   hoveredProjectId.value = id
 }
+
 const hideRemark = () => {
   hoveredProjectId.value = null
 }
@@ -621,6 +628,7 @@ const getFilePreviewUrl = (file) => {
 
   if (file.file) {
     if (previewUrlMap.has(file.id)) return previewUrlMap.get(file.id)
+
     const url = URL.createObjectURL(file.file)
     previewUrlMap.set(file.id, url)
     return url
@@ -630,6 +638,8 @@ const getFilePreviewUrl = (file) => {
 }
 
 const previewFile = (file) => {
+  previewFileName.value = file.name || ''
+
   if (!isImageFile(file)) {
     const targetUrl = file.downloadUrl || getFilePreviewUrl(file)
     if (targetUrl) window.open(targetUrl, '_blank', 'noopener,noreferrer')
@@ -644,6 +654,7 @@ const previewFile = (file) => {
   }
 
   previewImageUrl.value = imageUrl
+  previewVisible.value = true
 }
 
 const closePreview = () => {
@@ -751,8 +762,10 @@ const confirmRename = () => {
   closeRenameDialog()
 }
 
-const deleteProject = (projectId) => {
+const deleteProject = async (projectId) => {
   closeProjectMenu()
+
+  if (deletingProjectId.value === projectId) return
 
   const target = projectList.value.find((item) => item.id === projectId)
   if (!target) return
@@ -760,9 +773,22 @@ const deleteProject = (projectId) => {
   const confirmed = window.confirm(`确定删除项目“${target.projectName}”吗？`)
   if (!confirmed) return
 
-  projectList.value = projectList.value.filter((item) => item.id !== projectId)
+  try {
+    deletingProjectId.value = projectId
 
-  if (currentProjectId.value === projectId) backToProjectList()
+    await deleteProjectApi(projectId)
+
+    if (currentProjectId.value === projectId) {
+      backToProjectList()
+    }
+
+    await loadProjects()
+  } catch (error) {
+    console.error('删除项目失败：', error)
+    window.alert(error?.response?.data?.detail || '删除项目失败')
+  } finally {
+    deletingProjectId.value = null
+  }
 }
 
 const formatDate = (timestamp) => {
@@ -787,7 +813,9 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  if (previewImageUrl.value) URL.revokeObjectURL(previewImageUrl.value)
+  if (previewImageUrl.value && previewImageUrl.value.startsWith('blob:')) {
+    URL.revokeObjectURL(previewImageUrl.value)
+  }
 
   previewUrlMap.forEach((url) => URL.revokeObjectURL(url))
   previewUrlMap.clear()
@@ -802,10 +830,12 @@ const toggleProjectMenu = (projectId) => {
 const closeProjectMenu = () => {
   openedProjectMenuId.value = null
 }
+
 const handleRenameFromMenu = (project) => {
   closeProjectMenu()
   openRenameDialog(project)
 }
+
 const handleDeleteFromMenu = (projectId) => {
   closeProjectMenu()
   deleteProject(projectId)
@@ -979,14 +1009,14 @@ const handleDeleteFromMenu = (projectId) => {
 
 .project-menu-dropdown {
   position: absolute;
-  top: calc(100% + 8px);
+  top: 42px;
   right: 0;
   min-width: 120px;
-  padding: 6px;
-  border-radius: 12px;
-  background: #ffffff;
-  box-shadow: 0 16px 30px rgba(15, 23, 42, 0.14);
-  border: 1px solid #edf0f4;
+  padding: 8px;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.16);
+  border: 1px solid rgba(229, 231, 235, 0.9);
 }
 
 .project-menu-item {
@@ -997,9 +1027,8 @@ const handleDeleteFromMenu = (projectId) => {
   padding: 10px 12px;
   border-radius: 10px;
   font-size: 14px;
-  color: #374151;
+  color: #1f2937;
   cursor: pointer;
-  transition: background-color 0.18s ease, color 0.18s ease;
 }
 
 .project-menu-item:hover {
@@ -1007,7 +1036,7 @@ const handleDeleteFromMenu = (projectId) => {
 }
 
 .project-menu-item.danger {
-  color: #b91c1c;
+  color: #dc2626;
 }
 
 .project-menu-item.danger:hover {
@@ -1227,7 +1256,7 @@ const handleDeleteFromMenu = (projectId) => {
 .image-thumb {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   display: block;
   background: #f8fafc;
 }
@@ -1257,14 +1286,9 @@ const handleDeleteFromMenu = (projectId) => {
   font-size: 14px;
   font-weight: 600;
   color: #111827;
-  word-break: break-all;
-}
-
-.file-path-text {
-  margin-top: 4px;
-  font-size: 12px;
-  color: #6b7280;
-  word-break: break-all;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .empty-folder-page,

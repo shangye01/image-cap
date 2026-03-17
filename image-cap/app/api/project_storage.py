@@ -99,3 +99,20 @@ def download_project_file(file_id: uuid.UUID, db: Session = Depends(get_db)):
         filename=file_record.filename,
         media_type=file_record.mime_type or "application/octet-stream",
     )
+
+@router.delete("/{project_id}")
+def delete_project(project_id: uuid.UUID, db: Session = Depends(get_db)):
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="项目不存在")
+
+    # 删除数据库记录（会自动级联删除 files）
+    db.delete(project)
+    db.commit()
+
+    # 删除本地文件夹（如果有）
+    project_dir = UPLOAD_ROOT / str(project_id)
+    if project_dir.exists():
+        shutil.rmtree(project_dir)
+
+    return {"success": True, "message": "项目已删除"}
