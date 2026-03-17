@@ -383,6 +383,7 @@
 
 <script setup>
 import { computed, reactive, ref, onBeforeUnmount, onMounted, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import CreateBoardCard from '@/views/project/CreateBoardCard.vue'
 
 import {
@@ -424,6 +425,7 @@ const selectedFileIds = ref([])
 const deletingProjectId = ref(null)
 
 const userStore = useUserStore()
+const router = useRouter()
 const previewUrlMap = new Map()
 
 const scenes = ref([
@@ -431,20 +433,20 @@ const scenes = ref([
     id: 1,
     name: '场景1',
     tags: [
-      { id: 1, name: '标签1', color: '#d9c2f2' },
-      { id: 2, name: '标签2', color: '#f4b4af' },
-      { id: 3, name: '标签3', color: '#b8c9f6' },
-      { id: 4, name: '标签4', color: '#ecd68d' },
-      { id: 5, name: '标签5', color: '#a9cf96' },
+      { id: 1, name: 'person', color: '#d9c2f2' },
+      { id: 2, name: 'car', color: '#f4b4af' },
+      { id: 3, name: 'dog', color: '#b8c9f6' },
+      { id: 4, name: 'cat', color: '#ecd68d' },
+      { id: 5, name: 'cow', color: '#a9cf96' },
     ],
   },
   {
     id: 2,
     name: '场景2',
     tags: [
-      { id: 6, name: '标签1', color: '#aee9ec' },
-      { id: 7, name: '标签2', color: '#f2d562' },
-      { id: 8, name: '标签3', color: '#eea2ca' },
+      { id: 6, name: 'horse', color: '#aee9ec' },
+      { id: 7, name: 'tag2', color: '#f2d562' },
+      { id: 8, name: 'tag3', color: '#eea2ca' },
     ],
   },
 ])
@@ -736,7 +738,20 @@ const confirmWorkDialog = () => {
     currentProject.value.selectedTags = [...workSelectedTags.value]
   }
 
+  const targetFile = currentWorkFile.value || selectedFiles.value[0] || null
+  const sourceImage = targetFile ? getFilePreviewUrl(targetFile) : ''
+  const sourceName = targetFile?.name || ''
+
   closeWorkDialog()
+
+  router.push({
+    path: '/app/annotate',
+    query: {
+      sourceImage,
+      sourceName,
+      sourceMode: workForm.mode,
+    },
+  })
 }
 
 const openRenameDialog = (project) => {
