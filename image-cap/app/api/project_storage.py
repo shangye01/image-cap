@@ -5,6 +5,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -81,4 +82,20 @@ def list_project_files(project_id: uuid.UUID, db: Session = Depends(get_db)):
         .filter(ProjectFile.project_id == project_id)
         .order_by(ProjectFile.created_at.desc())
         .all()
+    )
+
+@router.get("/files/{file_id}/download")
+def download_project_file(file_id: uuid.UUID, db: Session = Depends(get_db)):
+    file_record = db.query(ProjectFile).filter(ProjectFile.id == file_id).first()
+    if not file_record:
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    file_path = Path(file_record.storage_path)
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="文件不存在或已被删除")
+
+    return FileResponse(
+        path=file_path,
+        filename=file_record.filename,
+        media_type=file_record.mime_type or "application/octet-stream",
     )

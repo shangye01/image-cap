@@ -36,3 +36,5 @@ export const uploadProjectFile = (projectId: string, file: File, uploadedBy: str
 
 export const listProjectFiles = (projectId: string) =>
   request.get<BackendProjectFile[]>(`/projects/${projectId}/files`)
+
+export const getProjectFileDownloadUrl = (fileId: string) => `/api/projects/files/${fileId}/download`

@@ -179,6 +179,14 @@
         <div class="project-detail-title-wrap">
           <div class="project-detail-title-row">
             <div class="project-detail-title">{{ currentFolder.name }}</div>
+            <div class="folder-action-buttons">
+              <button type="button" class="file-action-btn batch" @click="selectAllFilesInFolder">
+                批量标注
+              </button>
+              <button type="button" class="file-action-btn work" @click="startSelectedWork">
+                开始标注
+              </button>
+            </div>
           </div>
 
           <div class="project-detail-remark">共 {{ currentFolder.files.length }} 个文件</div>
@@ -187,10 +195,14 @@
 
       <div v-if="currentFolder.files.length" class="image-grid">
         <div v-for="file in currentFolder.files" :key="file.id" class="image-card">
-          <div
-            class="image-card-preview"
-            @click.stop="isImageFile(file) ? previewFile(file) : undefined"
-          >
+          <label class="file-select-checkbox" @click.stop>
+            <input
+              type="checkbox"
+              :checked="isFileSelected(file.id)"
+              @change="toggleFileSelection(file.id)"
+            />
+          </label>
+          <div class="image-card-preview" @click.stop="previewFile(file)">
             <template v-if="isImageFile(file) && getFilePreviewUrl(file)">
               <img :src="getFilePreviewUrl(file)" :alt="file.name" class="image-thumb" />
             </template>
@@ -212,12 +224,7 @@
           </div>
 
           <div class="image-card-actions">
-            <button
-              v-if="isImageFile(file)"
-              type="button"
-              class="file-action-btn preview"
-              @click.stop="previewFile(file)"
-            >
+            <button type="button" class="file-action-btn preview" @click.stop="previewFile(file)">
               预览
             </button>
 
@@ -243,7 +250,7 @@
 
             <div class="dialog-body work-dialog-body">
               <div class="work-file-summary">
-                当前文件：<span>{{ currentWorkFile?.name || '' }}</span>
+                {{ workSummaryText }}
               </div>
 
               <div class="mode-row">
@@ -386,6 +393,7 @@ import {
   listProjects,
   listProjectFiles,
   uploadProjectFile,
+  getProjectFileDownloadUrl,
 } from '@/api/projectStorage'
 import { useUserStore } from '@/stores/user'
 
@@ -413,6 +421,7 @@ const workForm = reactive({
   mode: 'keyword',
   selectedTagIds: [],
 })
+const selectedFileIds = ref([])
 
 const userStore = useUserStore()
 const previewUrlMap = new Map()
@@ -462,6 +471,16 @@ const currentWorkFile = computed(() => {
   return null
 })
 
+const selectedFiles = computed(() => {
+  if (!currentFolder.value) return []
+  return currentFolder.value.files.filter((file) => selectedFileIds.value.includes(file.id))
+})
+
+const workSummaryText = computed(() => {
+  if (selectedFiles.value.length > 1) return `已选择 ${selectedFiles.value.length} 个文件`
+  return `当前文件：${currentWorkFile.value?.name || ''}`
+})
+
 const allTags = computed(() => scenes.value.flatMap((scene) => scene.tags))
 
 const workSelectedTags = computed(() =>
@@ -508,6 +527,7 @@ const mapBackendFile = (backendFile) => ({
   type: backendFile.mime_type || '',
   size: backendFile.size_bytes || 0,
   file: null,
+  downloadUrl: getProjectFileDownloadUrl(backendFile.id),
 })
 
 const loadProjects = async () => {
@@ -576,13 +596,16 @@ const backToProjectList = () => {
   closeProjectMenu()
   currentProjectId.value = null
   currentFolderId.value = null
+  selectedFileIds.value = []
 }
 
 const enterFolder = (folder) => {
   currentFolderId.value = folder.id
+  selectedFileIds.value = []
 }
 const backToFolderList = () => {
   currentFolderId.value = null
+  selectedFileIds.value = []
 }
 const showRemark = (id) => {
   hoveredProjectId.value = id
@@ -594,33 +617,43 @@ const hideRemark = () => {
 const isImageFile = (file) => typeof file.type === 'string' && file.type.startsWith('image/')
 
 const getFilePreviewUrl = (file) => {
-  if (!isImageFile(file) || !file.file) return ''
+  if (!isImageFile(file)) return ''
 
-  if (previewUrlMap.has(file.id)) return previewUrlMap.get(file.id)
+  if (file.file) {
+    if (previewUrlMap.has(file.id)) return previewUrlMap.get(file.id)
+    const url = URL.createObjectURL(file.file)
+    previewUrlMap.set(file.id, url)
+    return url
+  }
 
-  const url = URL.createObjectURL(file.file)
-  previewUrlMap.set(file.id, url)
-  return url
+  return file.downloadUrl || ''
 }
 
 const previewFile = (file) => {
-  if (!isImageFile(file) || !file.file) return
+  if (!isImageFile(file)) {
+    const targetUrl = file.downloadUrl || getFilePreviewUrl(file)
+    if (targetUrl) window.open(targetUrl, '_blank', 'noopener,noreferrer')
+    return
+  }
 
-  if (previewImageUrl.value) URL.revokeObjectURL(previewImageUrl.value)
+  const imageUrl = getFilePreviewUrl(file)
+  if (!imageUrl) return
 
-  previewImageUrl.value = URL.createObjectURL(file.file)
-  previewFileName.value = file.name
-  previewVisible.value = true
+  if (previewImageUrl.value && previewImageUrl.value.startsWith('blob:')) {
+    URL.revokeObjectURL(previewImageUrl.value)
+  }
+
+  previewImageUrl.value = imageUrl
 }
 
 const closePreview = () => {
   previewVisible.value = false
   previewFileName.value = ''
 
-  if (previewImageUrl.value) {
+  if (previewImageUrl.value && previewImageUrl.value.startsWith('blob:')) {
     URL.revokeObjectURL(previewImageUrl.value)
-    previewImageUrl.value = ''
   }
+  previewImageUrl.value = ''
 }
 
 const isWorkSelected = (id) => workForm.selectedTagIds.includes(id)
@@ -639,7 +672,34 @@ const removeWorkTag = (id) => {
 const handleWork = (file) => {
   if (!currentProject.value) return
 
+  selectedFileIds.value = [file.id]
   currentWorkFileId.value = file.id
+  workForm.mode = currentProject.value.mode || 'keyword'
+  workForm.selectedTagIds = []
+  workVisible.value = true
+}
+
+const isFileSelected = (fileId) => selectedFileIds.value.includes(fileId)
+
+const toggleFileSelection = (fileId) => {
+  const index = selectedFileIds.value.indexOf(fileId)
+  if (index > -1) selectedFileIds.value.splice(index, 1)
+  else selectedFileIds.value.push(fileId)
+}
+
+const selectAllFilesInFolder = () => {
+  if (!currentFolder.value) return
+  selectedFileIds.value = currentFolder.value.files.map((file) => file.id)
+}
+
+const startSelectedWork = () => {
+  if (!currentProject.value || !currentFolder.value) return
+  if (!selectedFileIds.value.length) {
+    window.alert('请先选择要标注的文件')
+    return
+  }
+
+  currentWorkFileId.value = selectedFileIds.value[0]
   workForm.mode = currentProject.value.mode || 'keyword'
   workForm.selectedTagIds = []
   workVisible.value = true
@@ -1117,6 +1177,40 @@ const handleDeleteFromMenu = (projectId) => {
 .image-card:hover {
   transform: translateY(-2px);
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+}
+
+.folder-action-buttons {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+
+.file-action-btn.batch {
+  background: #e8f3ff;
+  color: #1a6fd8;
+}
+
+.image-card {
+  position: relative;
+}
+
+.file-select-checkbox {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.file-select-checkbox input {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
 }
 
 .image-card-preview {
