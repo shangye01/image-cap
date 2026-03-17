@@ -44,7 +44,13 @@ const router = createRouter({
           component: () => import('@/views/project/ProjectContent.vue'), // 确保路径对应你创建页的文件名
           meta: { requiresAuth: true }
         },
-       
+        /* --- 新增：项目详情页面（查看文件夹图片分布） --- */
+        // {
+        //   path: 'project-detail/:id',
+        //   name: 'project-detail',
+        //   component: () => import('@/views/history/ProjectDetail.vue'), // 对应刚才写的详情页
+        //   meta: { requiresAuth: true }
+        // },
         {
           path: 'annotate',
           name: 'annotate',

@@ -29,6 +29,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse
 from .api import auth
+from .api import project_storage
+from .db.base import init_db
 from .config import supabase, SUPABASE_URL, TRAINING_CONFIG
 
 print(f"SUPABASE_URL: {SUPABASE_URL}")  # 加上这行看输出
@@ -39,6 +41,17 @@ app = FastAPI()
 
 # 注册路由
 app.include_router(auth.router)  # 这个应该已经可以了，确认 auth.py 里有 router = APIRouter(...)
+app.include_router(project_storage.router)
+
+print("MAIN FILE:", __file__)
+print("PROJECT_STORAGE FILE:", project_storage.__file__)
+
+for r in app.routes:
+    print("ROUTE:", getattr(r, "methods", None), r.path)
+
+@app.on_event("startup")
+def _startup() -> None:
+    init_db()
 
 # ========== 日志配置 ==========
 logging.basicConfig(
