@@ -1,12 +1,16 @@
 from __future__ import annotations
 
-import shutil
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
+from app.config import (
+    SUPABASE_PROJECT_FILES_BUCKET,
+    SUPABASE_PROJECT_FILES_PUBLIC,
+    supabase,
+)
 
 from app.db.session import get_db
 from app.models import Project, ProjectFile
@@ -14,8 +18,39 @@ from app.schemas.project_storage import FileOut, ProjectCreate, ProjectOut
 
 router = APIRouter(prefix="/api/projects", tags=["project-storage"])
 
-UPLOAD_ROOT = Path("./uploads/projects")
-UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+def _build_file_urls(file_record: ProjectFile, request: Request) -> tuple[str, str]:
+    download_url = str(request.url_for("download_project_file", file_id=str(file_record.id)))
+    if SUPABASE_PROJECT_FILES_PUBLIC and supabase is not None:
+        preview_url = supabase.storage.from_(SUPABASE_PROJECT_FILES_BUCKET).get_public_url(
+            file_record.storage_path
+        )
+        return download_url, preview_url
+
+    return download_url, download_url
+
+
+def _serialize_file(file_record: ProjectFile, request: Request) -> FileOut:
+    download_url, preview_url = _build_file_urls(file_record, request)
+    payload = {
+        "id": file_record.id,
+        "project_id": file_record.project_id,
+        "filename": file_record.filename,
+        "storage_path": file_record.storage_path,
+        "storage_backend": "supabase",
+        "mime_type": file_record.mime_type,
+        "size_bytes": file_record.size_bytes,
+        "uploaded_by": file_record.uploaded_by,
+        "created_at": file_record.created_at,
+        "download_url": download_url,
+        "preview_url": preview_url,
+    }
+    return FileOut(**payload)
+
+
+def _ensure_storage_client():
+    if supabase is None:
+        raise HTTPException(status_code=500, detail="Supabase Storage 未配置，无法上传项目文件")
+    return supabase.storage.from_(SUPABASE_PROJECT_FILES_BUCKET)
 
 
 @router.post("", response_model=ProjectOut)
@@ -43,6 +78,7 @@ def list_projects(owner_id: str | None = None, db: Session = Depends(get_db)):
 @router.post("/{project_id}/files", response_model=FileOut)
 def upload_project_file(
     project_id: uuid.UUID,
+    request: Request,
     uploaded_by: str = Form(...),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
@@ -51,38 +87,50 @@ def upload_project_file(
     if not project:
         raise HTTPException(status_code=404, detail="项目不存在")
 
-    project_dir = UPLOAD_ROOT / str(project_id)
-    project_dir.mkdir(parents=True, exist_ok=True)
+    bucket = _ensure_storage_client()
+    file_ext = Path(file.filename or "").suffix
+    safe_filename = Path(file.filename or "unnamed").name
 
-    file_ext = Path(file.filename).suffix
     storage_name = f"{uuid.uuid4().hex}{file_ext}"
-    local_path = project_dir / storage_name
+    object_key = f"projects/{project_id}/{storage_name}"
+    file_bytes = file.file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="上传文件为空")
 
-    with local_path.open("wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    try:
+        bucket.upload(
+            path=object_key,
+            file=file_bytes,
+            file_options={
+                "content-type": file.content_type or "application/octet-stream",
+            },
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"上传到 Supabase Storage 失败: {exc}") from exc
 
     file_record = ProjectFile(
         project_id=project_id,
-        filename=file.filename,
-        storage_path=str(local_path),
+        filename=safe_filename,
+        storage_path=object_key,
         mime_type=file.content_type or "application/octet-stream",
-        size_bytes=local_path.stat().st_size,
+        size_bytes=len(file_bytes),
         uploaded_by=uploaded_by,
     )
     db.add(file_record)
     db.commit()
     db.refresh(file_record)
-    return file_record
+    return _serialize_file(file_record, request)
 
 
 @router.get("/{project_id}/files", response_model=list[FileOut])
-def list_project_files(project_id: uuid.UUID, db: Session = Depends(get_db)):
-    return (
+def list_project_files(project_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
+    file_records = (
         db.query(ProjectFile)
         .filter(ProjectFile.project_id == project_id)
         .order_by(ProjectFile.created_at.desc())
         .all()
     )
+    return [_serialize_file(file_record, request) for file_record in file_records]
 
 @router.get("/files/{file_id}/download")
 def download_project_file(file_id: uuid.UUID, db: Session = Depends(get_db)):
@@ -90,14 +138,22 @@ def download_project_file(file_id: uuid.UUID, db: Session = Depends(get_db)):
     if not file_record:
         raise HTTPException(status_code=404, detail="文件不存在")
 
-    file_path = Path(file_record.storage_path)
-    if not file_path.exists() or not file_path.is_file():
-        raise HTTPException(status_code=404, detail="文件不存在或已被删除")
+    bucket = _ensure_storage_client()
+    try:
+        content = bucket.download(file_record.storage_path)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=f"远端文件不存在或已被删除: {exc}") from exc
 
-    return FileResponse(
-        path=file_path,
-        filename=file_record.filename,
+    return Response(
+        content=content,
         media_type=file_record.mime_type or "application/octet-stream",
+        headers={
+            "Content-Disposition": (
+                f'inline; filename="{file_record.filename}"'
+                if (file_record.mime_type or "").startswith("image/")
+                else f'attachment; filename="{file_record.filename}"'
+            )
+        },
     )
 
 @router.delete("/{project_id}")
@@ -106,13 +162,17 @@ def delete_project(project_id: uuid.UUID, db: Session = Depends(get_db)):
     if not project:
         raise HTTPException(status_code=404, detail="项目不存在")
 
+    storage_keys = [file_record.storage_path for file_record in project.files if file_record.storage_path]
+    if storage_keys:
+        bucket = _ensure_storage_client()
+        try:
+            bucket.remove(storage_keys)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"删除 Supabase Storage 文件失败: {exc}") from exc
+
     # 删除数据库记录（会自动级联删除 files）
     db.delete(project)
     db.commit()
 
-    # 删除本地文件夹（如果有）
-    project_dir = UPLOAD_ROOT / str(project_id)
-    if project_dir.exists():
-        shutil.rmtree(project_dir)
 
     return {"success": True, "message": "项目已删除"}

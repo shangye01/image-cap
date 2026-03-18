@@ -11,6 +11,13 @@ load_dotenv(dotenv_path=env_path)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+SUPABASE_PROJECT_FILES_BUCKET = os.getenv("SUPABASE_PROJECT_FILES_BUCKET", "project-files")
+SUPABASE_PROJECT_FILES_PUBLIC = os.getenv("SUPABASE_PROJECT_FILES_PUBLIC", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 supabase: Client | None = None
 if SUPABASE_URL and SUPABASE_SERVICE_KEY:
     try:
