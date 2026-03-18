@@ -13,10 +13,13 @@ export interface BackendProjectFile {
   project_id: string
   filename: string
   storage_path: string
+  storage_backend?: 'supabase'
   mime_type: string
   size_bytes: number
   uploaded_by: string
   created_at: string
+  download_url?: string | null
+  preview_url?: string | null
 }
 
 export const createProject = (payload: { name: string; description?: string; owner_id: string }) =>

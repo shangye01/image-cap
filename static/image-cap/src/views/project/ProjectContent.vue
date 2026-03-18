@@ -530,7 +530,12 @@ const mapBackendFile = (backendFile) => ({
   type: backendFile.mime_type || '',
   size: backendFile.size_bytes || 0,
   file: null,
-  downloadUrl: getProjectFileDownloadUrl(backendFile.id),
+  storageBackend: backendFile.storage_backend || 'supabase',
+  downloadUrl: backendFile.download_url || getProjectFileDownloadUrl(backendFile.id),
+  previewUrl:
+    backendFile.preview_url ||
+    backendFile.download_url ||
+    getProjectFileDownloadUrl(backendFile.id),
 })
 
 const loadProjects = async () => {
@@ -636,7 +641,7 @@ const getFilePreviewUrl = (file) => {
     return url
   }
 
-  return file.downloadUrl || ''
+  return file.previewUrl || file.downloadUrl || ''
 }
 
 const previewFile = (file) => {
