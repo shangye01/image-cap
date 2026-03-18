@@ -57,10 +57,13 @@ class FileOut(BaseModel):
     project_id: UUID
     filename: str
     storage_path: str
+    storage_backend: str = "supabase"
     mime_type: str
     size_bytes: int
     uploaded_by: str
     created_at: datetime
+    download_url: str | None = None
+    preview_url: str | None = None
 
     class Config:
         from_attributes = True
