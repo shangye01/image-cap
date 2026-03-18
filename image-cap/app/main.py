@@ -31,7 +31,13 @@ from fastapi.responses import JSONResponse, FileResponse
 from .api import auth
 from .api import project_storage
 from .db.base import init_db
+from .db.session import SessionLocal
 from .config import supabase, SUPABASE_URL, TRAINING_CONFIG
+from .models import ProjectFile
+
+from app.api.project_storage import router as project_router
+
+
 
 print(f"SUPABASE_URL: {SUPABASE_URL}")  # 加上这行看输出
 app = FastAPI()
@@ -1136,7 +1142,46 @@ async def save_annotations(task_id: str, payload: dict):
                 "annotations_count": len(anns),
                 "completed_at": datetime.now().isoformat()
             }).eq("id", task_id).execute()
+            try:
+                project_storage_root = Path("./uploads/projects")
+                for meta_file in project_storage_root.glob(f"*/{project_storage.TASK_META_FILENAME}"):
+                    meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                    tasks = meta.get("tasks", [])
+                    target_task = next((item for item in tasks if item.get("task_id") == task_id), None)
+                    if not target_task:
+                        continue
 
+                    project_dir = meta_file.parent
+                    done_dir = project_dir / "已标注"
+                    done_dir.mkdir(parents=True, exist_ok=True)
+
+                    source_path = Path(target_task.get("storage_path", ""))
+                    if source_path.exists():
+                        destination = done_dir / source_path.name
+                        if destination != source_path:
+                            shutil.move(str(source_path), str(destination))
+                        target_task["storage_path"] = str(destination)
+                        file_id = target_task.get("file_id")
+                        if file_id:
+                            db = SessionLocal()
+                            try:
+                                project_file = db.query(ProjectFile).filter(ProjectFile.id == file_id).first()
+                                if project_file:
+                                    project_file.storage_path = str(destination)
+                                    db.commit()
+                            finally:
+                                db.close()
+
+                    target_task["status"] = "completed"
+                    target_task["completed_at"] = datetime.now().isoformat()
+                    meta["updated_at"] = datetime.now().isoformat()
+                    meta_file.write_text(
+                        json.dumps(meta, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                    break
+            except Exception as move_error:
+                logger.warning(f"提交后移动项目文件失败: {move_error}")
             return {"success": True, "status": "submitted", "count": len(anns)}
 
     except HTTPException:

@@ -387,6 +387,7 @@ import { useRouter } from 'vue-router'
 import CreateBoardCard from '@/views/project/CreateBoardCard.vue'
 
 import {
+  createAnnotationSession,
   createProject,
   listProjects,
   listProjectFiles,
@@ -531,6 +532,7 @@ const mapBackendFile = (backendFile) => ({
   size: backendFile.size_bytes || 0,
   file: null,
   downloadUrl: getProjectFileDownloadUrl(backendFile.id),
+  storagePath: backendFile.storage_path,
 })
 
 const loadProjects = async () => {
@@ -541,6 +543,7 @@ const loadProjects = async () => {
       (data || []).map(async (project) => {
         const fileResp = await listProjectFiles(project.id)
         return {
+          files: fileResp.data || [],
           id: project.id,
           projectName: project.name,
           remark: project.description || '',
@@ -552,10 +555,25 @@ const loadProjects = async () => {
             {
               id: `pending_${project.id}`,
               name: '待标注',
-              files: (fileResp.data || []).map(mapBackendFile),
+              files: (fileResp.data || [])
+                .filter((file) => !file.storage_path?.includes('/标注中/') && !file.storage_path?.includes('/已标注/'))
+                .map(mapBackendFile),
             },
-            { id: `labeling_${project.id}`, name: '标注中', files: [] },
-            { id: `done_${project.id}`, name: '已标注', files: [] },
+            {
+              id: `labeling_${project.id}`,
+              name: '标注中',
+              files: (fileResp.data || [])
+                .filter((file) => file.storage_path?.includes('/标注中/'))
+                .map(mapBackendFile),
+            },
+            {
+              id: `done_${project.id}`,
+              name: '已标注',
+              files: (fileResp.data || [])
+                .filter((file) => file.storage_path?.includes('/已标注/'))
+                .map(mapBackendFile),
+            },
+            
           ],
         }
       })
@@ -725,9 +743,10 @@ const closeWorkDialog = () => {
   workForm.selectedTagIds = []
 }
 
-const confirmWorkDialog = () => {
+const confirmWorkDialog = async () => {
   if (!currentProject.value) return
 
+  // 保存项目模式设置
   currentProject.value.mode = workForm.mode
 
   if (workForm.mode === 'nonKeyword') {
@@ -738,20 +757,72 @@ const confirmWorkDialog = () => {
     currentProject.value.selectedTags = [...workSelectedTags.value]
   }
 
-  const targetFile = currentWorkFile.value || selectedFiles.value[0] || null
-  const sourceImage = targetFile ? getFilePreviewUrl(targetFile) : ''
-  const sourceName = targetFile?.name || ''
+  try {
+    // 确定目标文件列表
+    const targetFiles = selectedFiles.value.length
+      ? selectedFiles.value
+      : currentWorkFile.value
+        ? [currentWorkFile.value]
+        : []
 
-  closeWorkDialog()
+    if (!targetFiles.length) {
+      window.alert('请至少选择一张图片')
+      return
+    }
 
-  router.push({
-    path: '/app/annotate',
-    query: {
-      sourceImage,
-      sourceName,
-      sourceMode: workForm.mode,
-    },
-  })
+    // 准备关键词
+    const keywords =
+      workForm.mode === 'keyword' ? workSelectedTags.value.map((tag) => tag.name) : []
+
+    // 调用后端创建标注会话（包含自动预标注）
+    const { data } = await createAnnotationSession(currentProject.value.id, {
+      file_ids: targetFiles.map((file) => file.id),
+      use_keywords: workForm.mode === 'keyword',
+      keywords,
+    })
+
+    // 保存预标注数据到本地存储（供标注页面读取）
+    if (data.tasks && data.tasks.length > 0) {
+      // 保存所有任务的预标注数据
+      data.tasks.forEach((task) => {
+        if (task.annotations && task.annotations.length > 0) {
+          localStorage.setItem(
+            `pre_annotations_${task.task_id}`,
+            JSON.stringify(task.annotations)
+          )
+          console.log(`任务 ${task.task_id} 预标注已保存:`, task.annotations.length, '个框')
+        }
+      })
+      
+      // 同时保存当前项目的关键词设置（供标注页面使用）
+      localStorage.setItem(
+        `project_keywords_${data.project_id}`,
+        JSON.stringify({
+          use_keywords: data.use_keywords,
+          keywords: data.keywords,
+          mode: workForm.mode
+        })
+      )
+    }
+
+    // 关闭弹窗
+    closeWorkDialog()
+
+    // 跳转到标注页面
+    router.push({
+      path: '/app/annotate',
+      query: {
+        projectId: data.project_id,
+        task: data.first_task.task_id,  // 格式：项目名_001
+        sourceMode: workForm.mode,
+        batchSize: String(data.tasks.length),
+        projectName: data.project_name,
+      },
+    })
+  } catch (error) {
+    console.error('创建标注任务失败：', error)
+    window.alert(error?.response?.data?.detail || '创建标注任务失败')
+  }
 }
 
 const openRenameDialog = (project) => {

@@ -19,6 +19,29 @@ export interface BackendProjectFile {
   created_at: string
 }
 
+export interface AnnotationSessionTask {
+  task_id: string
+  file_id: string
+  filename: string
+  storage_path: string
+  image_url: string
+  project_id: string
+  project_name: string
+  use_keywords: boolean
+  keywords: string[]
+  status: string
+}
+
+export interface AnnotationSessionResponse {
+  success: boolean
+  project_id: string
+  project_name: string
+  use_keywords: boolean
+  keywords: string[]
+  tasks: AnnotationSessionTask[]
+  first_task: AnnotationSessionTask
+}
+
 export const createProject = (payload: { name: string; description?: string; owner_id: string }) =>
   request.post<BackendProject>('/projects', payload)
 
@@ -40,4 +63,14 @@ export const listProjectFiles = (projectId: string) =>
 export const getProjectFileDownloadUrl = (fileId: string) => `/api/projects/files/${fileId}/download`
 
 export const deleteProjectApi = (projectId: string) =>
-  request.delete(`/projects/${projectId}`)
+ request.delete(`/projects/${projectId}`)
+
+export const createAnnotationSession = (
+  projectId: string,
+  payload: { file_ids: string[]; use_keywords: boolean; keywords: string[] }
+) => request.post<AnnotationSessionResponse>(`/projects/${projectId}/annotation-session`, payload)
+
+export const getAnnotationSessionTask = (projectId: string, taskId: string) =>
+  request.get<{ success: boolean; task: AnnotationSessionTask }>(
+    `/projects/${projectId}/annotation-session/${taskId}`
+  )

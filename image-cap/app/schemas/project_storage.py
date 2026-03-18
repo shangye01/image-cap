@@ -2,8 +2,37 @@ from __future__ import annotations
 
 from datetime import datetime
 from uuid import UUID
-
 from pydantic import BaseModel, Field
+from typing import List, Optional
+
+
+class AnnotationSessionCreate(BaseModel):
+    file_ids: List[str]
+    use_keywords: bool
+    keywords: Optional[List[str]] = []
+
+
+class AnnotationSessionTask(BaseModel):
+    task_id: str
+    file_id: str
+    filename: str
+    storage_path: str
+    image_url: str
+    project_id: str
+    project_name: str
+    use_keywords: bool
+    keywords: List[str]
+    status: str
+
+
+class AnnotationSessionResponse(BaseModel):
+    success: bool
+    project_id: str
+    project_name: str
+    use_keywords: bool
+    keywords: List[str]
+    tasks: List[AnnotationSessionTask]
+    first_task: AnnotationSessionTask
 
 
 class ProjectCreate(BaseModel):

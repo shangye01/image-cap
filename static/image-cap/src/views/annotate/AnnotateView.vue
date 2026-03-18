@@ -104,12 +104,13 @@
             {{ taskLoading ? '⏳ 获取中...' : '🎯 获取新任务' }}
           </button>
 
+         <!-- 修改提交按钮 -->
           <button
-            @click="submitAnnotations()"
-            class="btn btn-success"
-            :disabled="!store.currentTaskId || submitLoading || store.annotations.length === 0"
-          >
-            {{ submitLoading ? '⏳ 提交中...' : '✅ 提交标注' }}
+  @click="submitWithCleanup()"
+  class="btn btn-success"
+  :disabled="!store.currentTaskId || submitLoading || store.annotations.length === 0"
+>
+  {{ submitLoading ? '⏳ 提交中...' : '✅ 提交标注' }}
           </button>
 
           <button
@@ -594,6 +595,14 @@ import { useRoute } from 'vue-router'
 const route = useRoute()
 const store = useAnnotationStore()
 
+const routeProjectId = computed(() =>
+  typeof route.query.projectId === 'string' ? route.query.projectId : ''
+)
+const routeTaskId = computed(() => (typeof route.query.task === 'string' ? route.query.task : ''))
+const routeBatchSize = computed(() => {
+  const raw = typeof route.query.batchSize === 'string' ? Number(route.query.batchSize) : 0
+  return Number.isFinite(raw) ? raw : 0
+})
 // ========== 响应式状态定义 ==========
 const imageObj = ref(null)
 const fileInput = ref(null)
@@ -880,6 +889,15 @@ watch(
 )
 
 // ========== 配置函数 ==========
+// 在 loadNextTask 调用前清理旧任务
+const loadNextTaskWithCleanup = async () => {
+  const oldTaskId = store.currentTaskId
+  await loadNextTask()
+  // 如果任务切换成功，清理旧任务的预标注
+  if (oldTaskId && oldTaskId !== store.currentTaskId) {
+    clearPreAnnotations(oldTaskId)
+  }
+}
 // 计算当前实际缩放比例
 const currentScale = computed(() => {
   return (baseContainerSize.value?.scale || 1) * zoomScale.value
@@ -1112,23 +1130,18 @@ const toggleSmartKeyword = (name) => {
 const removeSmartKeyword = (name) => toggleSmartKeyword(name)
 
 const executeSmartAnnotation = async () => {
-  if (!imageObj.value) return
+ if (!imageObj.value || !store.currentTaskId) return
   smartAnnotateVisible.value = false
   predicting.value = true
 
   try {
-    const res = await fetch(imageObj.value.src)
-    const blob = await res.blob()
-    const formData = new FormData()
-    formData.append('file', blob, 'image.jpg')
-
-    if (smartAnnotateMode.value === 'keyword' && selectedSmartKeywords.value.length > 0) {
-      formData.append('keywords', selectedSmartKeywords.value.join(','))
-    }
-
-    const response = await fetch('/api/predict', {
+    const response = await fetch(`/api/tasks/${store.currentTaskId}/predict`, {
       method: 'POST',
-      body: formData,
+       headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        keywords:
+          smartAnnotateMode.value === 'keyword' ? [...selectedSmartKeywords.value] : [],
+      }),
     })
 
     const data = await response.json()
@@ -1889,6 +1902,77 @@ const loadImageFromSource = async (imageUrl) => {
   return true
 }
 
+// 从 localStorage 加载智能预标注数据
+const loadPreAnnotations = (taskId) => {
+  if (!taskId) return false
+  
+  const preData = localStorage.getItem(`pre_annotations_${taskId}`)
+  if (preData) {
+    try {
+      const annotations = JSON.parse(preData)
+      if (annotations && annotations.length > 0) {
+        // 确保每个标注都有颜色，并同步到标签库
+        annotations.forEach(ann => {
+          if (!ann.color) {
+            ann.color = labelColorMap.get(ann.label) || ensureLabelColor(ann.label)
+          }
+          // 如果标签不存在，添加到标签库
+          if (!labelColorMap.has(ann.label)) {
+            labelColorMap.set(ann.label, ann.color)
+            // 异步保存到后端（不阻塞）
+            saveLabelToBackend(ann.label, ann.color).catch(console.error)
+          }
+        })
+        
+        // 应用到画布
+        store.setAnnotations(annotations)
+        syncLabelsFromMap()
+        dragTick.value++
+        
+        // 自动切换到第一个标注的标签
+        const firstAnn = annotations[0]
+        if (firstAnn) {
+          currentLabel.value = firstAnn.label
+          selectedColor.value = firstAnn.color || labelColorMap.get(firstAnn.label)
+        }
+        
+        console.log(`✅ 已加载 ${annotations.length} 个智能预标注框`)
+        return true
+      }
+    } catch (e) {
+      console.error('解析预标注数据失败:', e)
+    }
+  }
+  return false
+}
+
+// 加载项目关键词设置（可选，用于显示当前模式）
+const loadProjectSettings = (projectId) => {
+  const settings = localStorage.getItem(`project_keywords_${projectId}`)
+  if (settings) {
+    try {
+      const data = JSON.parse(settings)
+      console.log('📋 项目标注模式:', data.use_keywords ? `关键词模式 (${data.keywords.join(', ')})` : '非关键词模式')
+      // 可以在这里设置提示信息
+      if (data.use_keywords && data.keywords.length > 0) {
+        taskSuccess.value = `🎯 当前项目使用关键词: ${data.keywords.join(', ')}`
+        setTimeout(() => (taskSuccess.value = ''), 3000)
+      }
+      return data
+    } catch (e) {
+      console.error('解析项目设置失败:', e)
+    }
+  }
+  return null
+}
+
+// 清理已使用的预标注数据（在提交成功后调用）
+const clearPreAnnotations = (taskId) => {
+  if (taskId) {
+    localStorage.removeItem(`pre_annotations_${taskId}`)
+    console.log(`🧹 已清理任务 ${taskId} 的预标注缓存`)
+  }
+}
 // ========== 生命周期 ==========
 onMounted(async () => {
   console.log('🚀 组件挂载完成')
@@ -1901,33 +1985,38 @@ onMounted(async () => {
   defaultLabels.forEach((label) => ensureLabelColor(label.name, label.color))
   await loadSavedLabels()
 
-  let resizeObserver = null
-  if (canvasContainer.value) {
-    resizeObserver = new ResizeObserver(() => {
-      dragTick.value++
-      console.log('📐 容器尺寸变化，重绘画布')
-    })
-    resizeObserver.observe(canvasContainer.value)
-  }
+  // 检查训练状态
+  checkTrainingStatus()
 
-  if (labelColorMap.has('object')) {
-    labelColorMap.delete('object')
-  }
-  syncLabelsFromMap()
-  dragTick.value++
-
-  if (!labelColorMap.has(currentLabel.value) || currentLabel.value === 'object') {
-    currentLabel.value = labels.value[0]?.name || 'person'
-    selectedColor.value = labelColorMap.get(currentLabel.value) || '#ff0000'
-  }
-
-  const sourceImage = typeof route.query.sourceImage === 'string' ? route.query.sourceImage : ''
-  const sourceName = typeof route.query.sourceName === 'string' ? route.query.sourceName : ''
-
-  if (sourceImage) {
+  // ========== 修改1：处理从项目页面跳转过来的任务 ==========
+  if (routeProjectId.value && routeTaskId.value) {
+    console.log(`📥 加载项目任务: ${routeProjectId.value}, 任务ID: ${routeTaskId.value}`)
+    
+    const loaded = await fetchProjectTask(routeProjectId.value, routeTaskId.value)
+    
+    if (!loaded) {
+      loadTestImage()
+    } else {
+      // 加载项目设置（关键词模式提示）
+      loadProjectSettings(routeProjectId.value)
+      
+      // 加载智能预标注数据（关键修改）
+      const hasPreAnnotations = loadPreAnnotations(routeTaskId.value)
+      
+      if (routeBatchSize.value > 0) {
+        taskSuccess.value = `✅ 已进入批量标注模式，共 ${routeBatchSize.value} 张图片，当前: ${routeTaskId.value}${hasPreAnnotations ? '，已加载AI预标注' : ''}`
+        setTimeout(() => (taskSuccess.value = ''), 3000)
+      } else if (hasPreAnnotations) {
+        taskSuccess.value = `✅ 已加载任务 ${routeTaskId.value}，智能预标注已应用`
+        setTimeout(() => (taskSuccess.value = ''), 2500)
+      }
+    }
+  } 
+  // ========== 处理从外部传入的图片 ==========
+  else if (typeof route.query.sourceImage === 'string' && route.query.sourceImage) {
     try {
-      await loadImageFromSource(sourceImage)
-      taskSuccess.value = `✅ 已加载测试图片：${sourceName || '来自项目选中图片'}`
+      await loadImageFromSource(route.query.sourceImage)
+      taskSuccess.value = `✅ 已加载测试图片：${route.query.sourceName || '来自项目选中图片'}`
       setTimeout(() => {
         taskSuccess.value = ''
       }, 2500)
@@ -1936,7 +2025,9 @@ onMounted(async () => {
       taskError.value = '项目图片加载失败，已切换到默认测试图片'
       loadTestImage()
     }
-  } else {
+  } 
+  // ========== 处理从历史记录恢复的任务 ==========
+  else {
     const urlParams = new URLSearchParams(window.location.search)
     let taskId = urlParams.get('task')
 
@@ -1949,55 +2040,38 @@ onMounted(async () => {
 
     if (taskId) {
       console.log('🔍 尝试恢复任务:', taskId)
-
-      try {
-        const restored = await restoreTask(taskId)
-        console.log('恢复结果:', restored, 'store.taskInfo:', store.taskInfo)
-
-        if (restored && store.taskInfo?.imageUrl) {
-          console.log('✅ 任务恢复成功，加载原图:', store.taskInfo.imageUrl)
-
-          syncLabelsFromMap()
-          dragTick.value++
-
-          if (store.annotations?.length > 0) {
-            store.annotations.forEach((ann) => {
-              const color = labelColorMap.get(ann.label)
-              if (color) ann.color = color
-            })
-
-            const lastAnnotation = store.annotations[store.annotations.length - 1]
-            if (lastAnnotation) {
-              currentLabel.value = lastAnnotation.label
-              selectedColor.value =
-                labelColorMap.get(lastAnnotation.label) || lastAnnotation.color || '#ff0000'
-              console.log('🎯 恢复任务，当前标签设置为最后一个标注:', lastAnnotation.label)
-            }
-          }
-
-          try {
-            await loadImageFromSource(store.taskInfo.imageUrl)
-            console.log('✅ 原图加载成功')
-            taskSuccess.value = `✅ 已恢复任务 ${taskId}`
-            setTimeout(() => (taskSuccess.value = ''), 2000)
-          } catch (imgError) {
-            console.error('❌ 原图加载失败:', imgError)
-            loadTestImage()
-          }
-        } else {
-          console.warn('⚠️ 任务恢复失败，加载测试图片')
-          loadTestImage()
-          localStorage.removeItem('lastTaskId')
-        }
-      } catch (error) {
-        console.error('❌ 恢复流程异常:', error)
+      const restored = await restoreTask(taskId)
+      
+      if (restored && store.taskInfo?.imageUrl) {
+        console.log('✅ 任务恢复成功')
+        
+        // 尝试加载该任务的预标注（如果有）
+        loadPreAnnotations(taskId)
+        
+        syncLabelsFromMap()
+        dragTick.value++
+      } else {
+        console.warn('⚠️ 任务恢复失败，加载测试图片')
         loadTestImage()
+        localStorage.removeItem('lastTaskId')
       }
     } else {
       loadTestImage()
     }
   }
 
+  // 窗口大小变化监听
+  let resizeObserver = null
+  if (canvasContainer.value) {
+    resizeObserver = new ResizeObserver(() => {
+      dragTick.value++
+    })
+    resizeObserver.observe(canvasContainer.value)
+  }
+
+  // 键盘和鼠标事件监听...
+  // （保持原有事件监听代码不变）
+  
   const globalMouseUpHandler = (e) => {
     if (dialogLock.value) return
     if (e.target?.closest('.dialog-container')) return
@@ -2006,13 +2080,6 @@ onMounted(async () => {
       mouseUpHandler({ target: stage.value?.getNode() })
     }
   }
-  const projectId = route.params.id
-  if (projectId) {
-    // 🚀 这里就是你需要的：接收项目ID并自动加载第一张图
-    fetchProjectTask(projectId)
-  }
-
-  checkTrainingStatus()
 
   window.addEventListener('mouseup', globalMouseUpHandler)
   window.addEventListener('keydown', handleKeydown, true)
@@ -2021,11 +2088,11 @@ onMounted(async () => {
     canvasContainer.value.addEventListener('wheel', handleWheel, { passive: false })
   }
 
+  // Space键拖拽支持
   const handleKeyDown = (e) => {
     if (e.code === 'Space' && !e.repeat) {
       e.preventDefault()
       setSpacePressed(true)
-
       const stageNode = stage.value?.getNode()
       if (stageNode && !isPanning.value) {
         stageNode.container().style.cursor = 'grab'
@@ -2036,7 +2103,6 @@ onMounted(async () => {
   const handleKeyUp = (e) => {
     if (e.code === 'Space') {
       setSpacePressed(false)
-
       const stageNode = stage.value?.getNode()
       if (stageNode && !isPanning.value) {
         stageNode.container().style.cursor = 'default'
@@ -2049,7 +2115,6 @@ onMounted(async () => {
 
   onUnmounted(() => {
     console.log('🧹 组件卸载，清理事件监听')
-
     window.removeEventListener('keydown', handleKeydown)
     window.removeEventListener('mouseup', globalMouseUpHandler)
     window.removeEventListener('keydown', handleKeyDown)
@@ -2058,7 +2123,6 @@ onMounted(async () => {
     if (canvasContainer.value) {
       canvasContainer.value.removeEventListener('wheel', handleWheel)
     }
-
     if (resizeObserver) {
       resizeObserver.disconnect()
     }

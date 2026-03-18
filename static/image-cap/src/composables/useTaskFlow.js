@@ -1,12 +1,35 @@
 // composables/useTaskFlow.js
 import { ref } from 'vue'
 import { supabase } from '@/supabase'
+import { getAnnotationSessionTask } from '@/api/projectStorage'
 
 export function useTaskFlow(store, imageObj, labelColorMap) {
   const taskLoading = ref(false)
   const submitLoading = ref(false)
   const taskError = ref('')
   const taskSuccess = ref('')
+
+   const loadTaskImage = async (task) => {
+    return await new Promise((resolve, reject) => {
+      const img = new Image()
+      img.crossOrigin = 'anonymous'
+      img.src = task.image_url || task.imageUrl
+
+      img.onload = () => {
+        imageObj.value = img
+        store.setCurrentTask({
+          id: task.task_id || task.id,
+          projectId: task.project_id || task.projectId || null,
+          imageUrl: task.image_url || task.imageUrl,
+          imageStoragePath: task.storage_path || task.image_storage_path || task.imageStoragePath,
+          yoloVersion: task.yolo_version || task.yoloVersion,
+        })
+        resolve(img)
+      }
+
+      img.onerror = () => reject(new Error('图片加载失败'))
+    })
+  }
 
   // 加载测试图片
   const loadTestImage = () => {
@@ -46,31 +69,11 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
         throw new Error('没有可用的任务')
       }
 
-      // 加载图片
-      const img = new Image()
-      img.crossOrigin = 'anonymous'
-      img.src = data.image_url
+        await loadTaskImage(data)
+      await loadAnnotations(data.id)
+      taskLoading.value = false
+      taskSuccess.value = `任务 ${data.id} 加载成功`
       
-      img.onload = () => {
-        imageObj.value = img
-        store.setCurrentTask({
-          id: data.id,
-          projectId: data.project_id,
-          imageUrl: data.image_url,
-          imageStoragePath: data.image_storage_path,
-          yoloVersion: data.yolo_version
-        })
-        
-        // 加载该任务的草稿或标注
-        loadAnnotations(data.id)
-        taskLoading.value = false
-        taskSuccess.value = `任务 ${data.id} 加载成功`
-      }
-      
-      img.onerror = () => {
-        taskLoading.value = false
-        taskError.value = '图片加载失败'
-      }
       
     } catch (e) {
       taskLoading.value = false
@@ -79,6 +82,27 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
     }
   }
 
+   const fetchProjectTask = async (projectId, taskId) => {
+    if (!projectId || !taskId) return false
+
+    taskLoading.value = true
+    taskError.value = ''
+
+    try {
+      const { data } = await getAnnotationSessionTask(projectId, taskId)
+      await loadTaskImage(data.task)
+      await loadAnnotations(data.task.task_id)
+      taskSuccess.value = `任务 ${data.task.task_id} 加载成功`
+      setTimeout(() => (taskSuccess.value = ''), 2500)
+      return true
+    } catch (error) {
+      console.error('加载项目任务失败:', error)
+      taskError.value = error?.response?.data?.detail || '项目任务加载失败'
+      return false
+    } finally {
+      taskLoading.value = false
+    }
+  }
   // 加载标注数据（草稿优先）
   const loadAnnotations = async (taskId) => {
     if (!taskId) {
@@ -243,6 +267,21 @@ const restoreTask = async (taskId) => {
   }
 }
 
+// 包装提交函数，添加清理逻辑
+const submitWithCleanup = async () => {
+  await submitAnnotations()
+  // 提交成功后清理当前任务的预标注缓存
+  if (store.currentTaskId) {
+    clearPreAnnotations(store.currentTaskId)
+  }
+}
+
+// 如果是保存草稿，也可以选择性清理（可选）
+const saveDraftWithCleanup = async () => {
+  await saveDraftHandler()
+  // 保存草稿后可以选择保留或清理，这里选择保留以便刷新后恢复
+}
+
   return {
     taskLoading,
     submitLoading,
@@ -253,6 +292,7 @@ const restoreTask = async (taskId) => {
     submitAnnotations,
     saveDraftHandler,
     abandonTask,
+    fetchProjectTask,
     restoreTask
   }
 }
