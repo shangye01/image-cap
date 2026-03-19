@@ -1,6 +1,7 @@
 # main.py 第1行开始
 import sys
 import os
+
 # 获取项目根目录
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
@@ -28,25 +29,25 @@ from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Q
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse
+from sqlalchemy.orm import Session
+
 from .api import auth
 from .api import project_storage
 from .db.base import init_db
-from .db.session import SessionLocal
+
 from .config import supabase, SUPABASE_URL, TRAINING_CONFIG
-from .models import ProjectFile
 
+from app.schemas.project_storage import AnnotationSessionCreate, AnnotationSessionResponse, AnnotationSessionTask
+from app.models import ProjectFile, Project
+from sqlalchemy.orm import Session
+from app.db.session import get_db
 from app.api.project_storage import router as project_router
-
-
 
 print(f"SUPABASE_URL: {SUPABASE_URL}")  # 加上这行看输出
 app = FastAPI()
-# 导入配置（相对导入）
-
-
 
 # 注册路由
-app.include_router(auth.router)  # 这个应该已经可以了，确认 auth.py 里有 router = APIRouter(...)
+app.include_router(auth.router)
 app.include_router(project_storage.router)
 
 print("MAIN FILE:", __file__)
@@ -55,9 +56,11 @@ print("PROJECT_STORAGE FILE:", project_storage.__file__)
 for r in app.routes:
     print("ROUTE:", getattr(r, "methods", None), r.path)
 
+
 @app.on_event("startup")
 def _startup() -> None:
     init_db()
+
 
 # ========== 日志配置 ==========
 logging.basicConfig(
@@ -65,6 +68,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
 
 # ========== FastAPI 应用 ==========
 
@@ -86,12 +90,10 @@ def _get_allowed_origins() -> List[str]:
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=_get_allowed_origins(),
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
 
 # ========== 本地目录 ==========
 UPLOAD_DIR = Path("./uploads")
@@ -147,7 +149,8 @@ def calculate_iou(box1: Dict[str, float], box2: Dict[str, float]) -> float:
     return intersection / union if union > 0 else 0
 
 
-def remove_duplicate_annotations(annotations: List[Dict[str, Any]], iou_threshold: float = 0.85) -> List[Dict[str, Any]]:
+def remove_duplicate_annotations(annotations: List[Dict[str, Any]], iou_threshold: float = 0.85) -> List[
+    Dict[str, Any]]:
     """移除重叠的标注框"""
     if not annotations or len(annotations) <= 1:
         return annotations
@@ -166,6 +169,7 @@ def remove_duplicate_annotations(annotations: List[Dict[str, Any]], iou_threshol
             if iou > iou_threshold:
                 suppressed.add(j)
     return keep
+
 
 def build_local_upload_url(filename: str, request: Optional[Request] = None) -> str:
     """构建本地上传图片地址，优先使用当前请求域名。"""
@@ -513,6 +517,117 @@ def index():
     return {"message": "后端启动成功", "service": "智能标注系统API"}
 
 
+# ================= 新增：预标注生成与任务分发 =================
+@app.post("/api/projects/{project_id}/sessions", response_model=AnnotationSessionResponse)
+async def create_annotation_session(
+        project_id: str,
+        payload: AnnotationSessionCreate,
+        db: Session = Depends(get_db)
+):
+    """前端点击「工作 -> 确定」后触发：生成预标注，修改数据库状态为标注中"""
+    target_keywords = [k.strip().lower() for k in payload.keywords] if payload.keywords else []
+    bucket = supabase.storage.from_("project_files")
+
+    project = db.query(Project).filter(Project.id == project_id).first()
+    project_name = project.name if project else "project"
+
+    tasks = []
+    for file_id in payload.file_ids:
+        project_file = db.query(ProjectFile).filter(ProjectFile.id == file_id).first()
+        if not project_file:
+            continue
+
+        # 1. 核心改变：直接更改数据库层面的状态为“标注中”，不需要物理移动文件
+        project_file.status = "labeling"
+        db.commit()
+
+        # 2. 智能预标注
+        annotations = []
+        try:
+            # 下载图像数据用于预测
+            file_bytes = bucket.download(project_file.storage_path)
+            image = Image.open(io.BytesIO(file_bytes)).convert("RGB")
+            model, version = model_manager.get()
+            results = model(image, conf=0.25, iou=0.45)
+
+            raw_annotations = []
+            for r in results:
+                for box in r.boxes:
+                    label = model.names[int(box.cls[0])]
+                    if payload.use_keywords and target_keywords and label.lower() not in target_keywords:
+                        continue
+                    x1, y1, x2, y2 = box.xyxy[0].tolist()
+                    raw_annotations.append({
+                        "id": f"ann_{uuid.uuid4().hex[:6]}",
+                        "label": label,
+                        "x": round(max(0, x1), 2),
+                        "y": round(max(0, y1), 2),
+                        "width": round(x2 - x1, 2),
+                        "height": round(y2 - y1, 2),
+                        "confidence": round(float(box.conf[0]), 3),
+                        "color": get_label_color(label)
+                    })
+            annotations = remove_duplicate_annotations(raw_annotations)
+        except Exception as e:
+            logger.error(f"预标注失败: {e}")
+
+        # 3. 往任务表中写入任务记录
+        task_id = f"task_{str(file_id).replace('-', '')[:8]}"
+        image_url = bucket.get_public_url(project_file.storage_path)
+        supabase.table("tasks").upsert({
+            "id": task_id,
+            "image_url": image_url,
+            "image_storage_path": project_file.storage_path,
+            "status": "annotating",
+            "project_name": project_name
+        }).execute()
+
+        # 添加到返回列表中
+        tasks.append(AnnotationSessionTask(
+            task_id=task_id,
+            file_id=str(file_id),
+            filename=project_file.filename,
+            storage_path=project_file.storage_path,
+            image_url=image_url,
+            project_id=project_id,
+            project_name=project_name,
+            use_keywords=payload.use_keywords,
+            keywords=payload.keywords or [],
+            status="annotating",
+            annotations=annotations
+        ))
+
+    return AnnotationSessionResponse(
+        success=True, project_id=project_id, project_name=project_name,
+        use_keywords=payload.use_keywords, keywords=payload.keywords or [],
+        tasks=tasks, first_task=tasks[0] if tasks else None
+    )
+
+
+@app.post("/api/project/{project_id}/move-to-done")
+async def move_to_done(project_id: str, payload: dict, db: Session = Depends(get_db)):
+    """前端点击「提交标注」后触发：将数据库中的文件状态更为已标注"""
+    task_id = payload.get("taskId")
+    task_res = supabase.table("tasks").select("*").eq("id", task_id).execute()
+
+    if task_res.data:
+        storage_path = task_res.data[0].get("image_storage_path")
+        project_file = db.query(ProjectFile).filter(ProjectFile.storage_path == storage_path).first()
+
+        # ✅ 核心改变：同样只改数据库状态，不再执行物理文件移动
+        if project_file:
+            project_file.status = "done"
+            db.commit()
+
+        # 更新大任务表的任务状态为 completed
+        supabase.table("tasks").update({"status": "completed"}).eq("id", task_id).execute()
+
+    return {"success": True}
+
+
+# =================================================================
+
+
 @app.post("/api/tasks/batch")
 async def batch_create_tasks(tasks: List[dict]):
     """主系统批量推送任务"""
@@ -612,8 +727,8 @@ async def complete_task(task_id: str, payload: dict):
 
 @app.get("/api/tasks")
 async def get_tasks(
-    project: Optional[str] = None,
-    status: Optional[str] = None
+        project: Optional[str] = None,
+        status: Optional[str] = None
 ):
     """获取任务列表"""
     try:
@@ -639,7 +754,7 @@ async def get_tasks(
 async def predict(
         request: Request,
         file: UploadFile = File(...),
-        keywords: Optional[str] = Form(None)  # 👈 接收前端传来的关键词参数
+        keywords: Optional[str] = Form(None)
 ):
     """上传图片 → AI预测 → 返回结果（支持关键词过滤）"""
     if not file.content_type or not file.content_type.startswith("image/"):
@@ -682,7 +797,6 @@ async def predict(
         image = Image.open(io.BytesIO(contents)).convert("RGB")
         results = model(image, conf=0.25, iou=0.45)
 
-        # 🎯 核心逻辑 1：解析前端传来的关键词 (逗号分隔并转小写)
         target_keywords = [k.strip().lower() for k in keywords.split(",")] if keywords else []
 
         raw_annotations = []
@@ -691,7 +805,6 @@ async def predict(
                 x1, y1, x2, y2 = box.xyxy[0].tolist()
                 label = model.names[int(box.cls[0])]
 
-                # 🎯 核心逻辑 2：如果传了关键词，且当前预测的 label 不在关键词内，则直接跳过
                 if target_keywords and label.lower() not in target_keywords:
                     continue
 
@@ -719,25 +832,6 @@ async def predict(
                 "saved_at": datetime.now().isoformat()
             }).execute()
 
-        # ========== 调试代码 ==========
-        print(f"\n{'=' * 60}")
-        print(f"🔥 [DEBUG] /api/predict 准备返回响应")
-        print(f"🔥 [DEBUG] task_id: {task_id}")
-        print(f"🔥 [DEBUG] image_url: {image_url}")
-        print(f"🔥 [DEBUG] 过滤关键词: {target_keywords}")
-        print(f"🔥 [DEBUG] annotations 数量: {len(annotations)}")
-        print(f"🔥 [DEBUG] model_version: {version}")
-        print(f"{'=' * 60}")
-
-        # 验证 image_url 是否可访问 (保留你原有的排错逻辑)
-        if image_url:
-            if image_url.startswith("http"):
-                print(f"🔥 [DEBUG] 图片URL是远程地址")
-            else:
-                print(f"🔥 [DEBUG] 图片URL是本地路径，检查文件...")
-                local_file = UPLOAD_DIR / Path(image_url).name
-                print(f"🔥 [DEBUG] 本地文件检查: {local_file} -> 存在: {local_file.exists()}")
-
         return {
             "success": True,
             "task_id": task_id,
@@ -758,17 +852,12 @@ async def predict(
         raise HTTPException(500, detail=f"处理失败: {str(e)}")
 
 
-
-
-
 @app.post("/api/tasks/{task_id}/predict")
 async def predict_existing_task(task_id: str, payload: dict):
     """对已存在的任务进行智能标注，支持关键词过滤"""
     keywords = payload.get("keywords", [])
-    # 统一转小写以便匹配
     target_keywords = [k.strip().lower() for k in keywords] if keywords else []
 
-    # 1. 查找数据库中对应的任务，获取图片地址
     task_res = supabase.table("tasks").select("*").eq("id", task_id).execute()
     if not task_res.data:
         raise HTTPException(404, detail="任务不存在")
@@ -778,7 +867,6 @@ async def predict_existing_task(task_id: str, payload: dict):
     image_storage_path = task.get("image_storage_path")
 
     try:
-        # 2. 读取图片 (优先尝试本地，否则拉取网络图片)
         if image_storage_path and os.path.exists(image_storage_path):
             image = Image.open(image_storage_path).convert("RGB")
         else:
@@ -787,7 +875,6 @@ async def predict_existing_task(task_id: str, payload: dict):
                 image_data = response.read()
             image = Image.open(io.BytesIO(image_data)).convert("RGB")
 
-        # 3. 运行 YOLO 模型进行预测
         model, version = model_manager.get()
         results = model(image, conf=0.25, iou=0.45)
 
@@ -796,7 +883,6 @@ async def predict_existing_task(task_id: str, payload: dict):
             for box in r.boxes:
                 label = model.names[int(box.cls[0])]
 
-                # 🎯 核心逻辑：如果开启了关键词模式，且当前预测标签不在关键词内，则跳过
                 if target_keywords and label.lower() not in target_keywords:
                     continue
 
@@ -826,6 +912,7 @@ async def predict_existing_task(task_id: str, payload: dict):
         logger.error(f"预测现有任务失败: {e}")
         raise HTTPException(500, detail=str(e))
 
+
 @app.get("/api/training/status")
 async def training_status():
     """获取训练状态和模型列表"""
@@ -848,7 +935,8 @@ async def training_status():
 
         cloud_models = []
         try:
-            cloud_result = supabase.table("model_versions").select("*").order("created_at", desc=True).limit(10).execute()
+            cloud_result = supabase.table("model_versions").select("*").order("created_at", desc=True).limit(
+                10).execute()
             if cloud_result.data:
                 for m in cloud_result.data:
                     is_active = (m.get("version_name") == model_manager.active_version)
@@ -897,11 +985,11 @@ async def training_status():
 
 @app.post("/api/training/start")
 async def start_training(
-    epochs: int = Query(default=100, ge=10, le=500),
-    batch: int = Query(default=16, ge=1, le=64),
-    model_size: str = Query(default="auto", regex="^(auto|n|s|m|l|x)$"),
-    augmentation: bool = Query(default=True),
-    background_tasks: BackgroundTasks = None
+        epochs: int = Query(default=100, ge=10, le=500),
+        batch: int = Query(default=16, ge=1, le=64),
+        model_size: str = Query(default="auto", regex="^(auto|n|s|m|l|x)$"),
+        augmentation: bool = Query(default=True),
+        background_tasks: BackgroundTasks = None
 ):
     """启动训练"""
     try:
@@ -1046,34 +1134,18 @@ async def switch_model(payload: dict):
 
 @app.get("/api/tasks/{task_id}")
 async def get_task(task_id: str):
-    print(f"\n{'=' * 60}")
-    print(f"🔥 [DEBUG] /api/tasks/{task_id} 被调用")
-    print(f"{'=' * 60}")
-
     try:
-        print(f"🔥 [DEBUG] 查询 tasks 表...")
         task_result = supabase.table("tasks").select("*").eq("id", task_id).execute()
-        print(f"🔥 [DEBUG] 查询结果: {task_result}")
-        print(f"🔥 [DEBUG] 数据条数: {len(task_result.data) if task_result.data else 0}")
-
         task = task_result.data[0] if task_result.data else None
 
         if not task:
-            print(f"❌ [DEBUG] 任务不存在: {task_id}")
             raise HTTPException(status_code=404, detail="任务不存在")
 
-        print(f"✅ [DEBUG] 找到任务:")
-        print(f"   - id: {task.get('id')}")
-        print(f"   - image_url: {task.get('image_url')}")
-        print(f"   - status: {task.get('status')}")
-
         # 查询草稿
-        print(f"🔥 [DEBUG] 查询 drafts 表...")
         draft_result = supabase.table("drafts").select("*").eq("task_id", task_id).maybe_single().execute()
         draft = draft_result.data
 
         if draft:
-            print(f"✅ [DEBUG] 找到草稿，annotations 数量: {len(draft.get('annotations_json', []))}")
             return {
                 "task": task,
                 "annotations": draft["annotations_json"],
@@ -1081,10 +1153,8 @@ async def get_task(task_id: str):
             }
 
         # 查询标注
-        print(f"🔥 [DEBUG] 查询 annotations 表...")
         anns_result = supabase.table("annotations").select("*").eq("task_id", task_id).execute()
         anns = anns_result.data or []
-        print(f"✅ [DEBUG] 找到 {len(anns)} 个标注")
 
         return {
             "task": task,
@@ -1095,9 +1165,6 @@ async def get_task(task_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"❌ [DEBUG] 获取任务失败: {e}")
-        import traceback
-        print(f"❌ [DEBUG] 堆栈: {traceback.format_exc()}")
         raise HTTPException(status_code=404, detail=str(e))
 
 
@@ -1142,46 +1209,9 @@ async def save_annotations(task_id: str, payload: dict):
                 "annotations_count": len(anns),
                 "completed_at": datetime.now().isoformat()
             }).eq("id", task_id).execute()
-            try:
-                project_storage_root = Path("./uploads/projects")
-                for meta_file in project_storage_root.glob(f"*/{project_storage.TASK_META_FILENAME}"):
-                    meta = json.loads(meta_file.read_text(encoding="utf-8"))
-                    tasks = meta.get("tasks", [])
-                    target_task = next((item for item in tasks if item.get("task_id") == task_id), None)
-                    if not target_task:
-                        continue
 
-                    project_dir = meta_file.parent
-                    done_dir = project_dir / "已标注"
-                    done_dir.mkdir(parents=True, exist_ok=True)
+            # ✅ （旧的物理文件移动代码已移除，状态改变由专门的 move-to-done 接口管理）
 
-                    source_path = Path(target_task.get("storage_path", ""))
-                    if source_path.exists():
-                        destination = done_dir / source_path.name
-                        if destination != source_path:
-                            shutil.move(str(source_path), str(destination))
-                        target_task["storage_path"] = str(destination)
-                        file_id = target_task.get("file_id")
-                        if file_id:
-                            db = SessionLocal()
-                            try:
-                                project_file = db.query(ProjectFile).filter(ProjectFile.id == file_id).first()
-                                if project_file:
-                                    project_file.storage_path = str(destination)
-                                    db.commit()
-                            finally:
-                                db.close()
-
-                    target_task["status"] = "completed"
-                    target_task["completed_at"] = datetime.now().isoformat()
-                    meta["updated_at"] = datetime.now().isoformat()
-                    meta_file.write_text(
-                        json.dumps(meta, ensure_ascii=False, indent=2),
-                        encoding="utf-8",
-                    )
-                    break
-            except Exception as move_error:
-                logger.warning(f"提交后移动项目文件失败: {move_error}")
             return {"success": True, "status": "submitted", "count": len(anns)}
 
     except HTTPException:
@@ -1193,14 +1223,6 @@ async def save_annotations(task_id: str, payload: dict):
 
 @app.get("/api/labels")
 async def get_labels():
-    print(f"\n{'=' * 60}")
-    print(f"🔥 [DEBUG] /api/labels 被调用")
-    print(f"🔥 [DEBUG] supabase 对象类型: {type(supabase)}")
-    print(f"🔥 [DEBUG] supabase 是否为 None: {supabase is None}")
-    print(f"🔥 [DEBUG] SUPABASE_URL: {SUPABASE_URL}")
-    print(f"{'=' * 60}")
-
-    # 默认标签数据（备用）
     default_labels = [
         {"id": 1, "name": "person", "color": "#ff0000", "category": "human"},
         {"id": 2, "name": "car", "color": "#0000ff", "category": "vehicle"},
@@ -1210,44 +1232,19 @@ async def get_labels():
     ]
 
     try:
-        # 检查 supabase 是否初始化
         if supabase is None:
-            print(f"❌ [DEBUG] supabase 为 None，返回默认标签")
-            return {
-                "labels": default_labels,
-                "source": "default",
-                "warning": "Supabase 未连接，使用默认标签"
-            }
+            return {"labels": default_labels, "source": "default", "warning": "Supabase 未连接，使用默认标签"}
 
-        print(f"🔥 [DEBUG] 正在查询 label_configs 表...")
-
-        # 执行查询
         res = supabase.table("label_configs").select("*").order("name").execute()
 
-        print(f"✅ [DEBUG] 查询成功")
-        print(f"🔥 [DEBUG] 返回数据类型: {type(res.data)}")
-        print(f"🔥 [DEBUG] 返回记录数: {len(res.data) if res.data else 0}")
-        print(f"🔥 [DEBUG] 原始数据: {res.data}")
-
-        # 如果数据库为空，返回默认标签
         if not res.data or len(res.data) == 0:
-            print(f"⚠️ [DEBUG] 数据库为空，返回默认标签")
-            return {
-                "labels": default_labels,
-                "source": "default",
-                "warning": "数据库无标签，使用默认标签"
-            }
+            return {"labels": default_labels, "source": "default", "warning": "数据库无标签，使用默认标签"}
 
-        # 确保每条记录都有必要的字段
         processed_labels = []
         for idx, item in enumerate(res.data):
-            print(f"🔥 [DEBUG] 处理记录 {idx}: {item}")
-
-            # 处理可能的字段名差异
             label_name = item.get("name") or item.get("label_name") or f"label_{idx}"
             label_color = item.get("color") or item.get("label_color") or "#1890ff"
             label_id = item.get("id") or idx
-
             processed_labels.append({
                 "id": label_id,
                 "name": label_name,
@@ -1255,25 +1252,11 @@ async def get_labels():
                 "category": item.get("category")
             })
 
-        print(f"✅ [DEBUG] 处理完成，返回 {len(processed_labels)} 条标签")
-        return {
-            "labels": processed_labels,
-            "source": "database",
-            "count": len(processed_labels)
-        }
+        return {"labels": processed_labels, "source": "database", "count": len(processed_labels)}
 
     except Exception as e:
-        print(f"❌ [DEBUG] 查询失败: {str(e)}")
-        import traceback
-        print(f"❌ [DEBUG] 错误堆栈:\n{traceback.format_exc()}")
-
-        # 出错时返回默认标签
-        return {
-            "labels": default_labels,
-            "source": "default",
-            "error": str(e),
-            "warning": f"查询失败({str(e)})，使用默认标签"
-        }
+        return {"labels": default_labels, "source": "default", "error": str(e),
+                "warning": f"查询失败({str(e)})，使用默认标签"}
 
 
 @app.post("/api/labels")
@@ -1317,63 +1300,24 @@ async def delete_label(name: str):
 
 @app.get("/local-uploads/{filename}", name="get_local_upload")
 async def get_local_upload(filename: str, request: Request):
-    print(f"\n{'=' * 60}")
-    print(f"🔥 [DEBUG] /local-uploads/{filename} 被调用")
-    print(f"🔥 [DEBUG] 请求方法: {request.method}")
-    print(f"🔥 [DEBUG] 请求头: {dict(request.headers)}")
-    print(f"{'=' * 60}")
-
-    # 解码 URL 编码的文件名
     from urllib.parse import unquote
     decoded_filename = unquote(filename)
-    print(f"🔥 [DEBUG] 原始文件名: {filename}")
-    print(f"🔥 [DEBUG] 解码后文件名: {decoded_filename}")
-
-    # 构建完整路径
     path = UPLOAD_DIR / decoded_filename
-    print(f"🔥 [DEBUG] UPLOAD_DIR: {UPLOAD_DIR.absolute()}")
-    print(f"🔥 [DEBUG] 完整路径: {path.absolute()}")
-    print(f"🔥 [DEBUG] 父目录是否存在: {path.parent.exists()}")
-    print(f"🔥 [DEBUG] 父目录内容: {list(path.parent.glob('*')) if path.parent.exists() else 'N/A'}")
-    print(f"🔥 [DEBUG] 文件是否存在: {path.exists()}")
 
     if path.exists():
         file_stat = path.stat()
-        print(f"✅ [DEBUG] 文件存在!")
-        print(f"🔥 [DEBUG] 文件大小: {file_stat.st_size} bytes")
-        print(f"🔥 [DEBUG] 修改时间: {datetime.fromtimestamp(file_stat.st_mtime)}")
-        print(f"🔥 [DEBUG] 是否为文件: {path.is_file()}")
-
-        # 检测文件类型
         import mimetypes
         content_type, _ = mimetypes.guess_type(str(path))
-        print(f"🔥 [DEBUG] 推测的 Content-Type: {content_type}")
-
-        # 返回文件，禁用缓存防止 304 问题
         response = FileResponse(
             path,
             media_type=content_type or "image/jpeg",
             filename=decoded_filename
         )
-
-        # 添加禁用缓存的头部
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
-        response.headers["ETag"] = str(file_stat.st_mtime)  # 使用修改时间作为 ETag
-
-        print(f"✅ [DEBUG] 返回文件响应，已禁用缓存")
+        response.headers["ETag"] = str(file_stat.st_mtime)
         return response
-
-    # 文件不存在，尝试查找相似文件
-    print(f"❌ [DEBUG] 文件不存在: {path}")
-
-    # 列出 uploads 目录所有文件
-    if UPLOAD_DIR.exists():
-        all_files = list(UPLOAD_DIR.glob("*"))
-        print(f"🔥 [DEBUG] uploads 目录现有文件 ({len(all_files)}个):")
-        for f in all_files:
-            print(f"   - {f.name}")
 
     raise HTTPException(status_code=404, detail=f"文件不存在: {decoded_filename}")
 
@@ -1383,49 +1327,35 @@ async def upload_specific_model(model_name: str):
     try:
         from urllib.parse import unquote
         model_name = unquote(model_name)
-
-        logger.info(f"尝试上传模型: {model_name}")
-
         model_path = MODEL_DIR / f"{model_name}.pt"
         if not model_path.exists():
             matching = list(MODEL_DIR.glob(f"*{model_name}*.pt"))
             if matching:
                 model_path = matching[0]
-                logger.info(f"找到匹配文件: {model_path}")
             else:
                 raise HTTPException(404, detail=f"未找到模型文件: {model_name}")
 
         file_size = model_path.stat().st_size
-        logger.info(f"模型大小: {file_size / (1024 * 1024):.1f} MB")
-
         upload_path = f"weights/{model_path.name}"
         cloud_path = f"models/{upload_path}"
 
         with open(model_path, "rb") as f:
             try:
                 supabase.storage.from_("models").remove([upload_path])
-                logger.info("删除已存在的文件")
             except Exception:
                 pass
-
             supabase.storage.from_("models").upload(upload_path, f)
-            logger.info(f"上传成功: {cloud_path}")
 
         try:
-            existing = supabase.table("model_versions") \
-                .select("*") \
-                .eq("version_name", model_path.stem) \
-                .execute()
-
+            existing = supabase.table("model_versions").select("*").eq("version_name", model_path.stem).execute()
             if existing.data:
-                result = supabase.table("model_versions").update({
+                supabase.table("model_versions").update({
                     "model_path": cloud_path,
                     "local_path": str(model_path.absolute()),
                     "updated_at": datetime.now().isoformat()
                 }).eq("version_name", model_path.stem).execute()
-                logger.info(f"数据库记录已更新: {result.data}")
             else:
-                result = supabase.table("model_versions").insert({
+                supabase.table("model_versions").insert({
                     "version_name": model_path.stem,
                     "model_size": "unknown",
                     "model_path": cloud_path,
@@ -1435,8 +1365,6 @@ async def upload_specific_model(model_name: str):
                     "created_at": datetime.now().isoformat(),
                     "updated_at": datetime.now().isoformat()
                 }).execute()
-                logger.info(f"数据库记录已创建: {result.data}")
-
         except Exception as db_err:
             logger.warning(f"数据库更新失败（不影响上传）: {db_err}")
 
@@ -1455,7 +1383,95 @@ async def upload_specific_model(model_name: str):
         logger.error(traceback.format_exc())
         raise HTTPException(500, detail=f"上传失败: {str(e)}")
 
+# ================= 新增：预标注生成与任务分发 =================
+@app.post("/api/projects/{project_id}/sessions", response_model=AnnotationSessionResponse)
+async def create_annotation_session(
+    project_id: str,
+    payload: AnnotationSessionCreate,
+    db: Session = Depends(get_db)
+):
+    target_keywords = [k.strip().lower() for k in payload.keywords] if payload.keywords else []
+    bucket = supabase.storage.from_("project_files")
 
+    project = db.query(Project).filter(Project.id == project_id).first()
+    project_name = project.name if project else "project"
+
+    tasks = []
+    for file_id in payload.file_ids:
+        project_file = db.query(ProjectFile).filter(ProjectFile.id == file_id).first()
+        if not project_file:
+            continue
+
+        # 将图片状态标记为标注中
+        project_file.status = "labeling"
+        db.commit()
+
+        # 智能识别预标注
+        annotations = []
+        try:
+            file_bytes = bucket.download(project_file.storage_path)
+            image = Image.open(io.BytesIO(file_bytes)).convert("RGB")
+            model, version = model_manager.get()
+            results = model(image, conf=0.25, iou=0.45)
+
+            raw_annotations = []
+            for r in results:
+                for box in r.boxes:
+                    label = model.names[int(box.cls[0])]
+                    if payload.use_keywords and target_keywords and label.lower() not in target_keywords:
+                        continue
+                    x1, y1, x2, y2 = box.xyxy[0].tolist()
+                    raw_annotations.append({
+                        "id": f"ann_{uuid.uuid4().hex[:6]}",
+                        "label": label,
+                        "x": round(max(0, x1), 2),
+                        "y": round(max(0, y1), 2),
+                        "width": round(x2 - x1, 2),
+                        "height": round(y2 - y1, 2),
+                        "confidence": round(float(box.conf[0]), 3),
+                        "color": get_label_color(label)
+                    })
+            annotations = remove_duplicate_annotations(raw_annotations)
+        except Exception as e:
+            logger.error(f"预标注失败: {e}")
+
+        # 核心：写入 tasks 表中，否则前端 fetch 找不到！
+        task_id = f"task_{str(file_id).replace('-', '')[:8]}"
+        image_url = bucket.get_public_url(project_file.storage_path)
+        supabase.table("tasks").upsert({
+            "id": task_id,
+            "image_url": image_url,
+            "image_storage_path": project_file.storage_path,
+            "status": "annotating",
+            "project_name": project_name
+        }).execute()
+
+        tasks.append(AnnotationSessionTask(
+            task_id=task_id, file_id=str(file_id), filename=project_file.filename,
+            storage_path=project_file.storage_path, image_url=image_url, project_id=project_id,
+            project_name=project_name, use_keywords=payload.use_keywords,
+            keywords=payload.keywords or [], status="annotating", annotations=annotations
+        ))
+
+    return AnnotationSessionResponse(
+        success=True, project_id=project_id, project_name=project_name,
+        use_keywords=payload.use_keywords, keywords=payload.keywords or [],
+        tasks=tasks, first_task=tasks[0] if tasks else None
+    )
+
+@app.post("/api/project/{project_id}/move-to-done")
+async def move_to_done(project_id: str, payload: dict, db: Session = Depends(get_db)):
+    task_id = payload.get("taskId")
+    task_res = supabase.table("tasks").select("*").eq("id", task_id).execute()
+    if task_res.data:
+        storage_path = task_res.data[0].get("image_storage_path")
+        project_file = db.query(ProjectFile).filter(ProjectFile.storage_path == storage_path).first()
+        if project_file:
+            project_file.status = "done"
+            db.commit()
+        supabase.table("tasks").update({"status": "completed"}).eq("id", task_id).execute()
+    return {"success": True}
+# =================================================================
 # ========== 启动 ==========
 if __name__ == "__main__":
     import uvicorn

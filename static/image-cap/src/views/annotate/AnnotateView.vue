@@ -103,15 +103,13 @@
           >
             {{ taskLoading ? '⏳ 获取中...' : '🎯 获取新任务' }}
           </button>
-
-         <!-- 修改提交按钮 -->
-          <button
-  @click="submitWithCleanup()"
+<button
+  @click="handleCustomSubmit()"
   class="btn btn-success"
   :disabled="!store.currentTaskId || submitLoading || store.annotations.length === 0"
 >
   {{ submitLoading ? '⏳ 提交中...' : '✅ 提交标注' }}
-          </button>
+</button>
 
           <button
             @click="saveDraftHandler()"
@@ -898,6 +896,70 @@ const loadNextTaskWithCleanup = async () => {
     clearPreAnnotations(oldTaskId)
   }
 }
+// 解析 项目名_001 并返回下一个任务ID (项目名_002)
+const getNextTaskId = (currentTaskId) => {
+  if (!currentTaskId) return null;
+  const match = currentTaskId.match(/^(.*)_(\d{3})$/);
+  if (match) {
+    const projectName = match[1];
+    const currentIndex = parseInt(match[2], 10);
+    const nextIndex = String(currentIndex + 1).padStart(3, '0');
+    return `${projectName}_${nextIndex}`;
+  }
+  return null;
+};
+const handleCustomSubmit = async () => {
+  if (!store.currentTaskId || store.annotations.length === 0) return;
+
+  try {
+    // 1. 调用原有的提交逻辑（保存标注坐标到数据库）
+    // 假设 submitAnnotations 返回 true 代表成功
+    await submitAnnotations(); 
+
+    // 2. 调用后端接口：将图片移动到“已标注”文件夹
+    await fetch(`/api/project/${routeProjectId.value}/move-to-done`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        taskId: store.currentTaskId
+      })
+    });
+
+    taskSuccess.value = `✅ 任务 ${store.currentTaskId} 提交成功，已移入已标注文件夹`;
+
+    // 3. 计算下一个任务的 ID (例如从 Project_001 -> Project_002)
+    const nextTaskId = getNextTaskId(store.currentTaskId);
+
+    // 4. 尝试加载下一张图片
+    if (nextTaskId) {
+      setTimeout(() => {
+        // 更新路由，触发重新加载
+        router.replace({
+          path: '/app/annotate',
+          query: {
+            ...route.query,
+            task: nextTaskId
+          }
+        });
+        
+        // 调用你现有的加载任务逻辑
+        fetchProjectTask(routeProjectId.value, nextTaskId).then(loaded => {
+          if (!loaded) {
+            window.alert('该批次已全部标注完成！');
+            router.push('/app/project'); // 返回项目列表
+          } else {
+            // 加载下一张的预标注
+            loadPreAnnotations(nextTaskId);
+          }
+        });
+      }, 1000);
+    }
+  } catch (error) {
+    console.error('提交失败:', error);
+    taskError.value = '提交失败，请重试';
+  }
+};
+
 // 计算当前实际缩放比例
 const currentScale = computed(() => {
   return (baseContainerSize.value?.scale || 1) * zoomScale.value

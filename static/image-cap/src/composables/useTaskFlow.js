@@ -1,7 +1,7 @@
 // composables/useTaskFlow.js
 import { ref } from 'vue'
 import { supabase } from '@/supabase'
-import { getAnnotationSessionTask } from '@/api/projectStorage'
+// ❌ 已经删除了对 getAnnotationSessionTask 的引入
 
 export function useTaskFlow(store, imageObj, labelColorMap) {
   const taskLoading = ref(false)
@@ -9,7 +9,7 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
   const taskError = ref('')
   const taskSuccess = ref('')
 
-   const loadTaskImage = async (task) => {
+  const loadTaskImage = async (task) => {
     return await new Promise((resolve, reject) => {
       const img = new Image()
       img.crossOrigin = 'anonymous'
@@ -57,7 +57,6 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
     taskError.value = ''
     
     try {
-      // 从 Supabase 获取一个 pending 状态的任务
       const { data, error } = await supabase
         .from('tasks')
         .select('*')
@@ -69,11 +68,10 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
         throw new Error('没有可用的任务')
       }
 
-        await loadTaskImage(data)
+      await loadTaskImage(data)
       await loadAnnotations(data.id)
       taskLoading.value = false
       taskSuccess.value = `任务 ${data.id} 加载成功`
-      
       
     } catch (e) {
       taskLoading.value = false
@@ -82,27 +80,46 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
     }
   }
 
-   const fetchProjectTask = async (projectId, taskId) => {
+  // ✅ 使用原生 fetch 请求后端统一接口
+  const fetchProjectTask = async (projectId, taskId) => {
     if (!projectId || !taskId) return false
 
     taskLoading.value = true
     taskError.value = ''
 
     try {
-      const { data } = await getAnnotationSessionTask(projectId, taskId)
-      await loadTaskImage(data.task)
-      await loadAnnotations(data.task.task_id)
-      taskSuccess.value = `任务 ${data.task.task_id} 加载成功`
-      setTimeout(() => (taskSuccess.value = ''), 2500)
-      return true
+      const response = await fetch(`http://localhost:8000/api/tasks/${taskId}`)
+      if (!response.ok) throw new Error('任务请求失败')
+      
+      const data = await response.json()
+
+      if (data.task) {
+        await loadTaskImage(data.task)
+        
+        if (data.annotations && data.annotations.length > 0) {
+          data.annotations.forEach(ann => {
+            if (ann.color && ann.label && !labelColorMap.has(ann.label)) {
+              labelColorMap.set(ann.label, ann.color)
+            }
+          })
+        }
+        
+        store.setAnnotations(data.annotations || [])
+        
+        taskSuccess.value = `任务 ${taskId} 加载成功`
+        setTimeout(() => (taskSuccess.value = ''), 2500)
+        return true
+      }
+      throw new Error('未找到任务数据')
     } catch (error) {
       console.error('加载项目任务失败:', error)
-      taskError.value = error?.response?.data?.detail || '项目任务加载失败'
+      taskError.value = error.message || '项目任务加载失败'
       return false
     } finally {
       taskLoading.value = false
     }
   }
+
   // 加载标注数据（草稿优先）
   const loadAnnotations = async (taskId) => {
     if (!taskId) {
@@ -115,16 +132,16 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
         .from('drafts')
         .select('annotations_json')
         .eq('task_id', taskId)
-        .maybeSingle()  // ✅ 使用 maybeSingle() 而不是 single()，避免 406 错误
+        .maybeSingle() 
       
       if (draft?.annotations_json) {
         store.annotations = draft.annotations_json
       }
     } catch (e) {
       console.error('加载草稿失败:', e)
-      // 不抛出错误，让流程继续
     }
   }
+
   // 提交标注
   const submitAnnotations = async () => {
     if (!store.currentTaskId) {
@@ -205,7 +222,6 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
     if (!confirmed) return
     
     try {
-      // 删除草稿
       await supabase
         .from('drafts')
         .delete()
@@ -220,67 +236,43 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
     }
   }
 
-  // ✅ 修复：恢复任务方法（使用传入的 labelColorMap）
-
-// useTaskFlow.js
-const restoreTask = async (taskId) => {
-  try {
-    console.log('🔄 开始恢复任务:', taskId)
-    const response = await fetch(`http://localhost:8000/api/tasks/${taskId}`)
-    
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`)
-    }
-    
-    const data = await response.json()
-    
-    if (data.task) {
-      // ✅ 关键修复：转换字段名以匹配前端期望的驼峰命名
-      const taskInfo = {
-        ...data.task,
-        imageUrl: data.task.image_url,              // 转换下划线为驼峰
-        imageStoragePath: data.task.image_storage_path,
-        projectId: data.task.project_id,
-        yoloVersion: data.task.yolo_version
+  // 恢复任务
+  const restoreTask = async (taskId) => {
+    try {
+      console.log('🔄 开始恢复任务:', taskId)
+      const response = await fetch(`http://localhost:8000/api/tasks/${taskId}`)
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`)
       }
       
-      // 设置当前任务（使用转换后的对象）
-      store.setCurrentTask(taskInfo)
+      const data = await response.json()
       
-      // 处理标注中的颜色信息
-      if (data.annotations && data.annotations.length > 0) {
-        data.annotations.forEach(ann => {
-          if (ann.color && ann.label && !labelColorMap.has(ann.label)) {
-            labelColorMap.set(ann.label, ann.color)
-          }
+      if (data.task) {
+        await loadTaskImage({
+          ...data.task,
+          imageUrl: data.task.image_url,
+          imageStoragePath: data.task.image_storage_path
         })
+        
+        if (data.annotations && data.annotations.length > 0) {
+          data.annotations.forEach(ann => {
+            if (ann.color && ann.label && !labelColorMap.has(ann.label)) {
+              labelColorMap.set(ann.label, ann.color)
+            }
+          })
+        }
+        
+        store.setAnnotations(data.annotations || [])
+        console.log('✅ 任务恢复成功:', data.task.image_url)
+        return true
       }
-      
-      store.setAnnotations(data.annotations || [])
-      console.log('✅ 任务恢复成功:', taskInfo.imageUrl)
-      return true
+      return false
+    } catch (error) {
+      console.error('❌ 恢复任务失败:', error)
+      return false
     }
-    return false
-  } catch (error) {
-    console.error('❌ 恢复任务失败:', error)
-    return false
   }
-}
-
-// 包装提交函数，添加清理逻辑
-const submitWithCleanup = async () => {
-  await submitAnnotations()
-  // 提交成功后清理当前任务的预标注缓存
-  if (store.currentTaskId) {
-    clearPreAnnotations(store.currentTaskId)
-  }
-}
-
-// 如果是保存草稿，也可以选择性清理（可选）
-const saveDraftWithCleanup = async () => {
-  await saveDraftHandler()
-  // 保存草稿后可以选择保留或清理，这里选择保留以便刷新后恢复
-}
 
   return {
     taskLoading,

@@ -23,6 +23,7 @@ class AnnotationSessionTask(BaseModel):
     use_keywords: bool
     keywords: List[str]
     status: str
+    annotations: Optional[List[dict]] = []  # ✅ 新增预标注数组
 
 
 class AnnotationSessionResponse(BaseModel):
@@ -64,6 +65,7 @@ class FileOut(BaseModel):
     created_at: datetime
     download_url: str | None = None
     preview_url: str | None = None
+    status: str = "pending"
 
     class Config:
         from_attributes = True

@@ -115,6 +115,7 @@ def upload_project_file(
         mime_type=file.content_type or "application/octet-stream",
         size_bytes=len(file_bytes),
         uploaded_by=uploaded_by,
+        status="pending"  # ✅ 数据库层面记录分类
     )
     db.add(file_record)
     db.commit()
