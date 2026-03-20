@@ -3,6 +3,10 @@ import { ref } from 'vue'
 import { supabase } from '@/supabase'
 // ❌ 已经删除了对 getAnnotationSessionTask 的引入
 
+const rawApiBaseUrl = (import.meta.env.VITE_API_BASE_URL || '').trim()
+const normalizedApiBaseUrl = rawApiBaseUrl.replace(/\/$/, '')
+const apiBaseUrl = normalizedApiBaseUrl ? `${normalizedApiBaseUrl}/api` : '/api'
+
 export function useTaskFlow(store, imageObj, labelColorMap) {
   const taskLoading = ref(false)
   const submitLoading = ref(false)
@@ -88,12 +92,14 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
     taskError.value = ''
 
     try {
-      const response = await fetch(`http://localhost:8000/api/tasks/${taskId}`)
-      if (!response.ok) throw new Error('任务请求失败')
-      
-      const data = await response.json()
+      const response = await fetch(`${apiBaseUrl}/tasks/${taskId}`)
+      const data = await response.json().catch(() => null)
 
-      if (data.task) {
+      if (!response.ok) {
+        throw new Error(data?.detail || data?.message || '任务请求失败')
+      }
+
+      if (data?.task) {
         await loadTaskImage(data.task)
         
         if (data.annotations && data.annotations.length > 0) {
@@ -157,7 +163,7 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
     submitLoading.value = true
     
     try {
-      const response = await fetch(`http://localhost:8000/api/annotations/${store.currentTaskId}`, {
+      const response = await fetch(`${apiBaseUrl}/annotations/${store.currentTaskId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -192,7 +198,7 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
     if (!store.currentTaskId || store.annotations.length === 0) return
     
     try {
-      const response = await fetch(`http://localhost:8000/api/annotations/${store.currentTaskId}`, {
+      const response = await fetch(`${apiBaseUrl}/annotations/${store.currentTaskId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -218,6 +224,7 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
   const abandonTask = async () => {
     if (!store.currentTaskId) return
     
+
     const confirmed = confirm('确定放弃任务吗？已标注的内容将丢失。')
     if (!confirmed) return
     
@@ -240,15 +247,14 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
   const restoreTask = async (taskId) => {
     try {
       console.log('🔄 开始恢复任务:', taskId)
-      const response = await fetch(`http://localhost:8000/api/tasks/${taskId}`)
+      const response = await fetch(`${apiBaseUrl}/tasks/${taskId}`)
+      const data = await response.json().catch(() => null)
       
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`)
+        throw new Error(data?.detail || `HTTP ${response.status}`)
       }
       
-      const data = await response.json()
-      
-      if (data.task) {
+      if (data?.task) {
         await loadTaskImage({
           ...data.task,
           imageUrl: data.task.image_url,

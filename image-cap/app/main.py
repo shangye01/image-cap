@@ -1141,14 +1141,20 @@ async def get_task(task_id: str):
         if not task:
             raise HTTPException(status_code=404, detail="任务不存在")
 
-        # 查询草稿
-        draft_result = supabase.table("drafts").select("*").eq("task_id", task_id).maybe_single().execute()
-        draft = draft_result.data
+        # 查询草稿；没有草稿或查询异常时按“无草稿”处理
+        draft_payload = None
+        try:
+            draft_result = supabase.table("drafts").select("annotations_json").eq("task_id", task_id).limit(1).execute()
+            draft_rows = draft_result.data or []
+            if draft_rows:
+                draft_payload = draft_rows[0].get("annotations_json")
+        except Exception as draft_error:
+            logger.warning(f"查询任务 {task_id} 草稿失败，按无草稿继续: {draft_error}")
 
-        if draft:
+        if draft_payload:
             return {
                 "task": task,
-                "annotations": draft["annotations_json"],
+                "annotations": draft_payload,
                 "source": "draft"
             }
 
@@ -1165,7 +1171,8 @@ async def get_task(task_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        logger.error(f"获取任务 {task_id} 失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取任务失败: {str(e)}")
 
 
 @app.post("/api/annotations/{task_id}")
