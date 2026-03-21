@@ -9,27 +9,28 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
   const taskError = ref('')
   const taskSuccess = ref('')
 
-  const loadTaskImage = async (task) => {
-    return await new Promise((resolve, reject) => {
-      const img = new Image()
-      img.crossOrigin = 'anonymous'
-      img.src = task.image_url || task.imageUrl
+const loadTaskImage = async (task) => {
+  return await new Promise((resolve, reject) => {
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    img.src = task.image_url || task.imageUrl
 
-      img.onload = () => {
-        imageObj.value = img
-        store.setCurrentTask({
-          id: task.task_id || task.id,
-          projectId: task.project_id || task.projectId || null,
-          imageUrl: task.image_url || task.imageUrl,
-          imageStoragePath: task.storage_path || task.image_storage_path || task.imageStoragePath,
-          yoloVersion: task.yolo_version || task.yoloVersion,
-        })
-        resolve(img)
-      }
+    img.onload = () => {
+      imageObj.value = img
+      store.setCurrentTask({
+        id: task.task_id || task.id,
+        projectId: task.project_id || task.projectId || null,
+        projectName: task.project_name || task.projectName || '未命名项目',  // ✅ 添加项目名
+        imageUrl: task.image_url || task.imageUrl,
+        imageStoragePath: task.storage_path || task.image_storage_path || task.imageStoragePath,
+        yoloVersion: task.yolo_version || task.yoloVersion,
+      })
+      resolve(img)
+    }
 
-      img.onerror = () => reject(new Error('图片加载失败'))
-    })
-  }
+    img.onerror = () => reject(new Error('图片加载失败'))
+  })
+}
 
   // 加载测试图片
   const loadTestImage = () => {
@@ -80,45 +81,52 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
     }
   }
 
-  // ✅ 使用原生 fetch 请求后端统一接口
-  const fetchProjectTask = async (projectId, taskId) => {
-    if (!projectId || !taskId) return false
+ const fetchProjectTask = async (projectId, taskId) => {
+  if (!projectId || !taskId) return false
 
-    taskLoading.value = true
-    taskError.value = ''
+  taskLoading.value = true
+  taskError.value = ''
 
-    try {
-      const response = await fetch(`http://localhost:8000/api/tasks/${taskId}`)
-      if (!response.ok) throw new Error('任务请求失败')
-      
-      const data = await response.json()
-
-      if (data.task) {
-        await loadTaskImage(data.task)
-        
-        if (data.annotations && data.annotations.length > 0) {
-          data.annotations.forEach(ann => {
-            if (ann.color && ann.label && !labelColorMap.has(ann.label)) {
-              labelColorMap.set(ann.label, ann.color)
-            }
-          })
-        }
-        
-        store.setAnnotations(data.annotations || [])
-        
-        taskSuccess.value = `任务 ${taskId} 加载成功`
-        setTimeout(() => (taskSuccess.value = ''), 2500)
-        return true
-      }
-      throw new Error('未找到任务数据')
-    } catch (error) {
-      console.error('加载项目任务失败:', error)
-      taskError.value = error.message || '项目任务加载失败'
-      return false
-    } finally {
-      taskLoading.value = false
+  try {
+    const response = await fetch(`http://localhost:8000/api/tasks/${taskId}`)
+    if (!response.ok) {
+      const errorData = await response.json()
+      throw new Error(errorData.detail || '任务请求失败')
     }
+    
+    const data = await response.json()
+
+    if (data.task) {
+      // 确保 project_name 存在
+      if (!data.task.project_name && data.task.project_id) {
+        data.task.project_name = data.task.project_id
+      }
+      
+      await loadTaskImage(data.task)
+      
+      if (data.annotations && data.annotations.length > 0) {
+        data.annotations.forEach(ann => {
+          if (ann.color && ann.label && !labelColorMap.has(ann.label)) {
+            labelColorMap.set(ann.label, ann.color)
+          }
+        })
+      }
+      
+      store.setAnnotations(data.annotations || [])
+      
+      taskSuccess.value = `任务 ${taskId} 加载成功`
+      setTimeout(() => (taskSuccess.value = ''), 2500)
+      return true
+    }
+    throw new Error('未找到任务数据')
+  } catch (error) {
+    console.error('加载项目任务失败:', error)
+    taskError.value = error.message || '项目任务加载失败'
+    return false
+  } finally {
+    taskLoading.value = false
   }
+}
 
   // 加载标注数据（草稿优先）
   const loadAnnotations = async (taskId) => {
@@ -141,78 +149,85 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
       console.error('加载草稿失败:', e)
     }
   }
-
-  // 提交标注
-  const submitAnnotations = async () => {
-    if (!store.currentTaskId) {
-      taskError.value = '没有正在进行的任务'
-      return
-    }
-    
-    if (store.annotations.length === 0) {
-      taskError.value = '请先完成标注'
-      return
-    }
-    
-    submitLoading.value = true
-    
-    try {
-      const response = await fetch(`http://localhost:8000/api/annotations/${store.currentTaskId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          annotations: store.annotations,
-          is_draft: false,
-          user_id: store.userId || 'anonymous'
-        })
-      })
-      
-      const data = await response.json()
-      
-      if (!response.ok) {
-        throw new Error(data.detail || '提交失败')
-      }
-      
-      taskSuccess.value = '✅ 提交成功！'
-      setTimeout(() => {
-        store.clearCurrentTask()
-        imageObj.value = null
-        taskSuccess.value = ''
-      }, 2000)
-      
-    } catch (e) {
-      taskError.value = `提交失败: ${e.message}`
-    } finally {
-      submitLoading.value = false
-    }
+const submitAnnotations = async () => {
+  if (!store.currentTaskId) {
+    taskError.value = '没有正在进行的任务'
+    return false
   }
-
-  // 保存草稿
-  const saveDraftHandler = async () => {
-    if (!store.currentTaskId || store.annotations.length === 0) return
-    
-    try {
-      const response = await fetch(`http://localhost:8000/api/annotations/${store.currentTaskId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          annotations: store.annotations,
-          is_draft: true,
-          user_id: store.userId || 'anonymous'
-        })
-      })
-      
-      if (response.ok) {
-        taskSuccess.value = '💾 草稿已保存'
-        setTimeout(() => taskSuccess.value = '', 2000)
-      } else {
-        throw new Error('保存失败')
-      }
-    } catch (e) {
-      taskError.value = '保存草稿失败'
-      console.error(e)
-    }
+  
+  if (store.annotations.length === 0) {
+    taskError.value = '请先完成标注'
+    return false
   }
+  
+  submitLoading.value = true
+  
+  try {
+    const response = await fetch(`http://localhost:8000/api/annotations/${store.currentTaskId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        annotations: store.annotations,
+        is_draft: false,
+        user_id: store.userId || 'anonymous'
+      })
+    })
+    
+    const data = await response.json()
+    
+    if (!response.ok) {
+      throw new Error(data.detail || '提交失败')
+    }
+    
+    taskSuccess.value = '✅ 提交成功！'
+    setTimeout(() => {
+      taskSuccess.value = ''
+    }, 2000)
+    
+    return true
+    
+  } catch (e) {
+    taskError.value = `提交失败: ${e.message}`
+    console.error('提交标注失败:', e)
+    return false
+  } finally {
+    submitLoading.value = false
+  }
+}
+ // 修改原有的保存草稿方法
+const saveDraftHandler = async () => {
+  if (!store.currentTaskId || store.annotations.length === 0) return
+  
+  const draftData = {
+    file_id: store.currentFileId,
+    task_id: store.currentTaskId,
+    project_id: currentProject.value?.id,
+    annotations: store.annotations,
+    saved_at: new Date().toISOString()
+  }
+  
+  // 1. 保存到 localStorage（页面级）
+  const draftKey = `annotation_draft_${currentProject.value?.id}_${store.currentFileId}`
+  localStorage.setItem(draftKey, JSON.stringify(draftData))
+  
+  // 2. 保存到 sessionStorage（会话级）
+  sessionStorage.setItem(`draft_${store.currentTaskId}`, JSON.stringify(draftData))
+  
+  // 3. 调用API保存到后端草稿表（如果有）
+  try {
+    await saveDraftAnnotation({
+      file_id: store.currentFileId,
+      task_id: store.currentTaskId,
+      annotations: store.annotations
+    })
+    console.log('[DRAFT] 已保存到后端草稿表')
+  } catch (e) {
+    console.log('[DRAFT] 后端保存失败，仅保存到本地:', e)
+  }
+  
+  // 显示成功提示
+  alert('草稿已保存')
+}
 
   // 放弃任务
   const abandonTask = async () => {

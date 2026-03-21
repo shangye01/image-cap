@@ -31,8 +31,13 @@ engine = create_engine(
     pool_recycle=1800,
 )
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
+# ✅ 关键修复：使用 expire_on_commit=True 确保每次查询都刷新
+SessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    expire_on_commit=True,  # ✅ 改为 True，确保 commit 后对象过期，下次查询会重新加载
+    bind=engine
+)
 
 def get_db() -> Generator[Session, None, None]:
     db = SessionLocal()

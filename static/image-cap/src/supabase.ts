@@ -12,7 +12,7 @@ Object.keys(import.meta.env).forEach(key => {
 })
 
 // 使用环境变量或备用值（注意 .trim() 去除空格！）
-const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL || 'http://127.0.0.1:54321').trim()
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://dvratyhccontfhftxdcl.supabase.co'
 const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_ACJWlzQHLZjBrEguHvF0xg_3BJgxAaH').trim()
 
 console.log('⚙️  最终配置:')
@@ -27,12 +27,12 @@ console.log('✅ Supabase 客户端创建成功')
 // 自动保存功能（添加空值检查修复）
 // ✅ 正确的类型定义
 export function useAutoSave(
-  taskIdRef: Ref<string | null | undefined>, 
+  taskIdRef: Ref<string | null | undefined>,
   annotationsRef: Ref<any[] | null | undefined>
 ) {
   const save = async () => {
     if (!taskIdRef?.value || !annotationsRef?.value?.length) return
-    
+
     try {
       await supabase
         .from('drafts')
@@ -47,7 +47,7 @@ export function useAutoSave(
       console.error('自动保存失败:', err)
     }
   }
-  
+
   return { save }
 }
 

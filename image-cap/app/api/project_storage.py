@@ -13,6 +13,8 @@ from app.config import (
 )
 
 from app.db.session import get_db
+import logging
+logger = logging.getLogger(__name__)
 from app.models import Project, ProjectFile
 from app.schemas.project_storage import FileOut, ProjectCreate, ProjectOut
 
@@ -43,6 +45,7 @@ def _serialize_file(file_record: ProjectFile, request: Request) -> FileOut:
         "created_at": file_record.created_at,
         "download_url": download_url,
         "preview_url": preview_url,
+        "status": file_record.status,
     }
     return FileOut(**payload)
 
@@ -125,13 +128,39 @@ def upload_project_file(
 
 @router.get("/{project_id}/files", response_model=list[FileOut])
 def list_project_files(project_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
+    logger.info(f"【FILES-001】查询项目文件列表 | project_id={project_id}")
+
+    # 强制刷新会话
+    logger.info(f"【FILES-002】执行db.expire_all()")
+    db.expire_all()
+
+    logger.info(f"【FILES-003】执行db.commit()")
+    db.commit()
+
+    # 查询文件
+    logger.info(f"【FILES-004】查询ProjectFile表")
     file_records = (
         db.query(ProjectFile)
         .filter(ProjectFile.project_id == project_id)
         .order_by(ProjectFile.created_at.desc())
         .all()
     )
-    return [_serialize_file(file_record, request) for file_record in file_records]
+
+    logger.info(f"【FILES-005】查询结果 | total_files={len(file_records)}")
+
+    # 记录每个文件的状态
+    status_summary = {}
+    for f in file_records:
+        status_summary[f.status] = status_summary.get(f.status, 0) + 1
+        logger.info(f"【FILES-006】文件详情 | file_id={f.id}, filename={f.filename}, status={f.status}")
+
+    logger.info(f"【FILES-007】状态统计 | {status_summary}")
+
+    # 序列化并返回
+    result = [_serialize_file(file_record, request) for file_record in file_records]
+    logger.info(f"【FILES-008】返回文件列表 | count={len(result)}")
+
+    return result
 
 @router.get("/files/{file_id}/download")
 def download_project_file(file_id: uuid.UUID, db: Session = Depends(get_db)):

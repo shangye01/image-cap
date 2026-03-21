@@ -9,6 +9,8 @@ export default defineConfig({
       '@': path.resolve(__dirname, 'src'),
     },
   },
+  // ✅ 添加 envPrefix，确保 VITE_ 开头的环境变量暴露给客户端
+  envPrefix: 'VITE_',
   server: {
     port: 5173,
     proxy: {
@@ -16,12 +18,13 @@ export default defineConfig({
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
         secure: false,
-        // ✅ 删除 rewrite 或保持默认，让 /api 前缀保留
+        // ✅ 修复：删除 target 后面的空格
       },
       '/local-uploads': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
         secure: false,
+        // ✅ 修复：删除 target 后面的空格
       }
     }
   }

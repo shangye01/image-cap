@@ -180,12 +180,45 @@
           <div class="project-detail-title-row">
             <div class="project-detail-title">{{ currentFolder.name }}</div>
             <div class="folder-action-buttons">
-              <button type="button" class="file-action-btn batch" @click="selectAllFilesInFolder">
-                批量标注
-              </button>
-              <button type="button" class="file-action-btn work" @click="startSelectedWork">
-                开始标注
-              </button>
+              <!-- 待标注文件夹：原有逻辑 -->
+              <template v-if="isPendingFolder">
+                <button type="button" class="file-action-btn batch" @click="selectAllFilesInFolder">
+                  批量标注
+                </button>
+                <button type="button" class="file-action-btn work" @click="startSelectedWork">
+                  开始标注
+                </button>
+              </template>
+              
+              <!-- 标注中文件夹：继续标注 -->
+              <template v-else-if="isLabelingFolder">
+                <button type="button" class="file-action-btn batch" @click="selectAllFilesInFolder">
+                  批量选择
+                </button>
+                <button 
+                  type="button" 
+                  class="file-action-btn work continue-btn" 
+                  @click="continueLabeling"
+                  :disabled="labelingTasks.length === 0"
+                >
+                  {{ labelingTasks.length > 0 ? `继续标注 (${labelingTasks.length})` : '暂无标注任务' }}
+                </button>
+              </template>
+              
+              <!-- 已标注文件夹：查看 -->
+              <template v-else-if="isDoneFolder">
+                <button type="button" class="file-action-btn batch" @click="selectAllFilesInFolder">
+                  批量选择
+                </button>
+                <button 
+                  type="button" 
+                  class="file-action-btn work review-btn" 
+                  @click="reviewCompleted"
+                  :disabled="doneTasks.length === 0"
+                >
+                  {{ doneTasks.length > 0 ? `查看已标注 (${doneTasks.length})` : '暂无已标注' }}
+                </button>
+              </template>
             </div>
           </div>
 
@@ -218,30 +251,70 @@
 
           <div class="image-card-info">
             <div class="file-name-text" :title="file.name">{{ file.name }}</div>
+            <div v-if="file.status" class="file-status-tag" :class="file.status">
+              {{ getStatusText(file.status) }}
+            </div>
           </div>
 
           <div class="image-card-actions">
-            <button type="button" class="file-action-btn preview" @click.stop="previewFile(file)">
-              预览
+       <!-- 已标注文件夹：只显示查看标注 -->
+       <template v-if="isDoneFolder">
+         <button 
+          type="button" 
+          class="file-action-btn work review-btn" 
+        @click.stop="openAnnotationPreview(file, currentFolder.files.findIndex(f => f.id === file.id))"
+    style="width: 100%;"
+          
+          >
+          🔍 查看标注
+        </button>
+        </template>
+  
+        <!-- 标注中文件夹：预览打开大图标注弹窗，工作按钮继续标注 -->
+         <template v-else-if="isLabelingFolder">
+           <button 
+            type="button" 
+           class="file-action-btn preview" 
+            @click.stop="openAnnotationPreview(file, currentFolder.files.findIndex(f => f.id === file.id))"
+           >
+            🔍 预览标注
+          </button>
+           <button 
+              type="button" 
+              class="file-action-btn work continue-btn" 
+           @click.stop="handleWork(file)"
+              >
+            {{ getWorkButtonText }}
+           </button>
+          </template>
+  
+       <!-- 待标注文件夹：原有逻辑 -->
+          <template v-else>
+           <button type="button" class="file-action-btn preview" @click.stop="previewFile(file)">
+            预览
             </button>
-
-            <button type="button" class="file-action-btn work" @click.stop="handleWork(file)">
-              工作
-            </button>
+             <button 
+              type="button" 
+              class="file-action-btn work" 
+              @click.stop="handleWork(file)"
+                >
+                {{ getWorkButtonText }}
+             </button>
+            </template>
           </div>
         </div>
       </div>
 
-      <div v-else class="empty-folder-page">该文件夹暂无文件</div>
+      <div v-else class="empty-folder-page">{{ getEmptyFolderText }}</div>
     </template>
 
-    <!-- 工作弹窗 -->
+    <!-- 工作弹窗 - 仅待标注文件夹使用 -->
     <teleport to="body">
       <transition name="preview-fade">
         <div v-if="workVisible" class="dialog-mask" @click="closeWorkDialog">
           <div class="dialog-panel work-dialog-panel" @click.stop>
             <div class="work-dialog-header">
-              <div class="dialog-title">工作</div>
+              <div class="dialog-title">开始标注</div>
               <button class="work-dialog-close" type="button" @click="closeWorkDialog">×</button>
             </div>
 
@@ -379,13 +452,148 @@
       </transition>
     </teleport>
   </div>
+
+<!-- 大图标注预览弹窗 -->
+<teleport to="body">
+  <transition name="preview-fade">
+    <div 
+      v-if="annotationPreviewVisible" 
+      class="annotation-preview-mask" 
+      @click="closeAnnotationPreview"
+      @keydown="handlePreviewKeydown"
+      tabindex="0"
+      ref="previewMaskRef"
+    >
+      <!-- 左侧切换按钮 -->
+      <button 
+        v-if="canGoPrev" 
+        class="nav-arrow nav-prev" 
+        @click.stop="goToPrevImage"
+      >
+        ‹
+      </button>
+
+      <div class="annotation-preview-panel" @click.stop>
+        <!-- 顶部工具栏 -->
+        <div class="preview-toolbar">
+          <div class="toolbar-info">
+            <span class="file-counter">{{ currentPreviewIndex + 1 }} / {{ previewableFiles.length }}</span>
+            <span class="file-name">{{ annotationPreviewFileName }}</span>
+          </div>
+          
+          <div class="toolbar-actions">
+            <button 
+              v-if="isLabelingFolder && currentPreviewTask"
+              type="button"
+              class="toolbar-btn btn-continue"
+              @click.stop="continueFromPreview"
+            >
+              ✏️ 继续标注
+            </button>
+            <button 
+              type="button" 
+              class="toolbar-btn btn-close" 
+              @click.stop="closeAnnotationPreview"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+
+        <!-- 图片内容区 -->
+        <div 
+          class="annotation-preview-content"
+          ref="swipeAreaRef"
+          @touchstart="handleTouchStart"
+          @touchend="handleTouchEnd"
+        >
+          <div class="annotation-image-wrapper" ref="imageWrapperRef">
+            <!-- 使用计算后的尺寸容器 -->
+            <div 
+              class="annotation-image-container" 
+              :style="imageContainerStyle"
+            >
+              <img
+                v-if="annotationPreviewImageUrl"
+                :src="annotationPreviewImageUrl"
+                :alt="annotationPreviewFileName"
+                class="annotation-preview-image"
+                @load="onAnnotationImageLoad"
+                ref="previewImageRef"
+                draggable="false"
+              />
+              
+              <!-- SVG 标注层 - 与容器完全重叠 -->
+              <svg 
+                v-if="annotationImageLoaded && currentAnnotations.length > 0"
+                class="annotation-overlay"
+                :viewBox="`0 0 ${annotationImageNaturalWidth} ${annotationImageNaturalHeight}`"
+                preserveAspectRatio="none"
+              >
+                <g v-for="(anno, index) in currentAnnotations" :key="index">
+                  <rect
+                    :x="anno.x"
+                    :y="anno.y"
+                    :width="anno.width"
+                    :height="anno.height"
+                    fill="none"
+                    stroke="#ff4444"
+                    stroke-width="3"
+                    rx="2"
+                  />
+                  <rect
+                    :x="anno.x"
+                    :y="anno.y - 26"
+                    :width="getLabelWidth(anno.label)"
+                    height="26"
+                    fill="#ff4444"
+                    rx="4"
+                  />
+                  <text
+                    :x="anno.x + 8"
+                    :y="anno.y - 7"
+                    fill="white"
+                    font-size="14"
+                    font-weight="600"
+                  >{{ anno.label || '未命名' }}</text>
+                </g>
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        <!-- 底部信息栏 -->
+        <div class="annotation-preview-footer">
+          <div class="annotation-stats">
+            <span v-if="currentAnnotations.length > 0" class="stat-item">
+              📦 {{ currentAnnotations.length }} 个标注
+            </span>
+            <span v-else class="stat-item empty">暂无标注</span>
+            
+            <span v-if="annotationDataSource" class="stat-item source">
+              来源: {{ annotationDataSource }}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 右侧切换按钮 -->
+      <button 
+        v-if="canGoNext" 
+        class="nav-arrow nav-next" 
+        @click.stop="goToNextImage"
+      >
+        ›
+      </button>
+    </div>
+  </transition>
+</teleport>
 </template>
 
 <script setup>
-import { computed, reactive, ref, onBeforeUnmount, onMounted, watch } from 'vue'
+import { computed, reactive, ref, onBeforeUnmount, onMounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import CreateBoardCard from '@/views/project/CreateBoardCard.vue'
-
 import {
   createProject,
   listProjects,
@@ -393,9 +601,13 @@ import {
   uploadProjectFile,
   getProjectFileDownloadUrl,
   deleteProjectApi,
-  createAnnotationSession
+  createAnnotationSession,
+  getFolderTasks,
+  getTaskByFileId
 } from '@/api/projectStorage'
 import { useUserStore } from '@/stores/user'
+
+// ============ 状态定义 ============
 
 const projectList = ref([])
 const hoveredProjectId = ref(null)
@@ -425,9 +637,351 @@ const selectedFileIds = ref([])
 
 const deletingProjectId = ref(null)
 
+// 在 script setup 中添加
+const previewImageRef = ref(null)
+const imageWrapperRef = ref(null)
+
+// ============ 新增：标注预览状态 ============
+
+const annotationPreviewVisible = ref(false)
+const annotationPreviewImageUrl = ref('')
+const annotationPreviewFileName = ref('')
+const currentAnnotations = ref([])
+const annotationImageLoaded = ref(false)
+const annotationImageNaturalWidth = ref(0)
+const annotationImageNaturalHeight = ref(0)
+const currentPreviewTask = ref(null)
+const currentPreviewIndex = ref(0)
+const previewableFiles = ref([])
+const annotationDataSource = ref('')
+
+// 触摸滑动
+const touchStartX = ref(0)
+const touchEndX = ref(0)
+const previewMaskRef = ref(null)
+// 图片容器实际尺寸（通过 CSS 计算，不依赖 DOM 测量）
+const containerSize = ref({ width: 0, height: 0 })
+
+// ============ 计算属性 ============
+
+const canGoPrev = computed(() => currentPreviewIndex.value > 0)
+const canGoNext = computed(() => currentPreviewIndex.value < previewableFiles.value.length - 1)
+
+// 关键：计算图片容器的实际显示尺寸
+const imageContainerStyle = computed(() => {
+  if (!annotationImageLoaded.value) {
+    return {
+      width: '100%',
+      height: '100%'
+    }
+  }
+  
+  const imgWidth = annotationImageNaturalWidth.value
+  const imgHeight = annotationImageNaturalHeight.value
+  const imgRatio = imgWidth / imgHeight
+  
+  // 容器可用空间（减去工具栏和底部的固定高度）
+  const availableWidth = containerSize.value.width || window.innerWidth * 0.9
+  const availableHeight = containerSize.value.height || (window.innerHeight - 120)
+  
+  const containerRatio = availableWidth / availableHeight
+  
+  let finalWidth, finalHeight
+  
+  if (imgRatio > containerRatio) {
+    // 图片更宽，以宽度为准缩放
+    finalWidth = availableWidth
+    finalHeight = availableWidth / imgRatio
+  } else {
+    // 图片更高，以高度为准缩放
+    finalHeight = availableHeight
+    finalWidth = availableHeight * imgRatio
+  }
+  
+  return {
+    width: `${finalWidth}px`,
+    height: `${finalHeight}px`,
+    position: 'relative'
+  }
+})
+
+const getLabelWidth = (label) => {
+  const charWidth = 14
+  const padding = 16
+  return (label?.length || 4) * charWidth + padding
+}
+
+// ============ 方法 ============
+
+// 获取可预览的文件列表
+const getPreviewableFiles = () => {
+  if (!currentFolder.value) return []
+  return currentFolder.value.files.filter(file => isImageFile(file))
+}
+
+// 打开大图标注预览
+const openAnnotationPreview = async (file, index = null) => {
+  try {
+    previewableFiles.value = getPreviewableFiles()
+    currentPreviewIndex.value = index !== null 
+      ? index 
+      : previewableFiles.value.findIndex(f => f.id === file.id)
+    
+    if (currentPreviewIndex.value === -1) currentPreviewIndex.value = 0
+    
+    // 计算容器尺寸
+    updateContainerSize()
+    
+    await loadPreviewData(previewableFiles.value[currentPreviewIndex.value])
+    
+    annotationPreviewVisible.value = true
+    
+    nextTick(() => {
+      previewMaskRef.value?.focus()
+    })
+    
+  } catch (error) {
+    console.error('打开大图预览失败:', error)
+    window.alert('加载标注预览失败')
+  }
+}
+
+// 计算容器可用空间
+const updateContainerSize = () => {
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  
+  // 弹窗宽度 90vw，减去 padding
+  containerSize.value = {
+    width: vw * 0.9 - 48,  // 24px padding on each side
+    height: vh - 120  // 64px toolbar + 56px footer
+  }
+}
+
+// 加载预览数据
+const loadPreviewData = async (file) => {
+  annotationPreviewFileName.value = file.name || ''
+  annotationPreviewImageUrl.value = getFilePreviewUrl(file) || file.downloadUrl || ''
+  annotationImageLoaded.value = false
+  annotationDataSource.value = ''
+  
+  let annotations = []
+  let taskData = null
+  
+  // 1. 首先尝试从草稿表获取
+  try {
+    const draftData = await loadDraftFromStorage(file.id)
+    if (draftData?.annotations?.length > 0) {
+      annotations = draftData.annotations
+      annotationDataSource.value = '草稿'
+    }
+  } catch (e) {
+    console.log('草稿表查询失败:', e)
+  }
+  
+  // 2. 尝试从任务缓存获取
+  if (annotations.length === 0) {
+    if (isLabelingFolder.value) {
+      taskData = labelingTasks.value.find(t => t.file_id === file.id)
+    } else if (isDoneFolder.value) {
+      taskData = doneTasks.value.find(t => t.file_id === file.id)
+    }
+    
+    if (taskData?.annotations?.length > 0) {
+      annotations = taskData.annotations
+      annotationDataSource.value = '任务'
+    }
+  }
+  
+  // 3. 查询后端
+  if (annotations.length === 0) {
+    try {
+      const { data } = await getTaskByFileId(currentProject.value.id, file.id)
+      if (data?.task) {
+        taskData = data.task
+        if (data.task.annotations?.length > 0) {
+          annotations = data.task.annotations
+          annotationDataSource.value = '任务(后端)'
+        } else if (data.task.pre_annotations?.length > 0) {
+          annotations = data.task.pre_annotations
+          annotationDataSource.value = '预标注'
+        }
+      }
+    } catch (e) {
+      console.log('后端查询失败:', e)
+    }
+  }
+  
+  // 4. 尝试 localStorage
+  if (annotations.length === 0) {
+    const keys = [
+      `annotation_draft_${currentProject.value?.id}_${file.id}`,
+      `draft_${file.id}`,
+      `pre_annotations_${taskData?.task_id}`
+    ]
+    
+    for (const key of keys) {
+      const data = localStorage.getItem(key)
+      if (data) {
+        try {
+          const parsed = JSON.parse(data)
+          if (parsed.annotations?.length > 0) {
+            annotations = parsed.annotations
+            annotationDataSource.value = '本地缓存'
+            break
+          }
+        } catch (e) {}
+      }
+    }
+  }
+  
+  // 转换标注格式
+  currentAnnotations.value = annotations.map(anno => ({
+    x: anno.x || anno.bbox?.[0] || 0,
+    y: anno.y || anno.bbox?.[1] || 0,
+    width: anno.width || anno.bbox?.[2] || 0,
+    height: anno.height || anno.bbox?.[3] || 0,
+    label: anno.label || anno.category || anno.name || '未命名'
+  }))
+  
+  currentPreviewTask.value = taskData
+  
+  if (currentAnnotations.value.length === 0) {
+    console.log(`[PREVIEW] 未找到标注数据 | file_id=${file.id}`)
+  }
+}
+
+// 从草稿表加载
+const loadDraftFromStorage = async (fileId) => {
+  try {
+    const { data } = await getDraftAnnotation(fileId)
+    return data
+  } catch (e) {
+    const key = `annotation_draft_${currentProject.value?.id}_${fileId}`
+    const draft = localStorage.getItem(key)
+    return draft ? JSON.parse(draft) : null
+  }
+}
+
+// 图片加载完成
+const onAnnotationImageLoad = (event) => {
+  const img = event.target
+  annotationImageNaturalWidth.value = img.naturalWidth
+  annotationImageNaturalHeight.value = img.naturalHeight
+  annotationImageLoaded.value = true
+  
+  console.log(`[PREVIEW] 图片加载完成 | 原始尺寸: ${img.naturalWidth}x${img.naturalHeight}`)
+}
+
+// 切换到上一张
+const goToPrevImage = async () => {
+  if (!canGoPrev.value) return
+  currentPreviewIndex.value--
+  annotationImageLoaded.value = false
+  await loadPreviewData(previewableFiles.value[currentPreviewIndex.value])
+}
+
+// 切换到下一张
+const goToNextImage = async () => {
+  if (!canGoNext.value) return
+  currentPreviewIndex.value++
+  annotationImageLoaded.value = false
+  await loadPreviewData(previewableFiles.value[currentPreviewIndex.value])
+}
+
+// 键盘事件处理
+const handlePreviewKeydown = (e) => {
+  if (e.key === 'ArrowLeft') goToPrevImage()
+  else if (e.key === 'ArrowRight') goToNextImage()
+  else if (e.key === 'Escape') closeAnnotationPreview()
+}
+
+// 触摸滑动处理
+const handleTouchStart = (e) => {
+  touchStartX.value = e.touches[0].clientX
+}
+
+const handleTouchEnd = (e) => {
+  touchEndX.value = e.changedTouches[0].clientX
+  const distance = touchEndX.value - touchStartX.value
+  
+  if (Math.abs(distance) > 50) {
+    if (distance > 0) goToPrevImage()
+    else goToNextImage()
+  }
+}
+
+// 关闭大图预览
+const closeAnnotationPreview = () => {
+  annotationPreviewVisible.value = false
+  annotationPreviewImageUrl.value = ''
+  annotationPreviewFileName.value = ''
+  currentAnnotations.value = []
+  annotationImageLoaded.value = false
+  annotationImageNaturalWidth.value = 0
+  annotationImageNaturalHeight.value = 0
+  currentPreviewTask.value = null
+  currentPreviewIndex.value = 0
+  previewableFiles.value = []
+  annotationDataSource.value = ''
+}
+
+// 从预览弹窗继续标注
+const continueFromPreview = () => {
+  if (!currentPreviewTask.value) return
+  closeAnnotationPreview()
+  navigateToAnnotate(currentPreviewTask.value, labelingTasks.value)
+}
+
+// 监听窗口大小变化
+const handleResize = () => {
+  if (annotationPreviewVisible.value) {
+    updateContainerSize()
+  }
+}
+
+// 在 onMounted 中添加 resize 监听
+window.addEventListener('resize', handleResize)
+
+// 清理时移除监听
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', handleResize)
+})
+
+// ============ 计算属性 ============
+
+
+
+// SVG 标注层样式 - 精确匹配图片实际渲染位置
+const svgOverlayStyle = computed(() => {
+  if (!annotationImageLoaded.value) return {}
+  
+  return {
+    position: 'absolute',
+    left: `${imageRenderRect.value.left}px`,
+    top: `${imageRenderRect.value.top}px`,
+    width: `${imageRenderRect.value.width}px`,
+    height: `${imageRenderRect.value.height}px`,
+    pointerEvents: 'none'
+  }
+})
+
+
+const handleTouchMove = (e) => {
+  touchEndX.value = e.touches[0].clientX
+}
+
+
+// ============ 新增：任务列表状态 ============
+
+const labelingTasks = ref([])
+const doneTasks = ref([])
+
 const userStore = useUserStore()
 const router = useRouter()
 const previewUrlMap = new Map()
+
+// ============ 场景标签配置 ============
 
 const scenes = ref([
   {
@@ -452,7 +1006,7 @@ const scenes = ref([
   },
 ])
 
-const handleGlobalClick = () => closeProjectMenu()
+// ============ 计算属性 ============
 
 const currentProject = computed(
   () => projectList.value.find((item) => item.id === currentProjectId.value) || null
@@ -524,38 +1078,89 @@ const renameError = computed(() => {
   return ''
 })
 
-const mapBackendFile = (backendFile) => ({
-  id: backendFile.id,
-  name: backendFile.filename,
-  // ✅ 新增这一行：读取后端返回的数据库状态，默认为 pending
-  status: backendFile.status || 'pending', 
-  relativePath: '',
-  type: backendFile.mime_type || '',
-  size: backendFile.size_bytes || 0,
-  file: null,
-  storageBackend: backendFile.storage_backend || 'supabase',
-  downloadUrl: backendFile.download_url || getProjectFileDownloadUrl(backendFile.id),
-  previewUrl:
-    backendFile.preview_url ||
-    backendFile.download_url ||
-    getProjectFileDownloadUrl(backendFile.id),
+// ============ 新增：文件夹类型计算属性 ============
+
+const isPendingFolder = computed(() => currentFolder.value?.name === '待标注')
+const isLabelingFolder = computed(() => currentFolder.value?.name === '标注中')
+const isDoneFolder = computed(() => currentFolder.value?.name === '已标注')
+
+const getWorkButtonText = computed(() => {
+  if (isPendingFolder.value) return '工作'
+  if (isLabelingFolder.value) return '继续'
+  if (isDoneFolder.value) return '查看'
+  return '工作'
 })
 
+const getEmptyFolderText = computed(() => {
+  if (isPendingFolder.value) return '该文件夹暂无待标注文件'
+  if (isLabelingFolder.value) return '该文件夹暂无标注中文件'
+  if (isDoneFolder.value) return '该文件夹暂无已标注文件'
+  return '该文件夹暂无文件'
+})
+
+// ============ 工具函数 ============
+
+const formatDate = (timestamp) => {
+  if (!timestamp) return ''
+  const date = new Date(timestamp)
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+const getStatusText = (status) => {
+  const statusMap = {
+    'pending': '待标注',
+    'labeling': '标注中',
+    'done': '已完成'
+  }
+  return statusMap[status] || status
+}
+
+const mapBackendFile = (backendFile) => {
+  console.log(`[MAP] 映射文件 | id=${backendFile.id}, backend_status=${backendFile.status}`)
+  
+  const mapped = {
+    id: backendFile.id,
+    name: backendFile.filename,
+    status: backendFile.status,
+    relativePath: '',
+    type: backendFile.mime_type || '',
+    size: backendFile.size_bytes || 0,
+    file: null,
+    storageBackend: backendFile.storage_backend || 'supabase',
+    downloadUrl: backendFile.download_url || getProjectFileDownloadUrl(backendFile.id),
+    previewUrl:
+      backendFile.preview_url ||
+      backendFile.download_url ||
+      getProjectFileDownloadUrl(backendFile.id),
+  }
+  
+  console.log(`[MAP] 映射结果 | id=${mapped.id}, mapped_status=${mapped.status}`)
+  return mapped
+}
+
+// ============ 数据加载 ============
+
 const loadProjects = async () => {
+  console.log('[VUE-001] 开始加载项目列表')
+  
   try {
     const owner = userStore.user?.username || 'default'
     const { data } = await listProjects(owner)
-    
+    console.log(`[VUE-002] 获取${data?.length || 0}个项目`)
+
     const projectData = await Promise.all(
       (data || []).map(async (project) => {
-        // 获取该项目下的所有文件
         const fileResp = await listProjectFiles(project.id)
-        
-        // ✅ 核心修改：将文件映射后，利用状态直接拆分归类到三个数组中
         const allFiles = (fileResp.data || []).map(mapBackendFile)
+        
         const pendingFiles = allFiles.filter(f => f.status === 'pending')
         const labelingFiles = allFiles.filter(f => f.status === 'labeling')
         const doneFiles = allFiles.filter(f => f.status === 'done')
+
+        console.log(`[VUE-003] 项目[${project.name}] | pending=${pendingFiles.length}, labeling=${labelingFiles.length}, done=${doneFiles.length}`)
 
         return {
           id: project.id,
@@ -565,7 +1170,6 @@ const loadProjects = async () => {
           selectedTagIds: [],
           selectedTags: [],
           createdAt: new Date(project.created_at).getTime(),
-          // ✅ 把拆分好的数组分别放到对应的文件夹下
           folders: [
             { id: `pending_${project.id}`, name: '待标注', files: pendingFiles },
             { id: `labeling_${project.id}`, name: '标注中', files: labelingFiles },
@@ -574,12 +1178,81 @@ const loadProjects = async () => {
         }
       })
     )
-    projectList.value = projectData
+    
+    projectList.value = [...projectData]
+    console.log('[VUE-004] projectList已更新，长度=', projectList.value.length)
+    
+    await nextTick()
+    console.log('[VUE-005] nextTick完成，DOM已更新')
+    
+    if (currentProjectId.value) {
+      const refreshedProject = projectList.value.find(p => p.id === currentProjectId.value)
+      console.log(`[VUE-006] 刷新后当前项目 | found=${!!refreshedProject}`)
+    }
+    
   } catch (error) {
     console.error('读取项目失败：', error)
     window.alert(error?.response?.data?.detail || '读取项目失败')
   }
 }
+
+// ============ 新增：加载文件夹任务 ============
+
+const loadFolderTasks = async () => {
+  if (!currentProject.value) return
+  
+  try {
+    // 标注中文件夹
+    if (isLabelingFolder.value) {
+      console.log(`[LOAD] 加载标注中任务 | project_id=${currentProject.value.id}`)
+      const { data } = await getFolderTasks(currentProject.value.id, 'labeling')
+      
+      if (data && data.tasks) {
+        labelingTasks.value = data.tasks
+        console.log(`[LOAD] 加载到 ${data.tasks.length} 个标注中任务`)
+        
+        // 更新文件的任务ID关联
+        const labelingFolder = currentProject.value.folders.find(f => f.name === '标注中')
+        if (labelingFolder) {
+          labelingFolder.files.forEach(file => {
+            const task = data.tasks.find(t => t.file_id === file.id)
+            if (task) {
+              file.taskId = task.task_id
+              file.taskStatus = task.status
+            }
+          })
+        }
+      }
+    }
+    
+    // 已标注文件夹
+    else if (isDoneFolder.value) {
+      console.log(`[LOAD] 加载已完成任务 | project_id=${currentProject.value.id}`)
+      const { data } = await getFolderTasks(currentProject.value.id, 'done')
+      
+      if (data && data.tasks) {
+        doneTasks.value = data.tasks
+        console.log(`[LOAD] 加载到 ${data.tasks.length} 个已完成任务`)
+        
+        const doneFolder = currentProject.value.folders.find(f => f.name === '已标注')
+        if (doneFolder) {
+          doneFolder.files.forEach(file => {
+            const task = data.tasks.find(t => t.file_id === file.id)
+            if (task) {
+              file.taskId = task.task_id
+            }
+          })
+        }
+      }
+    }
+  } catch (error) {
+    console.error('加载任务列表失败:', error)
+    labelingTasks.value = []
+    doneTasks.value = []
+  }
+}
+
+// ============ 导航方法 ============
 
 const handleCreateProject = async (projectData) => {
   const owner_id = userStore.user?.username || 'default'
@@ -617,17 +1290,27 @@ const backToProjectList = () => {
   currentProjectId.value = null
   currentFolderId.value = null
   selectedFileIds.value = []
+  labelingTasks.value = []
+  doneTasks.value = []
 }
 
-const enterFolder = (folder) => {
+const enterFolder = async (folder) => {
   currentFolderId.value = folder.id
   selectedFileIds.value = []
+  
+  // 进入文件夹时加载对应的任务列表
+  await nextTick()
+  await loadFolderTasks()
 }
 
 const backToFolderList = () => {
   currentFolderId.value = null
   selectedFileIds.value = []
+  labelingTasks.value = []
+  doneTasks.value = []
 }
+
+// ============ 文件操作方法 ============
 
 const showRemark = (id) => {
   hoveredProjectId.value = id
@@ -683,6 +1366,185 @@ const closePreview = () => {
   previewImageUrl.value = ''
 }
 
+// ============ 工作流核心方法 ============
+
+// 处理工作按钮点击
+const handleWork = async (file) => {
+  if (!currentProject.value) return
+
+  if (isPendingFolder.value) {
+    // 待标注：原有逻辑，打开工作弹窗
+    selectedFileIds.value = [file.id]
+    currentWorkFileId.value = file.id
+    workForm.mode = currentProject.value.mode || 'keyword'
+    workForm.selectedTagIds = []
+    workVisible.value = true
+  } else if (isLabelingFolder.value) {
+    // 标注中：点击工作按钮直接进入标注页面继续标注
+    await loadSingleFileTask(file)
+  } else if (isDoneFolder.value) {
+    // 已标注：点击查看标注按钮打开大图预览（通过openAnnotationPreview直接调用）
+    // 此分支实际上不会通过handleWork进入，因为已标注文件夹的按钮直接调用了openAnnotationPreview
+    await openAnnotationPreview(file)
+  }
+}
+
+
+
+
+
+// 计算图片实际渲染尺寸
+const updateImageRenderRect = () => {
+  const img = previewImageRef.value
+  const wrapper = imageWrapperRef.value
+  
+  if (!img || !wrapper) return
+  
+  const wrapperRect = wrapper.getBoundingClientRect()
+  const imgRect = img.getBoundingClientRect()
+  
+  // 计算图片在容器中的实际渲染尺寸
+  // 由于 object-fit: contain，图片可能没有填满整个容器
+  imageRenderRect.value = {
+    width: imgRect.width,
+    height: imgRect.height,
+    left: imgRect.left - wrapperRect.left,
+    top: imgRect.top - wrapperRect.top
+  }
+}
+
+
+
+// 在 onMounted 中添加 resize 监听
+window.addEventListener('resize', handleResize)
+
+
+// 加载单个文件任务
+const loadSingleFileTask = async (file) => {
+  try {
+    console.log(`[WORK] 加载单个文件任务 | file_id=${file.id}`)
+    
+    // 先从缓存中找
+    const cachedTask = labelingTasks.value.find(t => t.file_id === file.id)
+    if (cachedTask) {
+      console.log(`[WORK] 从缓存找到任务 | task_id=${cachedTask.task_id}`)
+      navigateToAnnotate(cachedTask, labelingTasks.value)
+      return
+    }
+
+    // 否则查询后端
+    const { data } = await getTaskByFileId(currentProject.value.id, file.id)
+    if (data && data.task) {
+      console.log(`[WORK] 从后端获取任务 | task_id=${data.task.task_id}`)
+      navigateToAnnotate(data.task, [data.task])
+    } else {
+      window.alert('该文件暂无标注任务，请先开始标注')
+    }
+  } catch (error) {
+    console.error('加载任务失败:', error)
+    window.alert('加载标注任务失败')
+  }
+}
+
+// 继续标注 - 按顺序跳转
+const continueLabeling = () => {
+  if (labelingTasks.value.length === 0) {
+    window.alert('暂无标注中的任务')
+    return
+  }
+
+  // 找到第一个标注中的任务
+  const firstTask = labelingTasks.value.find(t => t.status === 'labeling') || labelingTasks.value[0]
+  console.log(`[CONTINUE] 继续标注 | task_id=${firstTask.task_id}, total=${labelingTasks.value.length}`)
+  
+  navigateToAnnotate(firstTask, labelingTasks.value)
+}
+
+// 查看已完成标注
+const reviewCompleted = () => {
+  if (doneTasks.value.length === 0) {
+    window.alert('暂无已标注的文件')
+    return
+  }
+
+  const firstTask = doneTasks.value[0]
+  navigateToAnnotate(firstTask, doneTasks.value)
+}
+
+// ============ 新增：查看已完成标注 ============
+
+const viewCompletedAnnotation = async (file) => {
+  try {
+    console.log(`[VIEW] 查看已完成标注 | file_id=${file.id}`)
+    
+    // 先从缓存中找
+    const cachedTask = doneTasks.value.find(t => t.file_id === file.id)
+    if (cachedTask) {
+      console.log(`[VIEW] 从缓存找到已完成任务 | task_id=${cachedTask.task_id}`)
+      navigateToAnnotate(cachedTask, doneTasks.value)
+      return
+    }
+
+    // 否则查询后端
+    const { data } = await getTaskByFileId(currentProject.value.id, file.id)
+    if (data && data.task) {
+      console.log(`[VIEW] 从后端获取已完成任务 | task_id=${data.task.task_id}`)
+      navigateToAnnotate(data.task, doneTasks.value.length > 0 ? doneTasks.value : [data.task])
+    } else {
+      window.alert('该文件暂无标注结果')
+    }
+  } catch (error) {
+    console.error('加载已完成标注失败:', error)
+    window.alert('加载标注结果失败')
+  }
+}
+
+const navigateToAnnotate = (task, taskList) => {
+  // 保存任务列表到 localStorage
+  localStorage.setItem(`task_list_${currentProject.value.id}`, JSON.stringify({
+    tasks: taskList,
+    currentIndex: taskList.findIndex(t => t.task_id === task.task_id),
+    projectId: currentProject.value.id,
+    projectName: currentProject.value.projectName,
+    folderType: currentFolder.value?.name
+  }))
+
+  // ✅ 关键修改：保存已有标注到 localStorage（从标注中文件夹跳转时）
+  if (task.annotations && task.annotations.length > 0) {
+    localStorage.setItem(`pre_annotations_${task.task_id}`, JSON.stringify({
+      annotations: task.annotations,
+      source: 'existing',  // 标记为已有标注，不是新AI预测
+      timestamp: Date.now()
+    }))
+    console.log(`[NAVIGATE] 保存已有标注到缓存 | task_id=${task.task_id}, 标注数=${task.annotations.length}`)
+  } else if (task.pre_annotations && task.pre_annotations.length > 0) {
+    // 兼容预标注字段
+    localStorage.setItem(`pre_annotations_${task.task_id}`, JSON.stringify({
+      annotations: task.pre_annotations,
+      source: 'pre_existing',
+      timestamp: Date.now()
+    }))
+  }
+
+  // 跳转
+  router.push({
+    path: '/app/annotate',
+    query: {
+      projectId: currentProject.value.id,
+      task: task.task_id,
+      sourceMode: task.use_keywords ? 'keyword' : 'nonKeyword',
+      batchSize: String(taskList.length),
+      projectName: currentProject.value.projectName,
+      taskIndex: String(taskList.findIndex(t => t.task_id === task.task_id)),
+      totalTasks: String(taskList.length),
+      // ✅ 添加标记：从哪个文件夹跳转过来的
+      fromFolder: currentFolder.value?.name || 'unknown'
+    },
+  })
+}
+
+// ============ 工作弹窗相关 ============
+
 const isWorkSelected = (id) => workForm.selectedTagIds.includes(id)
 
 const toggleWorkTag = (tag) => {
@@ -696,15 +1558,7 @@ const removeWorkTag = (id) => {
   if (index > -1) workForm.selectedTagIds.splice(index, 1)
 }
 
-const handleWork = (file) => {
-  if (!currentProject.value) return
 
-  selectedFileIds.value = [file.id]
-  currentWorkFileId.value = file.id
-  workForm.mode = currentProject.value.mode || 'keyword'
-  workForm.selectedTagIds = []
-  workVisible.value = true
-}
 
 const isFileSelected = (fileId) => selectedFileIds.value.includes(fileId)
 
@@ -740,86 +1594,132 @@ const closeWorkDialog = () => {
 }
 
 const confirmWorkDialog = async () => {
-  if (!currentProject.value) return
-
-  // 保存项目模式设置
-  currentProject.value.mode = workForm.mode
-
-  if (workForm.mode === 'nonKeyword') {
-    currentProject.value.selectedTagIds = []
-    currentProject.value.selectedTags = []
-  } else {
-    currentProject.value.selectedTagIds = [...workForm.selectedTagIds]
-    currentProject.value.selectedTags = [...workSelectedTags.value]
+  console.log('[VUE-100] ========== 开始创建标注会话 ==========')
+  
+  if (!currentProject.value) {
+    console.log('[VUE-101] ❌ 当前项目为空')
+    return
   }
 
   try {
-    // 确定目标文件列表
     const targetFiles = selectedFiles.value.length
       ? selectedFiles.value
-      : currentWorkFile.value
-        ? [currentWorkFile.value]
-        : []
+      : currentWorkFile.value ? [currentWorkFile.value] : []
 
     if (!targetFiles.length) {
       window.alert('请至少选择一张图片')
       return
     }
 
-    // 准备关键词
-    const keywords =
-      workForm.mode === 'keyword' ? workSelectedTags.value.map((tag) => tag.name) : []
+    console.log(`[VUE-102] 目标文件 | count=${targetFiles.length}`)
 
-    // 调用后端创建标注会话（包含自动预标注）
+    const keywords = workForm.mode === 'keyword' ? workSelectedTags.value.map((tag) => tag.name) : []
+
+    console.log(`[VUE-103] 🚀 调用createAnnotationSession`)
     const { data } = await createAnnotationSession(currentProject.value.id, {
       file_ids: targetFiles.map((file) => file.id),
       use_keywords: workForm.mode === 'keyword',
       keywords,
     })
+    console.log(`[VUE-104] ✅ API调用成功 | tasks=${data.tasks.length}`)
 
-    // 保存预标注数据到本地存储（供标注页面读取）
+    // 保存到 localStorage
     if (data.tasks && data.tasks.length > 0) {
-      // 保存所有任务的预标注数据
+      localStorage.setItem(`batch_tasks_${data.project_id}`, JSON.stringify(data.tasks))
       data.tasks.forEach((task) => {
         if (task.annotations && task.annotations.length > 0) {
-          localStorage.setItem(
-            `pre_annotations_${task.task_id}`,
-            JSON.stringify(task.annotations)
-          )
-          console.log(`任务 ${task.task_id} 预标注已保存:`, task.annotations.length, '个框')
+          localStorage.setItem(`pre_annotations_${task.task_id}`, JSON.stringify(task.annotations))
         }
       })
-      
-      // 同时保存当前项目的关键词设置（供标注页面使用）
-      localStorage.setItem(
-        `project_keywords_${data.project_id}`,
-        JSON.stringify({
-          use_keywords: data.use_keywords,
-          keywords: data.keywords,
-          mode: workForm.mode
-        })
-      )
     }
 
-    // 关闭弹窗
     closeWorkDialog()
 
-    // 跳转到标注页面
-    router.push({
-      path: '/app/annotate',
-      query: {
-        projectId: data.project_id,
-        task: data.first_task.task_id,  // 格式：项目名_001
-        sourceMode: workForm.mode,
-        batchSize: String(data.tasks.length),
-        projectName: data.project_name,
-      },
+    console.log('[VUE-105] 等待2秒后刷新...')
+    await new Promise(resolve => setTimeout(resolve, 2000))
+
+    console.log('[VUE-106] 🔄 调用loadProjects()')
+    await loadProjects()
+    console.log('[VUE-107] ✅ loadProjects()完成')
+
+    await nextTick()
+    console.log('[VUE-108] nextTick完成')
+
+    const refreshedProject = projectList.value.find(p => p.id === currentProjectId.value)
+    console.log(`[VUE-109] 刷新后项目查找 | found=${!!refreshedProject}`)
+    
+    if (!refreshedProject) {
+      console.log('[VUE-110] ❌ 刷新后项目不存在')
+      throw new Error('刷新后项目不存在')
+    }
+
+    console.log(`[VUE-111] 刷新后项目状态 | name=${refreshedProject.projectName}`)
+    refreshedProject.folders.forEach(folder => {
+      console.log(`[VUE-112] 文件夹[${folder.name}] | count=${folder.files.length}`)
     })
+
+    const pendingFolder = refreshedProject.folders.find(f => f.name === '待标注')
+    const targetFileIds = new Set(targetFiles.map(f => f.id))
+    const stillInPending = pendingFolder?.files.some(f => targetFileIds.has(f.id))
+    
+    console.log(`[VUE-114] 文件状态检查 | stillInPending=${stillInPending}`)
+    
+    if (stillInPending) {
+      console.log('[VUE-115] ⚠️ 警告：文件仍在待标注文件夹')
+      console.log('[VUE-116] 🔄 执行第二次刷新')
+      await new Promise(resolve => setTimeout(resolve, 1000))
+      await loadProjects()
+      await nextTick()
+    }
+
+    const labelingFolder = refreshedProject.folders?.find(f => f.name === '标注中')
+    if (labelingFolder) {
+      currentFolderId.value = labelingFolder.id
+      selectedFileIds.value = []
+      console.log(`[VUE-117] ✅ 切换到标注中文件夹 | files=${labelingFolder.files.length}`)
+    }
+
+    console.log('[VUE-118] 跳转到标注页面')
+   // 使用新的导航方法
+const firstTask = data.tasks[0]
+
+// ✅ 构建任务列表，包含AI预标注结果
+const taskList = data.tasks.map(t => ({
+  task_id: t.task_id,
+  file_id: t.file_id,
+  filename: t.filename,
+  image_url: t.image_url,
+  status: 'labeling',
+  project_name: t.project_name,
+  project_id: data.project_id,
+  use_keywords: t.use_keywords,
+  keywords: t.keywords,
+  annotations: t.annotations || []  // 包含AI预标注结果
+}))
+
+// 保存预标注到 localStorage（标记为新AI预测）
+data.tasks.forEach((task) => {
+  if (task.annotations && task.annotations.length > 0) {
+    localStorage.setItem(`pre_annotations_${task.task_id}`, JSON.stringify({
+      annotations: task.annotations,
+      source: 'ai_prediction',  // 标记为AI新预测
+      timestamp: Date.now()
+    }))
+  }
+})
+
+navigateToAnnotate(firstTask, taskList)
+    
+   
+    
+    console.log('[VUE-119] ========== 流程结束 ==========')
   } catch (error) {
-    console.error('创建标注任务失败：', error)
+    console.error('[VUE-120] ❌ 创建标注任务失败:', error)
     window.alert(error?.response?.data?.detail || '创建标注任务失败')
   }
 }
+
+// ============ 项目操作 ============
 
 const openRenameDialog = (project) => {
   closeProjectMenu()
@@ -852,7 +1752,7 @@ const deleteProject = async (projectId) => {
   const target = projectList.value.find((item) => item.id === projectId)
   if (!target) return
 
-  const confirmed = window.confirm(`确定删除项目“${target.projectName}”吗？`)
+  const confirmed = window.confirm(`确定删除项目"${target.projectName}"吗？`)
   if (!confirmed) return
 
   try {
@@ -873,37 +1773,9 @@ const deleteProject = async (projectId) => {
   }
 }
 
-const formatDate = (timestamp) => {
-  if (!timestamp) return ''
-  const date = new Date(timestamp)
-  const y = date.getFullYear()
-  const m = String(date.getMonth() + 1).padStart(2, '0')
-  const d = String(date.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
-}
+// ============ 菜单操作 ============
 
-watch(
-  () => workForm.mode,
-  (newMode) => {
-    if (newMode === 'nonKeyword') workForm.selectedTagIds = []
-  }
-)
-
-onMounted(() => {
-  loadProjects()
-  window.addEventListener('click', handleGlobalClick)
-})
-
-onBeforeUnmount(() => {
-  if (previewImageUrl.value && previewImageUrl.value.startsWith('blob:')) {
-    URL.revokeObjectURL(previewImageUrl.value)
-  }
-
-  previewUrlMap.forEach((url) => URL.revokeObjectURL(url))
-  previewUrlMap.clear()
-
-  window.removeEventListener('click', handleGlobalClick)
-})
+const handleGlobalClick = () => closeProjectMenu()
 
 const toggleProjectMenu = (projectId) => {
   openedProjectMenuId.value = openedProjectMenuId.value === projectId ? null : projectId
@@ -922,6 +1794,43 @@ const handleDeleteFromMenu = (projectId) => {
   closeProjectMenu()
   deleteProject(projectId)
 }
+
+// ============ 生命周期 ============
+
+watch(
+  () => workForm.mode,
+  (newMode) => {
+    if (newMode === 'nonKeyword') workForm.selectedTagIds = []
+  }
+)
+
+onBeforeUnmount(() => {
+  if (previewImageUrl.value && previewImageUrl.value.startsWith('blob:')) {
+    URL.revokeObjectURL(previewImageUrl.value)
+  }
+
+  previewUrlMap.forEach((url) => URL.revokeObjectURL(url))
+  previewUrlMap.clear()
+
+  window.removeEventListener('click', handleGlobalClick)
+  
+})
+
+onMounted(() => {
+  loadProjects()
+  window.addEventListener('click', handleGlobalClick)
+  
+  // 监听标注完成消息
+  window.addEventListener('message', (event) => {
+    if (event.data === 'refresh-project') {
+      loadProjects()
+      // 如果当前在标注中文件夹，刷新任务列表
+      if (isLabelingFolder.value) {
+        loadFolderTasks()
+      }
+    }
+  })
+})
 </script>
 
 <style scoped>
@@ -1278,6 +2187,7 @@ const handleDeleteFromMenu = (projectId) => {
 }
 
 .image-card {
+  position: relative;
   border-radius: 16px;
   background: #ffffff;
   border: 1px solid #e5e7eb;
@@ -1294,15 +2204,6 @@ const handleDeleteFromMenu = (projectId) => {
   margin-left: auto;
   display: flex;
   gap: 8px;
-}
-
-.file-action-btn.batch {
-  background: #e8f3ff;
-  color: #1a6fd8;
-}
-
-.image-card {
-  position: relative;
 }
 
 .file-select-checkbox {
@@ -1355,13 +2256,7 @@ const handleDeleteFromMenu = (projectId) => {
 
 .image-card-info {
   padding: 12px 12px 8px;
-}
-
-.image-card-actions {
-  padding: 0 12px 12px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  min-height: 60px;
 }
 
 .file-name-text {
@@ -1371,6 +2266,38 @@ const handleDeleteFromMenu = (projectId) => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  margin-bottom: 4px;
+}
+
+/* 文件状态标签 */
+.file-status-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.file-status-tag.pending {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.file-status-tag.labeling {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.file-status-tag.done {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.image-card-actions {
+  padding: 0 12px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .empty-folder-page,
@@ -1412,6 +2339,30 @@ const handleDeleteFromMenu = (projectId) => {
 .file-action-btn.work {
   background: #dcfce7;
   color: #166534;
+}
+
+/* 继续标注按钮 */
+.file-action-btn.continue-btn {
+  background: linear-gradient(135deg, #43c7db, #2faec6);
+  color: white;
+}
+
+.file-action-btn.continue-btn:disabled {
+  background: #9ca3af;
+  cursor: not-allowed;
+  transform: none;
+  filter: none;
+}
+
+/* 查看按钮 */
+.file-action-btn.review-btn {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  font-weight: 600;
+}
+
+.file-action-btn.review-btn:hover {
+  filter: brightness(1.1);
 }
 
 .dialog-mask,
@@ -1792,6 +2743,276 @@ const handleDeleteFromMenu = (projectId) => {
   .image-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 12px;
+  }
+  
+  .folder-action-buttons {
+    width: 100%;
+    margin-top: 12px;
+  }
+}
+
+/* ========== 大图标注预览弹窗 - 修复标注框偏差 ========== */
+
+/* 遮罩层 */
+.annotation-preview-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  outline: none;
+}
+
+/* 弹窗容器 - 和页面等高 */
+.annotation-preview-panel {
+  position: relative;
+  width: 90vw;
+  height: 100vh;
+  max-width: 1400px;
+  background: #ffffff;
+  border-radius: 0;
+  overflow: hidden;
+  box-shadow: 0 0 60px rgba(0, 0, 0, 0.3);
+  display: flex;
+  flex-direction: column;
+}
+
+/* 顶部工具栏 */
+.preview-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 24px;
+  background: #ffffff;
+  border-bottom: 1px solid #e5e7eb;
+  height: 64px;
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+
+.toolbar-info {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  color: #374151;
+}
+
+.file-counter {
+  font-size: 14px;
+  font-weight: 600;
+  background: #f3f4f6;
+  padding: 6px 14px;
+  border-radius: 20px;
+  color: #111827;
+}
+
+.file-name {
+  font-size: 15px;
+  font-weight: 500;
+  max-width: 400px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #6b7280;
+}
+
+.toolbar-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.toolbar-btn {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-continue {
+  background: linear-gradient(135deg, #43c7db, #2faec6);
+  color: white;
+}
+
+.btn-continue:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.05);
+}
+
+.btn-close {
+  background: #f3f4f6;
+  color: #6b7280;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+}
+
+.btn-close:hover {
+  background: #e5e7eb;
+  color: #374151;
+}
+
+/* 图片内容区 - 关键：使用 flex 布局让容器自动计算尺寸 */
+.annotation-preview-content {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  overflow: hidden;
+  position: relative;
+  background: #f9fafb;
+}
+
+/* 图片包装器 - 填满可用空间 */
+.annotation-image-wrapper {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 关键：图片容器 - 通过 JS 计算精确尺寸 */
+.annotation-image-container {
+  position: relative;
+  /* 尺寸由 JS 计算的 style 绑定控制 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+/* 图片 - 填满容器 */
+.annotation-preview-image {
+  width: 100%;
+  height: 100%;
+  object-fit: fill; /* 关键：填满容器，不保持比例，由容器控制比例 */
+  display: block;
+}
+
+/* 关键：SVG 标注层 - 与容器完全重叠，使用 viewBox 保持比例 */
+.annotation-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+}
+
+/* 底部信息栏 */
+.annotation-preview-footer {
+  padding: 16px 24px;
+  background: #ffffff;
+  border-top: 1px solid #e5e7eb;
+  height: 56px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.annotation-stats {
+  display: flex;
+  gap: 24px;
+  color: #6b7280;
+  font-size: 14px;
+}
+
+.stat-item {
+  background: #f3f4f6;
+  padding: 8px 16px;
+  border-radius: 20px;
+  color: #374151;
+}
+
+.stat-item.source {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.stat-item.empty {
+  color: #9ca3af;
+  background: #f9fafb;
+}
+
+/* 左右切换箭头 */
+.nav-arrow {
+  position: fixed;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 48px;
+  height: 96px;
+  border: none;
+  background: rgba(255, 255, 255, 0.9);
+  color: #374151;
+  font-size: 32px;
+  cursor: pointer;
+  z-index: 10001;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+}
+
+.nav-arrow:hover {
+  background: #ffffff;
+  transform: translateY(-50%) scale(1.05);
+}
+
+.nav-prev {
+  left: calc(5vw - 24px);
+}
+
+.nav-next {
+  right: calc(5vw - 24px);
+}
+
+/* 响应式 */
+@media (max-width: 768px) {
+  .annotation-preview-panel {
+    width: 100vw;
+  }
+  
+  .nav-prev {
+    left: 8px;
+  }
+  
+  .nav-next {
+    right: 8px;
+  }
+  
+  .file-name {
+    max-width: 200px;
+  }
+  
+  .preview-toolbar {
+    padding: 12px 16px;
+    height: 56px;
+  }
+  
+  .annotation-preview-content {
+    padding: 16px;
+  }
+  
+  .nav-arrow {
+    width: 40px;
+    height: 72px;
+    font-size: 24px;
   }
 }
 </style>
