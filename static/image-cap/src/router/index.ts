@@ -4,84 +4,63 @@ import { useUserStore } from '@/stores/user'
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
-    /* ========= 公开路由（无需登录） ========= */
     {
       path: '/',
       name: 'home',
       component: () => import('@/views/home/Home.vue'),
-      meta: { requiresAuth: false }
+       meta: { requiresAuth: false },
+    },
+    {
+      path: '/login',
+      name: 'login',
+      component: () => import('@/views/auth/Login.vue'),
+      meta: { requiresAuth: false },
+    },
+    {
+      path: '/register',
+      name: 'register',
+      component: () => import('@/views/auth/Register.vue'),
+      meta: { requiresAuth: false },
     },
     
-    /* ========= 需要登录的路由（带 Layout 布局） ========= */
     {
       path: '/app',
       component: () => import('@/views/project/Layout.vue'),
       meta: { requiresAuth: true },
       children: [
-        {
-          path: '',
-          redirect: '/app/guide'
-        },
-        {
-          path: 'guide',
-          name: 'guide',
-          component: () => import('@/views/guide/CreateGuide.vue')
-        },
-        {
-          path: 'project',
-          name: 'project',
-          component: () => import('@/views/project/ProjectContent.vue')
-        },
-        {
-          path: 'history',
-          name: 'history',
-          component: () => import('@/views/history/History.vue') // 这是你的列表页
-        },
-        /* --- 新增：创建/发布项目页面 --- */
+        { path: '', redirect: '/app/guide' },
+        { path: 'guide', name: 'guide', component: () => import('@/views/guide/CreateGuide.vue') },
+        { path: 'project', name: 'project', component: () => import('@/views/project/ProjectContent.vue') },
+        { path: 'history', name: 'history', component: () => import('@/views/history/History.vue') },
         {
           path: 'publish',
           name: 'publish',
-          component: () => import('@/views/project/ProjectContent.vue'), // 确保路径对应你创建页的文件名
-          meta: { requiresAuth: true }
+          component: () => import('@/views/project/ProjectContent.vue'),
+          meta: { requiresAuth: true },
         },
 
-        {
-          path: 'annotate',
-          name: 'annotate',
-          component: () => import('@/views/annotate/AnnotateView.vue'),
-          meta: { requiresAuth: true }
-        },
-        {
-          path: 'tasks',
-          name: 'tasks',
-          component: () => import('@/views/tasks/TaskListView.vue'),
-          meta: { requiresAuth: true }
-        },
-        {
-          path: 'training',
-          name: 'training',
-          component: () => import('@/views/training/TrainingView.vue'),
-          meta: { requiresAuth: true }
-        },
-        {
-          path: 'profile',
-          name: 'profile',
-          component: () => import('@/views/profile/ProfileView.vue'),
-          meta: { requiresAuth: true }
-        }
-      ]
-    }
-  ]
+        { path: 'annotate', name: 'annotate', component: () => import('@/views/annotate/AnnotateView.vue') },
+        { path: 'tasks', name: 'tasks', component: () => import('@/views/tasks/TaskListView.vue') },
+        { path: 'training', name: 'training', component: () => import('@/views/training/TrainingView.vue') },
+        { path: 'profile', name: 'profile', component: () => import('@/views/profile/ProfileView.vue') },
+      ],
+    },
+  ],
 })
 
-// 全局路由守卫保持不变
-router.beforeEach((to, from, next) => {
+router.beforeEach((to, _from, next) => {
   const userStore = useUserStore()
   if (to.meta.requiresAuth && !userStore.isLogin) {
-    next('/')
-  } else {
-    next()
+    next('/login')
+    return
   }
+  
+  if ((to.path === '/login' || to.path === '/register') && userStore.isLogin) {
+    next('/app/guide')
+    return
+  }
+
+  next()
 })
 
 export default router

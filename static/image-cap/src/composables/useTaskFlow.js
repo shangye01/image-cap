@@ -1,7 +1,7 @@
 // composables/useTaskFlow.js
 import { ref } from 'vue'
 import { supabase } from '@/supabase'
-// ❌ 已经删除了对 getAnnotationSessionTask 的引入
+import request from '@/api/request'
 
 export function useTaskFlow(store, imageObj, labelColorMap) {
   const taskLoading = ref(false)
@@ -36,14 +36,17 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
     taskError.value = ''
     const img = new Image()
     img.crossOrigin = 'anonymous'
-    img.src = '/public/test.jpg'
-    
+    img.src = '/test.jpg'
+
     img.onload = () => {
       imageObj.value = img
       store.clearAnnotations()
       taskSuccess.value = '测试图片加载成功'
-      setTimeout(() => taskSuccess.value = '', 2000)
+      setTimeout(() => {
+        taskSuccess.value = ''
+      }, 2000)
     }
+
     img.onerror = () => {
       taskError.value = '测试图片加载失败'
     }
@@ -52,10 +55,10 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
   // 加载下一个任务
   const loadNextTask = async () => {
     if (taskLoading.value) return
-    
+
     taskLoading.value = true
     taskError.value = ''
-    
+
     try {
       const { data, error } = await supabase
         .from('tasks')
@@ -63,24 +66,27 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
         .eq('status', 'pending')
         .limit(1)
         .single()
-      
+
       if (error || !data) {
         throw new Error('没有可用的任务')
       }
 
       await loadTaskImage(data)
       await loadAnnotations(data.id)
-      taskLoading.value = false
+
       taskSuccess.value = `任务 ${data.id} 加载成功`
-      
+      setTimeout(() => {
+        taskSuccess.value = ''
+      }, 2500)
     } catch (e) {
-      taskLoading.value = false
       taskError.value = '没有可用任务'
       console.error(e)
+    } finally {
+      taskLoading.value = false
     }
   }
 
-  // ✅ 使用原生 fetch 请求后端统一接口
+  // 加载项目任务
   const fetchProjectTask = async (projectId, taskId) => {
     if (!projectId || !taskId) return false
 
@@ -88,32 +94,33 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
     taskError.value = ''
 
     try {
-      const response = await fetch(`http://localhost:8000/api/tasks/${taskId}`)
-      if (!response.ok) throw new Error('任务请求失败')
-      
-      const data = await response.json()
+      const data = await request.get(`/tasks/${taskId}`)
 
       if (data.task) {
         await loadTaskImage(data.task)
-        
+
         if (data.annotations && data.annotations.length > 0) {
-          data.annotations.forEach(ann => {
+          data.annotations.forEach((ann) => {
             if (ann.color && ann.label && !labelColorMap.has(ann.label)) {
               labelColorMap.set(ann.label, ann.color)
             }
           })
         }
-        
+
         store.setAnnotations(data.annotations || [])
-        
+
         taskSuccess.value = `任务 ${taskId} 加载成功`
-        setTimeout(() => (taskSuccess.value = ''), 2500)
+        setTimeout(() => {
+          taskSuccess.value = ''
+        }, 2500)
+
         return true
       }
+
       throw new Error('未找到任务数据')
     } catch (error) {
       console.error('加载项目任务失败:', error)
-      taskError.value = error.message || '项目任务加载失败'
+      taskError.value = error?.response?.data?.detail || error.message || '项目任务加载失败'
       return false
     } finally {
       taskLoading.value = false
@@ -126,14 +133,14 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
       console.warn('⚠️ loadAnnotations: taskId 为空')
       return
     }
-    
+
     try {
       const { data: draft } = await supabase
         .from('drafts')
         .select('annotations_json')
         .eq('task_id', taskId)
-        .maybeSingle() 
-      
+        .maybeSingle()
+
       if (draft?.annotations_json) {
         store.annotations = draft.annotations_json
       }
@@ -148,40 +155,33 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
       taskError.value = '没有正在进行的任务'
       return
     }
-    
+
     if (store.annotations.length === 0) {
       taskError.value = '请先完成标注'
       return
     }
-    
+
     submitLoading.value = true
-    
+    taskError.value = ''
+
     try {
-      const response = await fetch(`http://localhost:8000/api/annotations/${store.currentTaskId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          annotations: store.annotations,
-          is_draft: false,
-          user_id: store.userId || 'anonymous'
-        })
+      const data = await request.post(`/annotations/${store.currentTaskId}`, {
+        annotations: store.annotations,
+        is_draft: false,
+        user_id: store.userId || 'anonymous',
       })
-      
-      const data = await response.json()
-      
-      if (!response.ok) {
-        throw new Error(data.detail || '提交失败')
-      }
-      
-      taskSuccess.value = '✅ 提交成功！'
+
+      taskSuccess.value = data?.message || '✅ 提交成功！'
       setTimeout(() => {
         store.clearCurrentTask()
         imageObj.value = null
         taskSuccess.value = ''
       }, 2000)
-      
+
+      return data
     } catch (e) {
-      taskError.value = `提交失败: ${e.message}`
+      taskError.value = `提交失败: ${e?.response?.data?.detail || e.message}`
+      throw e
     } finally {
       submitLoading.value = false
     }
@@ -190,26 +190,22 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
   // 保存草稿
   const saveDraftHandler = async () => {
     if (!store.currentTaskId || store.annotations.length === 0) return
-    
+
+    taskError.value = ''
+
     try {
-      const response = await fetch(`http://localhost:8000/api/annotations/${store.currentTaskId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          annotations: store.annotations,
-          is_draft: true,
-          user_id: store.userId || 'anonymous'
-        })
+      await request.post(`/annotations/${store.currentTaskId}`, {
+        annotations: store.annotations,
+        is_draft: true,
+        user_id: store.userId || 'anonymous',
       })
-      
-      if (response.ok) {
-        taskSuccess.value = '💾 草稿已保存'
-        setTimeout(() => taskSuccess.value = '', 2000)
-      } else {
-        throw new Error('保存失败')
-      }
+
+      taskSuccess.value = '💾 草稿已保存'
+      setTimeout(() => {
+        taskSuccess.value = ''
+      }, 2000)
     } catch (e) {
-      taskError.value = '保存草稿失败'
+      taskError.value = `保存草稿失败: ${e?.response?.data?.detail || e.message}`
       console.error(e)
     }
   }
@@ -217,16 +213,13 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
   // 放弃任务
   const abandonTask = async () => {
     if (!store.currentTaskId) return
-    
+
     const confirmed = confirm('确定放弃任务吗？已标注的内容将丢失。')
     if (!confirmed) return
-    
+
     try {
-      await supabase
-        .from('drafts')
-        .delete()
-        .eq('task_id', store.currentTaskId)
-      
+      await supabase.from('drafts').delete().eq('task_id', store.currentTaskId)
+
       store.clearCurrentTask()
       imageObj.value = null
       taskError.value = ''
@@ -240,33 +233,29 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
   const restoreTask = async (taskId) => {
     try {
       console.log('🔄 开始恢复任务:', taskId)
-      const response = await fetch(`http://localhost:8000/api/tasks/${taskId}`)
-      
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`)
-      }
-      
-      const data = await response.json()
-      
+
+      const data = await request.get(`/tasks/${taskId}`)
+
       if (data.task) {
         await loadTaskImage({
           ...data.task,
           imageUrl: data.task.image_url,
-          imageStoragePath: data.task.image_storage_path
+          imageStoragePath: data.task.image_storage_path,
         })
-        
+
         if (data.annotations && data.annotations.length > 0) {
-          data.annotations.forEach(ann => {
+          data.annotations.forEach((ann) => {
             if (ann.color && ann.label && !labelColorMap.has(ann.label)) {
               labelColorMap.set(ann.label, ann.color)
             }
           })
         }
-        
+
         store.setAnnotations(data.annotations || [])
         console.log('✅ 任务恢复成功:', data.task.image_url)
         return true
       }
+
       return false
     } catch (error) {
       console.error('❌ 恢复任务失败:', error)
@@ -285,6 +274,6 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
     saveDraftHandler,
     abandonTask,
     fetchProjectTask,
-    restoreTask
+    restoreTask,
   }
 }

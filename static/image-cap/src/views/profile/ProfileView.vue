@@ -15,41 +15,31 @@
 
           <div class="user-card__content">
             <div class="avatar-wrapper">
-              <el-avatar :size="92" :src="user.avatar">
-                {{ user.accountName?.slice(0, 1) || 'U' }}
-              </el-avatar>
-              <div class="avatar-edit">
-                <el-icon><Camera /></el-icon>
-              </div>
+              <el-avatar :size="92" :src="user.avatar">{{
+                user.username?.slice(0, 1) || 'U'
+              }}</el-avatar>
             </div>
 
-            <h2 class="user-name">{{ user.accountName }}</h2>
-            <div class="user-nickname">@{{ user.communityName }}</div>
-
-            <div class="user-id">账号ID：{{ user.accountId }}</div>
+            <h2 class="user-name">{{ user.username }}</h2>
+            <div class="user-id">账号ID：{{ user.id }}</div>
 
             <div class="user-tags">
-              <el-tag type="primary" effect="light" round>已认证用户</el-tag>
-              <el-tag effect="light" round>普通成员</el-tag>
+              <el-tag type="success" effect="light" round>{{
+                user.is_active ? '当前活跃' : '离线'
+              }}</el-tag>
+              <el-tag effect="light" round>{{ primaryOrgType }}</el-tag>
             </div>
 
             <div class="user-meta">
               <div class="meta-item">
                 <span class="meta-label">注册时间</span>
-                <span class="meta-value">{{ user.registerTime }}</span>
+                <span class="meta-value">{{ user.created_at || '-' }}</span>
               </div>
               <div class="meta-item">
                 <span class="meta-label">最后登录</span>
-                <span class="meta-value">{{ user.lastLoginTime }}</span>
+                <span class="meta-value">{{ user.last_login_at || '-' }}</span>
               </div>
             </div>
-
-            <!-- <div class="user-actions">
-              <el-button type="primary" plain class="action-btn" @click="handleChangePassword">
-                修改密码
-              </el-button>
-              <el-button class="action-btn danger-btn" @click="handleLogout"> 退出登录 </el-button>
-            </div> -->
           </div>
         </div>
       </div>
@@ -82,24 +72,20 @@
                 <div class="section-title">基础信息</div>
                 <div class="info-grid">
                   <div class="info-item">
-                    <div class="info-label">账号名称</div>
-                    <div class="info-value">{{ user.accountName }}</div>
+                    <div class="info-label">用户名称</div>
+                    <div class="info-value">{{ user.username }}</div>
                   </div>
                   <div class="info-item">
                     <div class="info-label">账号ID</div>
-                    <div class="info-value">{{ user.accountId }}</div>
-                  </div>
-                  <div class="info-item">
-                    <div class="info-label">社区昵称</div>
-                    <div class="info-value">{{ user.communityName }}</div>
+                    <div class="info-value">{{ user.id }}</div>
                   </div>
                   <div class="info-item">
                     <div class="info-label">注册时间</div>
-                    <div class="info-value">{{ user.registerTime }}</div>
+                    <div class="info-value">{{ user.created_at || '-' }}</div>
                   </div>
                   <div class="info-item">
                     <div class="info-label">最后登录时间</div>
-                    <div class="info-value">{{ user.lastLoginTime }}</div>
+                    <div class="info-value">{{ user.last_login_at || '-' }}</div>
                   </div>
                 </div>
               </div>
@@ -109,7 +95,7 @@
                   <div class="section-title">安全设置</div>
 
                   <div class="setting-list">
-                    <div class="setting-item">
+                    <!-- <div class="setting-item">
                       <div>
                         <div class="setting-name">修改密码</div>
                         <div class="setting-desc">定期更新密码可以有效提升账号安全性</div>
@@ -117,7 +103,7 @@
                       <el-button type="primary" plain @click="handleChangePassword">
                         去修改
                       </el-button>
-                    </div>
+                    </div> -->
 
                     <div class="setting-item">
                       <div>
@@ -130,13 +116,34 @@
                 </div>
 
                 <div class="section-block section-half">
-                  <div class="section-title">快捷键说明</div>
+                  <!-- <div class="section-title">快捷键说明</div>
 
                   <div class="shortcut-list">
                     <div class="shortcut-item" v-for="item in shortcutList" :key="item.label">
                       <span class="shortcut-label">{{ item.label }}</span>
                       <div class="shortcut-keys">
                         <span class="key-tag" v-for="key in item.keys" :key="key">{{ key }}</span>
+                      </div>
+                    </div>
+                  </div> -->
+                  <div class="section-title">组织概览</div>
+                  <div class="shortcut-list">
+                    <div class="shortcut-item">
+                      <span class="shortcut-label">已加入组织数</span>
+                      <div class="shortcut-keys">
+                        <span class="key-tag">{{ teamList.length }}</span>
+                      </div>
+                    </div>
+                    <div class="shortcut-item">
+                      <span class="shortcut-label">默认组织</span>
+                      <div class="shortcut-keys">
+                        <span class="key-tag">{{ primaryOrganization }}</span>
+                      </div>
+                    </div>
+                    <div class="shortcut-item">
+                      <span class="shortcut-label">状态</span>
+                      <div class="shortcut-keys">
+                        <span class="key-tag">{{ user.is_active ? '活跃' : '离线' }}</span>
                       </div>
                     </div>
                   </div>
@@ -150,7 +157,7 @@
                 <div class="table-header">
                   <div>
                     <div class="section-title mb-4">我加入的团队</div>
-                    <div class="table-subtitle">共 {{ teamList.length }} 个组织</div>
+                    <div class="table-subtitle">共 {{ filteredTeamList.length }} 个组织</div>
                   </div>
 
                   <div class="table-tools">
@@ -160,14 +167,14 @@
                       clearable
                       class="search-input"
                     >
-                      <template #prefix>
-                        <el-icon><Search /></el-icon>
-                      </template>
+                      <template #prefix
+                        ><el-icon><Search /></el-icon
+                      ></template>
                     </el-input>
 
-                    <el-button @click="handleRefresh">
-                      <el-icon><Refresh /></el-icon>
-                    </el-button>
+                    <el-button @click="handleRefresh"
+                      ><el-icon><Refresh /></el-icon
+                    ></el-button>
                   </div>
                 </div>
 
@@ -175,21 +182,22 @@
                   <el-table-column label="组织昵称" min-width="220">
                     <template #default="{ row }">
                       <div class="org-cell">
-                        <div class="org-avatar">{{ row.orgName.slice(0, 1) }}</div>
-                        <div class="org-name">{{ row.orgName }}</div>
+                        <div class="org-avatar">{{ row.organization_nickname.slice(0, 1) }}</div>
+                        <div class="org-name">{{ row.organization_nickname }}</div>
                       </div>
                     </template>
                   </el-table-column>
 
                   <el-table-column label="组织类型" min-width="160">
                     <template #default="{ row }">
-                      <el-tag :type="getOrgTypeTag(row.orgType)" effect="light" round>
-                        {{ row.orgType }}
-                      </el-tag>
+                      <el-tag :type="getOrgTypeTag(row.organization_type)" effect="light" round>{{
+                        row.organization_type
+                      }}</el-tag>
                     </template>
                   </el-table-column>
 
-                  <el-table-column prop="joinTime" label="加入时间" min-width="180" />
+                  <el-table-column prop="joined_at" label="加入时间" min-width="180" />
+                  <el-table-column prop="member_count" label="组织成员" min-width="120" />
                 </el-table>
 
                 <el-empty
@@ -208,529 +216,296 @@
 
 <script setup>
 import { computed, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { Camera, Search, Refresh } from '@element-plus/icons-vue'
+import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import { Search, Refresh } from '@element-plus/icons-vue'
+import { logoutApi } from '@/api/auth'
+import { useUserStore } from '@/stores/user'
 
+const router = useRouter()
+const userStore = useUserStore()
 const activeTab = ref('profile')
 const keyword = ref('')
 
-const user = ref({
-  avatar: 'https://picsum.photos/120/120',
-  accountName: '郑野',
-  accountId: 'U20260319001',
-  communityName: '夜行开发者',
-  registerTime: '2025-06-12 14:33:21',
-  lastLoginTime: '2026-03-19 09:24:17',
-})
+const user = computed(
+  () =>
+    userStore.user || {
+      id: '-',
+      username: '未登录',
+      avatar: '',
+      is_active: false,
+      created_at: '-',
+      last_login_at: '-',
+      organizations: [],
+    }
+)
 
-const shortcutList = ref([
-  { label: '删除选中标注', keys: ['Delete'] },
-  { label: '修改标签', keys: ['F2'] },
-  { label: '清除所有标注', keys: ['Ctrl', 'Delete'] },
-  { label: '取消选择', keys: ['Esc'] },
-  { label: '全屏模式', keys: ['F11'] },
-])
-
-const teamList = ref([
-  {
-    orgName: '星海社区',
-    orgType: '个人',
-    joinTime: '2025-07-03 10:22:11',
-  },
-  {
-    orgName: '未来产品组',
-    orgType: '团队',
-    joinTime: '2025-08-15 09:16:38',
-  },
-  {
-    orgName: '云启科技',
-    orgType: '团队',
-    joinTime: '2025-09-21 18:03:47',
-  },
-  {
-    orgName: '前端共创联盟',
-    orgType: '团队',
-    joinTime: '2025-11-08 13:45:02',
-  },
-])
+const teamList = computed(() => user.value.organizations || [])
 
 const filteredTeamList = computed(() => {
-  const val = keyword.value.trim().toLowerCase()
-  if (!val) return teamList.value
-  return teamList.value.filter((item) => item.orgName.toLowerCase().includes(val))
+  const value = keyword.value.trim().toLowerCase()
+  if (!value) return teamList.value
+  return teamList.value.filter((item) => item.organization_nickname.toLowerCase().includes(value))
 })
+const primaryOrganization = computed(() => teamList.value[0]?.organization_nickname || '-')
+const primaryOrgType = computed(() => teamList.value[0]?.organization_type || '未加入组织')
 
-function getOrgTypeTag(type) {
-  const map = {
-    企业组织: 'primary',
-    社区组织: 'success',
-    项目组: 'warning',
-  }
-  return map[type] || ''
-}
-
-function handleChangePassword() {
-  ElMessage.success('跳转到修改密码页面')
-}
-
-function handleRefresh() {
-  ElMessage.success('团队列表已刷新')
-}
-
-async function handleLogout() {
+const handleLogout = async () => {
   try {
-    await ElMessageBox.confirm('退出后需要重新登录才能继续访问系统，确认退出吗？', '确认退出登录', {
-      confirmButtonText: '确认退出',
-      cancelButtonText: '取消',
-      type: 'warning',
-    })
+    await logoutApi()
+  } catch {
+    // ignore
+  } finally {
+    userStore.logout()
     ElMessage.success('已退出登录')
-  } catch (error) {
-    // 用户取消
+    router.push('/login')
   }
+}
+const handleRefresh = () => {
+  keyword.value = ''
+  ElMessage.success('已刷新组织信息')
+}
+
+const getOrgTypeTag = (type) => {
+  if (type === '团队') return 'primary'
+  return ''
 }
 </script>
 
 <style scoped>
 .profile-page {
-  min-height: 100%;
   padding: 24px;
-  background: radial-gradient(circle at top left, rgba(79, 124, 255, 0.08), transparent 24%),
-    radial-gradient(circle at top right, rgba(109, 211, 251, 0.1), transparent 20%), #f5f7fb;
-  box-sizing: border-box;
 }
-
 .profile-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
   margin-bottom: 24px;
 }
-
 .page-title {
-  margin: 0;
   font-size: 28px;
   font-weight: 700;
-  color: #1f2937;
+  color: #0f172a;
 }
-
 .page-desc {
-  margin: 8px 0 0;
-  font-size: 14px;
-  color: #6b7280;
+  margin-top: 8px;
+  color: #64748b;
 }
-
 .profile-layout {
   display: grid;
-  grid-template-columns: 300px 1fr;
-  gap: 24px;
-  align-items: start;
+  grid-template-columns: 320px 1fr;
+  gap: 20px;
 }
-
 .profile-sidebar,
 .profile-main {
   min-width: 0;
 }
-
 .user-card,
-.content-card,
-.section-block {
-  background: #ffffff;
-  border-radius: 20px;
-  box-shadow: 0 10px 30px rgba(31, 41, 55, 0.08);
-}
-
-.user-card {
+.content-card {
+  background: #fff;
+  border-radius: 24px;
   overflow: hidden;
-  position: sticky;
-  top: 24px;
+  box-shadow: 0 14px 40px rgba(15, 23, 42, 0.06);
 }
-
 .user-card__banner {
-  height: 120px;
-  background: linear-gradient(135deg, #4f7cff 0%, #6dd3fb 100%);
+  height: 108px;
+  background: linear-gradient(135deg, #818cf8, #38bdf8);
 }
-
 .user-card__content {
-  position: relative;
-  padding: 0 22px 24px;
+  padding: 0 24px 24px;
   margin-top: -46px;
-  text-align: center;
 }
-
 .avatar-wrapper {
-  position: relative;
-  width: fit-content;
-  margin: 0 auto;
-}
-
-.avatar-wrapper :deep(.el-avatar) {
-  border: 4px solid #ffffff;
-  box-shadow: 0 8px 18px rgba(79, 124, 255, 0.25);
-}
-
-.avatar-edit {
-  position: absolute;
-  right: 2px;
-  bottom: 2px;
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  background: #4f7cff;
-  color: #fff;
   display: flex;
-  align-items: center;
   justify-content: center;
-  box-shadow: 0 6px 14px rgba(79, 124, 255, 0.35);
-  cursor: pointer;
+  margin-bottom: 16px;
 }
-
 .user-name {
-  margin: 16px 0 6px;
+  text-align: center;
   font-size: 24px;
   font-weight: 700;
-  color: #1f2937;
+  color: #0f172a;
 }
-
-.user-nickname {
-  font-size: 14px;
-  color: #4f7cff;
-  margin-bottom: 10px;
-}
-
 .user-id {
-  display: inline-block;
-  padding: 6px 12px;
-  font-size: 13px;
-  color: #6b7280;
-  background: #f3f6ff;
-  border-radius: 999px;
+  text-align: center;
+  color: #64748b;
+  margin-top: 6px;
 }
-
 .user-tags {
   display: flex;
   justify-content: center;
-  flex-wrap: wrap;
   gap: 8px;
   margin-top: 16px;
+  flex-wrap: wrap;
 }
-
 .user-meta {
-  margin-top: 22px;
-  padding-top: 18px;
-  border-top: 1px solid #eef2f7;
+  margin-top: 20px;
+  display: grid;
+  gap: 12px;
 }
-
 .meta-item {
   display: flex;
-  align-items: center;
   justify-content: space-between;
   gap: 12px;
-  font-size: 13px;
-  padding: 8px 0;
+  font-size: 14px;
 }
-
 .meta-label {
-  color: #6b7280;
+  color: #64748b;
 }
-
 .meta-value {
-  color: #1f2937;
+  color: #0f172a;
   text-align: right;
 }
-
-.user-actions {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 12px;
-  margin-top: 22px;
-}
-
-.action-btn {
-  width: 100%;
-  height: 42px;
-  border-radius: 12px;
-}
-
-.danger-btn {
-  color: #ef4444;
-  border-color: #fecaca;
-  background: #fff5f5;
-}
-
 .content-card {
-  padding: 20px;
-  min-height: 640px;
+  padding: 24px;
 }
-
 .custom-tabs {
-  display: inline-flex;
-  padding: 6px;
-  background: #f3f6fb;
-  border-radius: 14px;
-  margin-bottom: 22px;
+  display: flex;
+  gap: 12px;
+  margin-bottom: 24px;
 }
-
 .custom-tab {
-  min-width: 108px;
-  height: 40px;
-  padding: 0 20px;
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #6b7280;
-  font-size: 14px;
+  padding: 10px 16px;
+  border-radius: 12px;
+  background: #f1f5f9;
   cursor: pointer;
-  transition: all 0.25s ease;
+  color: #475569;
 }
-
 .custom-tab.active {
-  background: #ffffff;
-  color: #4f7cff;
+  background: #e0e7ff;
+  color: #4338ca;
   font-weight: 600;
-  box-shadow: 0 4px 14px rgba(31, 41, 55, 0.08);
 }
-
-.panel-wrapper {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
 .section-block {
-  padding: 22px;
-  border-radius: 18px;
-  box-shadow: 0 8px 24px rgba(31, 41, 55, 0.06);
+  background: #f8fafc;
+  border-radius: 20px;
+  padding: 20px;
 }
-
 .section-title {
   font-size: 18px;
   font-weight: 700;
-  color: #1f2937;
+  color: #0f172a;
   margin-bottom: 18px;
 }
-
-.mb-4 {
-  margin-bottom: 4px;
-}
-
 .info-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 16px;
 }
-
 .info-item {
-  padding: 18px;
+  padding: 16px;
   border-radius: 16px;
-  background: linear-gradient(180deg, #fbfcff 0%, #f7f9fd 100%);
-  border: 1px solid #edf1f7;
-  transition: all 0.25s ease;
+  background: #fff;
 }
-
-.info-item:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 10px 20px rgba(79, 124, 255, 0.08);
-}
-
 .info-label {
-  font-size: 13px;
-  color: #8a94a6;
-  margin-bottom: 10px;
+  color: #64748b;
+  margin-bottom: 8px;
 }
-
 .info-value {
-  font-size: 16px;
+  color: #0f172a;
   font-weight: 600;
-  color: #1f2937;
   word-break: break-all;
 }
-
 .double-section {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 20px;
+  margin-top: 20px;
 }
-
 .setting-list,
 .shortcut-list {
-  display: flex;
-  flex-direction: column;
+  display: grid;
   gap: 14px;
 }
-
 .setting-item,
 .shortcut-item {
+  background: #fff;
+  border-radius: 16px;
+  padding: 16px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 16px 18px;
-  border-radius: 14px;
-  background: #f9fbff;
-  border: 1px solid #edf1f7;
 }
-
 .setting-name {
-  font-size: 15px;
   font-weight: 600;
-  color: #1f2937;
-  margin-bottom: 6px;
+  color: #0f172a;
 }
-
-.setting-desc {
-  font-size: 13px;
-  color: #7b8794;
-}
-
-.shortcut-label {
+.setting-desc,
+.table-subtitle {
+  color: #64748b;
   font-size: 14px;
-  color: #374151;
 }
-
+.shortcut-label {
+  color: #0f172a;
+  font-weight: 600;
+}
 .shortcut-keys {
   display: flex;
-  flex-wrap: wrap;
   gap: 8px;
+  flex-wrap: wrap;
 }
-
 .key-tag {
-  min-width: 34px;
-  height: 30px;
-  padding: 0 10px;
-  border-radius: 8px;
-  background: #ffffff;
-  border: 1px solid #d9e0ea;
-  color: #1f2937;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #e0e7ff;
+  color: #4338ca;
   font-size: 13px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.03);
 }
-
 .table-header {
   display: flex;
-  align-items: center;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 18px;
+  align-items: center;
+  margin-bottom: 16px;
 }
-
-.table-subtitle {
-  font-size: 13px;
-  color: #8a94a6;
-}
-
 .table-tools {
   display: flex;
-  align-items: center;
   gap: 10px;
+  align-items: center;
 }
-
 .search-input {
-  width: 240px;
+  width: 260px;
 }
-
-.team-table {
-  --el-table-border-color: #eef2f7;
-  --el-table-header-bg-color: #f7faff;
-  --el-table-row-hover-bg-color: #f8fbff;
-  border-radius: 14px;
-  overflow: hidden;
-}
-
 .org-cell {
   display: flex;
   align-items: center;
   gap: 12px;
 }
-
 .org-avatar {
   width: 34px;
   height: 34px;
-  border-radius: 10px;
-  background: linear-gradient(135deg, #4f7cff 0%, #6dd3fb 100%);
-  color: #ffffff;
-  font-weight: 700;
+  border-radius: 999px;
+  background: #c7d2fe;
+  color: #3730a3;
   display: flex;
   align-items: center;
   justify-content: center;
+  font-weight: 700;
 }
-
 .org-name {
   font-weight: 600;
-  color: #1f2937;
+  color: #0f172a;
 }
-
 .fade-slide-enter-active,
 .fade-slide-leave-active {
-  transition: all 0.28s ease;
+  transition: all 0.2s ease;
 }
-
-.fade-slide-enter-from {
-  opacity: 0;
-  transform: translateY(10px);
-}
-
+.fade-slide-enter-from,
 .fade-slide-leave-to {
   opacity: 0;
-  transform: translateY(6px);
+  transform: translateY(8px);
 }
-
-@media (max-width: 1200px) {
-  .info-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 992px) {
+@media (max-width: 1024px) {
   .profile-layout {
     grid-template-columns: 1fr;
   }
-
-  .user-card {
-    position: static;
-  }
-
   .double-section {
     grid-template-columns: 1fr;
   }
-}
-
-@media (max-width: 768px) {
-  .profile-page {
-    padding: 16px;
-  }
-
-  .content-card,
-  .section-block {
-    padding: 16px;
-    border-radius: 16px;
-  }
-
-  .info-grid {
-    grid-template-columns: 1fr;
-  }
-
   .table-header {
     flex-direction: column;
     align-items: stretch;
   }
-
-  .table-tools {
-    justify-content: space-between;
-  }
-
   .search-input {
     width: 100%;
-  }
-
-  .shortcut-item,
-  .setting-item {
-    flex-direction: column;
-    align-items: flex-start;
   }
 }
 </style>

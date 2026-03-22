@@ -53,13 +53,11 @@ app.include_router(project_storage.router)
 print("MAIN FILE:", __file__)
 print("PROJECT_STORAGE FILE:", project_storage.__file__)
 
-for r in app.routes:
-    print("ROUTE:", getattr(r, "methods", None), r.path)
-
 
 @app.on_event("startup")
 def _startup() -> None:
     init_db()
+    auth.ensure_auth_resources()
 
 
 # ========== 日志配置 ==========
@@ -1472,6 +1470,10 @@ async def move_to_done(project_id: str, payload: dict, db: Session = Depends(get
         supabase.table("tasks").update({"status": "completed"}).eq("id", task_id).execute()
     return {"success": True}
 # =================================================================
+
+for r in app.routes:
+    print("ROUTE:", getattr(r, "methods", None), r.path)
+
 # ========== 启动 ==========
 if __name__ == "__main__":
     import uvicorn

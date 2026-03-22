@@ -16,118 +16,90 @@
 
         <!-- 已登录 -->
         <template v-else>
-          <span class="username">
-            {{ userStore.user?.username }}
-          </span>
+          <div class="user-chip">
+            <img :src="userStore.user?.avatar" alt="avatar" class="user-chip__avatar" />
+            <span class="username">{{ userStore.user?.username }}</span>
+          </div>
           <span class="divider">|</span>
           <a @click="logout">退出</a>
         </template>
       </div>
-
-
-
     </header>
 
     <!-- 主体内容 -->
     <main class="main">
-        <!-- 左侧 -->
-        <div class="left">
-            <button class="create-btn" @click="goCreate">
-              + 创建项目
-            </button>
+      <div class="left">
+        <button class="create-btn" @click="goCreate">+ 创建项目</button>
+      </div>
 
-        </div>
-
-        <!-- 右侧 -->
-        <div class="right">
-        <img
-            src="/image/star.jpg"
-            alt="系统说明图"
-            class="home-image"
-        />
+      <div class="right">
+        <img src="/image/star.jpg" alt="系统说明图" class="home-image" />
 
         <div class="intro">
-            <h2>协同标注平台</h2>
-            <p>
-            支持多人协作标注，灵活的任务流转机制，
-            提供项目进度可视化与结果统一管理能力。
-            </p>
+          <h2>协同标注平台</h2>
+          <p>支持多人协作标注，灵活的任务流转机制，提供项目进度可视化与结果统一管理能力。</p>
         </div>
-        </div>
-
+      </div>
     </main>
   </div>
 
-  <!-- 遮罩 -->
-<div
-  v-if="drawerVisible"
-  class="mask"
-  @click="closeDrawer"
-/>
+  <div v-if="drawerVisible" class="mask" @click="closeDrawer" />
 
-<!-- 抽屉 -->
-<div
-  class="drawer"
-  :class="{ open: drawerVisible }"
->
-  <!-- 表单容器 -->
-  <div class="form-wrapper">
-    <div class="form-container">
-      <h2 class="form-title">{{ drawerMode === 'login' ? '登录' : '注册' }}</h2>
+  <div class="drawer" :class="{ open: drawerVisible }">
+    <div class="form-wrapper">
+      <div class="form-container">
+        <h2 class="form-title">{{ drawerMode === 'login' ? '登录' : '注册' }}</h2>
 
-      <!-- 登录表单 -->
-      <div v-if="drawerMode === 'login'" class="form">
-        <input v-model="loginForm.username" placeholder="账号" />
-        <input v-model="loginForm.password" type="password" placeholder="密码" />
-
-        <div v-if="loginError" class="error">{{ loginError }}</div>
-
-        <button @click="submitLogin" :disabled="loginLoading">
+        <div v-if="drawerMode === 'login'" class="form">
+          <input v-model.trim="loginForm.username" placeholder="用户名称" />
+          <input v-model="loginForm.password" type="password" placeholder="密码" />
+          <div v-if="loginError" class="error">{{ loginError }}</div>
+          <button @click="submitLogin" :disabled="loginLoading">
             {{ loginLoading ? '登录中...' : '登录' }}
-        </button>
+          </button>
+          <button class="link" @click="drawerMode = 'register'">去注册</button>
+        </div>
 
-        <button class="link" @click="drawerMode = 'register'">
-            去注册
-        </button>
-      </div>
-
-      <!-- 注册表单 -->
-      <div v-else class="form">
-        <input v-model="registerForm.username" placeholder="账号" />
-        <input v-model="registerForm.password" type="password" placeholder="密码" />
-        <input v-model="registerForm.confirmPassword" type="password" placeholder="确认密码" />
-
-        <div v-if="registerError" class="error">{{ registerError }}</div>
-
-        <button @click="submitRegister" :disabled="registerLoading">
+        <div v-else class="form">
+          <input v-model.trim="registerForm.username" placeholder="用户名称" />
+          <input v-model.trim="registerForm.organization_nickname" placeholder="组织昵称（选填）" />
+          <select v-model="registerForm.organization_type">
+            <option value="个人">个人</option>
+            <option value="团队">团队</option>
+          </select>
+          <input v-model="registerForm.password" type="password" placeholder="密码" />
+          <input v-model="registerForm.confirmPassword" type="password" placeholder="确认密码" />
+          <div v-if="registerError" class="error">{{ registerError }}</div>
+          <button @click="submitRegister" :disabled="registerLoading">
             {{ registerLoading ? '注册中...' : '注册' }}
-        </button>
-
-        <button class="link" @click="drawerMode = 'login'">
-            返回登录
-        </button>
+          </button>
+          <button class="link" @click="drawerMode = 'login'">返回登录</button>
+        </div>
       </div>
     </div>
   </div>
-</div>
-
-
-
-
 </template>
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import { loginApi, registerApi } from '@/api/auth'
+import { loginApi, logoutApi, registerApi } from '@/api/auth'
 import { useUserStore } from '@/stores/user'
 import { useRouter } from 'vue-router'
 
 const userStore = useUserStore()
-const logout = () => {
-  userStore.logout()
-}
 
 const router = useRouter()
+
+const logout = async () => {
+  try {
+    await logoutApi()
+  } catch {
+    // 忽略服务端退出失败，仍清理前端状态
+  } finally {
+    userStore.logout()
+    router.push('/')
+  }
+}
 
 const goCreate = () => {
   if (!userStore.isLogin) {
@@ -135,7 +107,6 @@ const goCreate = () => {
     drawerVisible.value = true
     return
   }
-
   router.push('/app/guide')
 }
 
@@ -154,21 +125,22 @@ const openRegister = () => {
 
 const closeDrawer = () => {
   drawerVisible.value = false
+  loginError.value = ''
+  registerError.value = ''
 }
 
 // ===== 登录表单 =====
-const loginForm = ref({
-  username: '',
-  password: ''
-})
+const loginForm = ref({ username: '', password: '' })
 const loginError = ref('')
 const loginLoading = ref(false)
 
 // ===== 注册表单 =====
 const registerForm = ref({
   username: '',
+  organization_nickname: '',
+  organization_type: '个人' as '个人' | '团队',
   password: '',
-  confirmPassword: ''
+  confirmPassword: '',
 })
 const registerError = ref('')
 const registerLoading = ref(false)
@@ -176,21 +148,17 @@ const registerLoading = ref(false)
 // 登录
 const submitLogin = async () => {
   loginError.value = ''
-  if (!loginForm.value.username.trim()) return loginError.value = '请输入账号'
-  if (!loginForm.value.password) return loginError.value = '请输入密码'
-
+  if (!loginForm.value.username) return (loginError.value = '请输入用户名称')
+  if (!loginForm.value.password) return (loginError.value = '请输入密码')
   if (loginLoading.value) return
+
   try {
     loginLoading.value = true
-    const res = await loginApi(loginForm.value)
-    
-    // 保存 token
-    localStorage.setItem('token', res.data.access_token)
-    
-    // 更新 store 用户信息
-    userStore.login(res.data.user, res.data.access_token)
+    const { data } = await loginApi(loginForm.value)
+    userStore.login(data.user, data.access_token)
 
     drawerVisible.value = false
+    router.push('/app/guide')
   } catch (e: any) {
     loginError.value = e?.response?.data?.detail || '登录失败'
   } finally {
@@ -201,27 +169,33 @@ const submitLogin = async () => {
 // 注册
 const submitRegister = async () => {
   registerError.value = ''
-  const { username, password, confirmPassword } = registerForm.value
-  if (!username.trim()) return registerError.value = '请输入账号'
-  if (!password) return registerError.value = '请输入密码'
-  if (password.length < 6) return registerError.value = '密码至少 6 位'
-  if (password !== confirmPassword) return registerError.value = '两次密码不一致'
-
+  const { username, password, confirmPassword, organization_nickname, organization_type } =
+    registerForm.value
+  if (!username) return (registerError.value = '请输入用户名称')
+  if (!password) return (registerError.value = '请输入密码')
+  if (password.length < 6) return (registerError.value = '密码至少 6 位')
+  if (password !== confirmPassword) return (registerError.value = '两次密码不一致')
   if (registerLoading.value) return
+
   try {
     registerLoading.value = true
-    await registerApi({ username, password })
-    drawerMode.value = 'login' // 注册成功跳转登录
+    await registerApi({
+      username,
+      password,
+      organization_nickname: organization_nickname || undefined,
+      organization_type,
+    })
+    drawerMode.value = 'login'
+    loginForm.value.username = username
+    registerForm.value.password = ''
+    registerForm.value.confirmPassword = ''
   } catch (e: any) {
     registerError.value = e?.response?.data?.detail || '注册失败'
   } finally {
     registerLoading.value = false
   }
 }
-
-
 </script>
-
 
 <style scoped>
 .home {
@@ -232,13 +206,12 @@ const submitRegister = async () => {
   overflow: hidden;
 }
 
-
 /* 顶部栏 */
 .header {
   height: 64px;
   backdrop-filter: blur(12px);
   background: rgba(255, 255, 255, 0.6);
-  border-bottom: 1px solid rgba(0,0,0,0.05);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -248,189 +221,160 @@ const submitRegister = async () => {
 .logo img {
   height: 36px;
 }
-
+.auth-actions {
+  display: flex;
+  align-items: center;
+}
 .auth-actions a {
   color: #555;
   text-decoration: none;
   margin: 0 8px;
   transition: all 0.2s ease;
+  cursor: pointer;
 }
-
 .auth-actions a:hover {
   color: #7a6efc;
 }
-
+.user-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.user-chip__avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  object-fit: cover;
+}
+.username {
+  font-weight: 600;
+  color: #111827;
+}
 .divider {
-  margin: 0 4px;
+  color: #9ca3af;
 }
-
-/* 主体 */
 .main {
-  height: calc(100vh - 64px);
-  display: grid;
-  grid-template-columns: 1.2fr 1.8fr;
-  padding: 48px 80px;
-  gap: 80px;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 64px;
 }
-
-/* 左侧 */
 .left {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  width: 30%;
 }
-
-.create-btn {
-  padding: 16px 32px;
-  font-size: 16px;
-  border-radius: 24px;
-  border: none;
-  cursor: pointer;
-  background: #fff;
-}
-
-/* 右侧 */
 .right {
-  height: 100%;
+  width: 60%;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  overflow: hidden;
+  gap: 28px;
 }
-
-
+.create-btn {
+  padding: 14px 28px;
+  border: none;
+  border-radius: 14px;
+  background: #4f46e5;
+  color: #fff;
+  font-size: 18px;
+  cursor: pointer;
+  box-shadow: 0 16px 30px rgba(79, 70, 229, 0.2);
+}
 .home-image {
-  max-width: 90%;
-  max-height: 55%;
-  object-fit: contain;
+  width: min(420px, 50%);
   border-radius: 24px;
-  box-shadow: 0 20px 60px rgba(0,0,0,0.08);
+  object-fit: cover;
 }
-
 .intro {
-  margin-top: 16px;
-  text-align: center;
-  color: #333;
-  max-width: 480px;
-  font-size: 14px;
-  line-height: 1.6;
+  max-width: 420px;
 }
-
-
-/* 遮罩 */
+.intro h2 {
+  font-size: 36px;
+  margin-bottom: 12px;
+}
+.intro p {
+  color: #4b5563;
+  line-height: 1.8;
+}
 .mask {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.35);
-  z-index: 10;
+  background: rgba(15, 23, 42, 0.35);
+  z-index: 99;
 }
-
-/* 抽屉 */
 .drawer {
   position: fixed;
   top: 0;
-  right: 0;
-  width: 50vw;
+  right: -440px;
+  width: min(440px, 100vw);
   height: 100vh;
   background: #fff;
-  z-index: 11;
-  transform: translateX(100%);
-  transition: transform 0.3s ease;
-  padding: 32px;
-  box-sizing: border-box;
+  transition: right 0.28s ease;
+  z-index: 100;
+  box-shadow: -10px 0 40px rgba(15, 23, 42, 0.16);
 }
-
 .drawer.open {
-  transform: translateX(0);
+  right: 0;
 }
-
-/* 抽屉内部包裹器，用于上下居中 */
 .form-wrapper {
-  height: 100%;                /* 占满抽屉高度 */
+  height: 100%;
   display: flex;
-  align-items: center;         /* 垂直居中 */
-  justify-content: center;     /* 水平居中 */
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
 }
-
-/* 表单容器 */
 .form-container {
-  width: 50%;                  /* 占抽屉一半宽度 */
-  padding: 32px;
-  border: 1px solid #ddd;
-  border-radius: 12px;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.1);
-  background: #fff;
-
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  align-items: center;         /* 表单内容水平居中 */
+  width: 100%;
 }
-
-
-/* 表单标题 */
 .form-title {
-  font-size: 24px;
-  font-weight: 600;
-  color: #333;
-  margin-bottom: 16px;
+  margin-bottom: 20px;
+  font-size: 28px;
 }
-
-/* 表单 */
 .form {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  width: 100%;              /* 充满容器宽度 */
+  gap: 12px;
 }
-
-/* 输入框 */
-.form input {
-  padding: 12px;
-  font-size: 14px;
-  border: 1px solid #ccc;
-  border-radius: 6px;
-  outline: none;
+.form input,
+.form select {
   width: 100%;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid #d1d5db;
 }
-
-.form input:focus {
-  border-color: #7a6efc;
-  box-shadow: 0 0 0 2px rgba(122, 110, 252, 0.2);
-}
-
-/* 按钮 */
 .form button {
-  padding: 12px;
+  padding: 12px 16px;
   border: none;
-  cursor: pointer;
-  border-radius: 6px;
-  background: #7a6efc;
+  border-radius: 12px;
+  background: #4f46e5;
   color: #fff;
-  font-weight: 500;
-}
-
-.form button:disabled {
-  background: #aaa;
-  cursor: not-allowed;
-}
-
-/* 链接按钮 */
-.form .link {
-  background: none;
-  color: #666;
-  text-align: center;
+  font-weight: 600;
   cursor: pointer;
 }
-
-/* 错误提示 */
-.error {
-  color: #f56c6c;
-  font-size: 12px;
+.form .link {
+  background: transparent;
+  color: #4f46e5;
 }
-
- 
-
-
+.error {
+  color: #dc2626;
+  font-size: 14px;
+}
+@media (max-width: 960px) {
+  .main {
+    flex-direction: column;
+    justify-content: center;
+    padding: 32px;
+    gap: 32px;
+  }
+  .left,
+  .right {
+    width: 100%;
+  }
+  .right {
+    flex-direction: column;
+  }
+  .home-image {
+    width: 100%;
+    max-width: 460px;
+  }
+}
 </style>

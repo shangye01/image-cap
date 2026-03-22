@@ -393,7 +393,7 @@ import {
   uploadProjectFile,
   getProjectFileDownloadUrl,
   deleteProjectApi,
-  createAnnotationSession
+  createAnnotationSession,
 } from '@/api/projectStorage'
 import { useUserStore } from '@/stores/user'
 
@@ -528,7 +528,7 @@ const mapBackendFile = (backendFile) => ({
   id: backendFile.id,
   name: backendFile.filename,
   // ✅ 新增这一行：读取后端返回的数据库状态，默认为 pending
-  status: backendFile.status || 'pending', 
+  status: backendFile.status || 'pending',
   relativePath: '',
   type: backendFile.mime_type || '',
   size: backendFile.size_bytes || 0,
@@ -544,18 +544,16 @@ const mapBackendFile = (backendFile) => ({
 const loadProjects = async () => {
   try {
     const owner = userStore.user?.username || 'default'
-    const { data } = await listProjects(owner)
-    
+    const data = await listProjects(owner)
+
     const projectData = await Promise.all(
       (data || []).map(async (project) => {
         // 获取该项目下的所有文件
         const fileResp = await listProjectFiles(project.id)
-        
-        // ✅ 核心修改：将文件映射后，利用状态直接拆分归类到三个数组中
-        const allFiles = (fileResp.data || []).map(mapBackendFile)
-        const pendingFiles = allFiles.filter(f => f.status === 'pending')
-        const labelingFiles = allFiles.filter(f => f.status === 'labeling')
-        const doneFiles = allFiles.filter(f => f.status === 'done')
+        const allFiles = (fileResp || []).map(mapBackendFile)
+        const pendingFiles = allFiles.filter((f) => f.status === 'pending')
+        const labelingFiles = allFiles.filter((f) => f.status === 'labeling')
+        const doneFiles = allFiles.filter((f) => f.status === 'done')
 
         return {
           id: project.id,
@@ -582,19 +580,23 @@ const loadProjects = async () => {
 }
 
 const handleCreateProject = async (projectData) => {
+  console.log('CreateBoardCard 返回的 projectData =>', projectData)
   const owner_id = userStore.user?.username || 'default'
+
   try {
-    const { data } = await createProject({
+    const data = await createProject({
       name: projectData.projectName,
       description: projectData.remark || '',
       owner_id,
     })
 
-    const pendingFolder = projectData.folders.find((folder) => folder.name === '待标注')
-    const pendingFiles = pendingFolder?.files || []
+    // 兼容 folders 不存在的情况
+    const folders = Array.isArray(projectData.folders) ? projectData.folders : []
+    const pendingFolder = folders.find((folder) => folder.name === '待标注')
+    const pendingFiles = Array.isArray(pendingFolder?.files) ? pendingFolder.files : []
 
     for (const item of pendingFiles) {
-      if (item.file) {
+      if (item?.file) {
         await uploadProjectFile(data.id, item.file, owner_id)
       }
     }
@@ -602,7 +604,7 @@ const handleCreateProject = async (projectData) => {
     await loadProjects()
   } catch (error) {
     console.error('创建项目失败：', error)
-    window.alert(error?.response?.data?.detail || '创建项目失败')
+    window.alert(error?.response?.data?.detail || error.message || '创建项目失败')
   }
 }
 
@@ -758,8 +760,8 @@ const confirmWorkDialog = async () => {
     const targetFiles = selectedFiles.value.length
       ? selectedFiles.value
       : currentWorkFile.value
-        ? [currentWorkFile.value]
-        : []
+      ? [currentWorkFile.value]
+      : []
 
     if (!targetFiles.length) {
       window.alert('请至少选择一张图片')
@@ -771,7 +773,7 @@ const confirmWorkDialog = async () => {
       workForm.mode === 'keyword' ? workSelectedTags.value.map((tag) => tag.name) : []
 
     // 调用后端创建标注会话（包含自动预标注）
-    const { data } = await createAnnotationSession(currentProject.value.id, {
+    const data = await createAnnotationSession(currentProject.value.id, {
       file_ids: targetFiles.map((file) => file.id),
       use_keywords: workForm.mode === 'keyword',
       keywords,
@@ -782,21 +784,18 @@ const confirmWorkDialog = async () => {
       // 保存所有任务的预标注数据
       data.tasks.forEach((task) => {
         if (task.annotations && task.annotations.length > 0) {
-          localStorage.setItem(
-            `pre_annotations_${task.task_id}`,
-            JSON.stringify(task.annotations)
-          )
+          localStorage.setItem(`pre_annotations_${task.task_id}`, JSON.stringify(task.annotations))
           console.log(`任务 ${task.task_id} 预标注已保存:`, task.annotations.length, '个框')
         }
       })
-      
+
       // 同时保存当前项目的关键词设置（供标注页面使用）
       localStorage.setItem(
         `project_keywords_${data.project_id}`,
         JSON.stringify({
           use_keywords: data.use_keywords,
           keywords: data.keywords,
-          mode: workForm.mode
+          mode: workForm.mode,
         })
       )
     }
@@ -809,7 +808,7 @@ const confirmWorkDialog = async () => {
       path: '/app/annotate',
       query: {
         projectId: data.project_id,
-        task: data.first_task.task_id,  // 格式：项目名_001
+        task: data.first_task.task_id, // 格式：项目名_001
         sourceMode: workForm.mode,
         batchSize: String(data.tasks.length),
         projectName: data.project_name,

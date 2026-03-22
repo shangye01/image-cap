@@ -19,7 +19,7 @@ class Project(Base):
     owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
-    files: Mapped[list[ProjectFile]] = relationship(
+    files: Mapped[list["ProjectFile"]] = relationship(
         "ProjectFile", back_populates="project", cascade="all, delete-orphan"
     )
 
@@ -36,6 +36,7 @@ class ProjectFile(Base):
     mime_type: Mapped[str] = mapped_column(String(100), nullable=False)
     size_bytes: Mapped[int] = mapped_column(nullable=False)
     uploaded_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
-    project: Mapped[Project] = relationship("Project", back_populates="files")
+    project: Mapped["Project"] = relationship("Project", back_populates="files")

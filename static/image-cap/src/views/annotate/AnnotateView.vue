@@ -103,13 +103,13 @@
           >
             {{ taskLoading ? '⏳ 获取中...' : '🎯 获取新任务' }}
           </button>
-<button
-  @click="handleCustomSubmit()"
-  class="btn btn-success"
-  :disabled="!store.currentTaskId || submitLoading || store.annotations.length === 0"
->
-  {{ submitLoading ? '⏳ 提交中...' : '✅ 提交标注' }}
-</button>
+          <button
+            @click="handleCustomSubmit()"
+            class="btn btn-success"
+            :disabled="!store.currentTaskId || submitLoading || store.annotations.length === 0"
+          >
+            {{ submitLoading ? '⏳ 提交中...' : '✅ 提交标注' }}
+          </button>
 
           <button
             @click="saveDraftHandler()"
@@ -401,7 +401,7 @@
         <button
           @click.stop="handleDeleteAnnotation"
           class="btn btn-danger"
-          :disabled="!selectedId || dialogLock.value"
+          :disabled="!selectedId || dialogLock"
         >
           🗑️ 删除选中标注
         </button>
@@ -587,10 +587,12 @@ import { useAnnotationApi } from '@/composables/useAnnotationApi'
 import { confirmDialog, promptDialog, alertDialog } from '@/composables/useDialog'
 import { supabase } from '@/supabase'
 import { useAutoSave } from '@/supabase'
+import request from '@/api/request'
 
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 const route = useRoute()
+const router = useRouter()
 const store = useAnnotationStore()
 
 const routeProjectId = computed(() =>
@@ -898,37 +900,37 @@ const loadNextTaskWithCleanup = async () => {
 }
 // 解析 项目名_001 并返回下一个任务ID (项目名_002)
 const getNextTaskId = (currentTaskId) => {
-  if (!currentTaskId) return null;
-  const match = currentTaskId.match(/^(.*)_(\d{3})$/);
+  if (!currentTaskId) return null
+  const match = currentTaskId.match(/^(.*)_(\d{3})$/)
   if (match) {
-    const projectName = match[1];
-    const currentIndex = parseInt(match[2], 10);
-    const nextIndex = String(currentIndex + 1).padStart(3, '0');
-    return `${projectName}_${nextIndex}`;
+    const projectName = match[1]
+    const currentIndex = parseInt(match[2], 10)
+    const nextIndex = String(currentIndex + 1).padStart(3, '0')
+    return `${projectName}_${nextIndex}`
   }
-  return null;
-};
+  return null
+}
 const handleCustomSubmit = async () => {
-  if (!store.currentTaskId || store.annotations.length === 0) return;
+  if (!store.currentTaskId || store.annotations.length === 0) return
 
   try {
     // 1. 调用原有的提交逻辑（保存标注坐标到数据库）
     // 假设 submitAnnotations 返回 true 代表成功
-    await submitAnnotations(); 
+    await submitAnnotations()
 
     // 2. 调用后端接口：将图片移动到“已标注”文件夹
     await fetch(`/api/project/${routeProjectId.value}/move-to-done`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        taskId: store.currentTaskId
-      })
-    });
+        taskId: store.currentTaskId,
+      }),
+    })
 
-    taskSuccess.value = `✅ 任务 ${store.currentTaskId} 提交成功，已移入已标注文件夹`;
+    taskSuccess.value = `✅ 任务 ${store.currentTaskId} 提交成功，已移入已标注文件夹`
 
     // 3. 计算下一个任务的 ID (例如从 Project_001 -> Project_002)
-    const nextTaskId = getNextTaskId(store.currentTaskId);
+    const nextTaskId = getNextTaskId(store.currentTaskId)
 
     // 4. 尝试加载下一张图片
     if (nextTaskId) {
@@ -938,27 +940,27 @@ const handleCustomSubmit = async () => {
           path: '/app/annotate',
           query: {
             ...route.query,
-            task: nextTaskId
-          }
-        });
-        
+            task: nextTaskId,
+          },
+        })
+
         // 调用你现有的加载任务逻辑
-        fetchProjectTask(routeProjectId.value, nextTaskId).then(loaded => {
+        fetchProjectTask(routeProjectId.value, nextTaskId).then((loaded) => {
           if (!loaded) {
-            window.alert('该批次已全部标注完成！');
-            router.push('/app/project'); // 返回项目列表
+            window.alert('该批次已全部标注完成！')
+            router.push('/app/project') // 返回项目列表
           } else {
             // 加载下一张的预标注
-            loadPreAnnotations(nextTaskId);
+            loadPreAnnotations(nextTaskId)
           }
-        });
-      }, 1000);
+        })
+      }, 1000)
     }
   } catch (error) {
-    console.error('提交失败:', error);
-    taskError.value = '提交失败，请重试';
+    console.error('提交失败:', error)
+    taskError.value = '提交失败，请重试'
   }
-};
+}
 
 // 计算当前实际缩放比例
 const currentScale = computed(() => {
@@ -1192,17 +1194,16 @@ const toggleSmartKeyword = (name) => {
 const removeSmartKeyword = (name) => toggleSmartKeyword(name)
 
 const executeSmartAnnotation = async () => {
- if (!imageObj.value || !store.currentTaskId) return
+  if (!imageObj.value || !store.currentTaskId) return
   smartAnnotateVisible.value = false
   predicting.value = true
 
   try {
     const response = await fetch(`/api/tasks/${store.currentTaskId}/predict`, {
       method: 'POST',
-       headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        keywords:
-          smartAnnotateMode.value === 'keyword' ? [...selectedSmartKeywords.value] : [],
+        keywords: smartAnnotateMode.value === 'keyword' ? [...selectedSmartKeywords.value] : [],
       }),
     })
 
@@ -1440,7 +1441,7 @@ const saveLabelToBackend = async (name, color) => {
     if (response.status === 409 || errorData.detail?.includes('已存在')) {
       console.log(`📝 标签 ${name} 已存在，更新颜色为 ${color}`)
 
-      const updateRes = await fetch('/api/labels/${encodeURIComponent(name)}', {
+      const updateRes = await fetch(`/api/labels/${encodeURIComponent(name)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ color: color }),
@@ -1680,7 +1681,7 @@ const saveLabelEdit = async (oldName) => {
       const errorData = await createRes.json()
       if (errorData.detail?.includes('已存在')) {
         console.log('标签已存在，更新颜色:', color)
-        await fetch('/api/labels/${encodeURIComponent(name)}', {
+        await fetch(`/api/labels/${encodeURIComponent(name)}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ color: color }),
@@ -1691,7 +1692,7 @@ const saveLabelEdit = async (oldName) => {
     }
 
     try {
-      await fetch('/api/labels/${encodeURIComponent(name)}', {
+      await fetch(`/api/labels/${encodeURIComponent(name)}`, {
         method: 'DELETE',
       })
     } catch (e) {
@@ -1782,7 +1783,7 @@ const removeLabel = async (labelName) => {
 
   if (result.confirmed) {
     try {
-      const response = await fetch('/api/labels/${encodeURIComponent(name)}', {
+      const response = await fetch(`/api/labels/${encodeURIComponent(name)}`, {
         method: 'DELETE',
       })
 
@@ -1967,14 +1968,14 @@ const loadImageFromSource = async (imageUrl) => {
 // 从 localStorage 加载智能预标注数据
 const loadPreAnnotations = (taskId) => {
   if (!taskId) return false
-  
+
   const preData = localStorage.getItem(`pre_annotations_${taskId}`)
   if (preData) {
     try {
       const annotations = JSON.parse(preData)
       if (annotations && annotations.length > 0) {
         // 确保每个标注都有颜色，并同步到标签库
-        annotations.forEach(ann => {
+        annotations.forEach((ann) => {
           if (!ann.color) {
             ann.color = labelColorMap.get(ann.label) || ensureLabelColor(ann.label)
           }
@@ -1985,19 +1986,19 @@ const loadPreAnnotations = (taskId) => {
             saveLabelToBackend(ann.label, ann.color).catch(console.error)
           }
         })
-        
+
         // 应用到画布
         store.setAnnotations(annotations)
         syncLabelsFromMap()
         dragTick.value++
-        
+
         // 自动切换到第一个标注的标签
         const firstAnn = annotations[0]
         if (firstAnn) {
           currentLabel.value = firstAnn.label
           selectedColor.value = firstAnn.color || labelColorMap.get(firstAnn.label)
         }
-        
+
         console.log(`✅ 已加载 ${annotations.length} 个智能预标注框`)
         return true
       }
@@ -2014,7 +2015,10 @@ const loadProjectSettings = (projectId) => {
   if (settings) {
     try {
       const data = JSON.parse(settings)
-      console.log('📋 项目标注模式:', data.use_keywords ? `关键词模式 (${data.keywords.join(', ')})` : '非关键词模式')
+      console.log(
+        '📋 项目标注模式:',
+        data.use_keywords ? `关键词模式 (${data.keywords.join(', ')})` : '非关键词模式'
+      )
       // 可以在这里设置提示信息
       if (data.use_keywords && data.keywords.length > 0) {
         taskSuccess.value = `🎯 当前项目使用关键词: ${data.keywords.join(', ')}`
@@ -2053,27 +2057,29 @@ onMounted(async () => {
   // ========== 修改1：处理从项目页面跳转过来的任务 ==========
   if (routeProjectId.value && routeTaskId.value) {
     console.log(`📥 加载项目任务: ${routeProjectId.value}, 任务ID: ${routeTaskId.value}`)
-    
+
     const loaded = await fetchProjectTask(routeProjectId.value, routeTaskId.value)
-    
+
     if (!loaded) {
       loadTestImage()
     } else {
       // 加载项目设置（关键词模式提示）
       loadProjectSettings(routeProjectId.value)
-      
+
       // 加载智能预标注数据（关键修改）
       const hasPreAnnotations = loadPreAnnotations(routeTaskId.value)
-      
+
       if (routeBatchSize.value > 0) {
-        taskSuccess.value = `✅ 已进入批量标注模式，共 ${routeBatchSize.value} 张图片，当前: ${routeTaskId.value}${hasPreAnnotations ? '，已加载AI预标注' : ''}`
+        taskSuccess.value = `✅ 已进入批量标注模式，共 ${routeBatchSize.value} 张图片，当前: ${
+          routeTaskId.value
+        }${hasPreAnnotations ? '，已加载AI预标注' : ''}`
         setTimeout(() => (taskSuccess.value = ''), 3000)
       } else if (hasPreAnnotations) {
         taskSuccess.value = `✅ 已加载任务 ${routeTaskId.value}，智能预标注已应用`
         setTimeout(() => (taskSuccess.value = ''), 2500)
       }
     }
-  } 
+  }
   // ========== 处理从外部传入的图片 ==========
   else if (typeof route.query.sourceImage === 'string' && route.query.sourceImage) {
     try {
@@ -2087,7 +2093,7 @@ onMounted(async () => {
       taskError.value = '项目图片加载失败，已切换到默认测试图片'
       loadTestImage()
     }
-  } 
+  }
   // ========== 处理从历史记录恢复的任务 ==========
   else {
     const urlParams = new URLSearchParams(window.location.search)
@@ -2103,13 +2109,13 @@ onMounted(async () => {
     if (taskId) {
       console.log('🔍 尝试恢复任务:', taskId)
       const restored = await restoreTask(taskId)
-      
+
       if (restored && store.taskInfo?.imageUrl) {
         console.log('✅ 任务恢复成功')
-        
+
         // 尝试加载该任务的预标注（如果有）
         loadPreAnnotations(taskId)
-        
+
         syncLabelsFromMap()
         dragTick.value++
       } else {
@@ -2133,7 +2139,7 @@ onMounted(async () => {
 
   // 键盘和鼠标事件监听...
   // （保持原有事件监听代码不变）
-  
+
   const globalMouseUpHandler = (e) => {
     if (dialogLock.value) return
     if (e.target?.closest('.dialog-container')) return

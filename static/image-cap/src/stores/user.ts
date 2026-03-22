@@ -1,24 +1,50 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { computed, ref } from 'vue'
+import type { UserProfile } from '@/api/auth'
 
-export const useUserStore = defineStore('user', () => {
-  const user = ref<{ id: number; username: string } | null>(null)
-  const token = ref(localStorage.getItem('token') || '')
+const USER_STORAGE_KEY = 'auth_user'
+const TOKEN_STORAGE_KEY = 'token'
 
-  const isLogin = computed(() => !!token.value)
+function readStoredUser(): UserProfile | null {
+  const raw = localStorage.getItem(USER_STORAGE_KEY)
+  if (!raw) return null
 
-  function login(userInfo: { id: number; username: string }, tokenStr: string) {
-  user.value = userInfo
-  token.value = tokenStr
-  localStorage.setItem('token', tokenStr) // 同步保存 token
+  try {
+    return JSON.parse(raw) as UserProfile
+  } catch {
+    localStorage.removeItem(USER_STORAGE_KEY)
+    return null
+  }
 }
 
+export const useUserStore = defineStore('user', () => {
+  const user = ref<UserProfile | null>(readStoredUser())
+  const token = ref(localStorage.getItem(TOKEN_STORAGE_KEY) || '')
+
+  const isLogin = computed(() => Boolean(token.value && user.value))
+
+  function login(userInfo: UserProfile, tokenStr: string) {
+    user.value = userInfo
+    token.value = tokenStr
+    localStorage.setItem(TOKEN_STORAGE_KEY, tokenStr)
+    localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(userInfo))
+  }
+
+  function setUser(userInfo: UserProfile | null) {
+    user.value = userInfo
+    if (userInfo) {
+      localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(userInfo))
+    } else {
+      localStorage.removeItem(USER_STORAGE_KEY)
+    }
+  }
 
   function logout() {
     user.value = null
     token.value = ''
-    localStorage.removeItem('token')
+    localStorage.removeItem(TOKEN_STORAGE_KEY)
+    localStorage.removeItem(USER_STORAGE_KEY)
   }
 
-  return { user, token, isLogin, login, logout }
+   return { user, token, isLogin, login, setUser, logout }
 })
