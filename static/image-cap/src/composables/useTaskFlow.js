@@ -20,6 +20,7 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
         store.setCurrentTask({
           id: task.task_id || task.id,
           projectId: task.project_id || task.projectId || null,
+          projectName: task.project_name || task.projectName || '未命名项目',
           imageUrl: task.image_url || task.imageUrl,
           imageStoragePath: task.storage_path || task.image_storage_path || task.imageStoragePath,
           yoloVersion: task.yolo_version || task.yoloVersion,
@@ -97,6 +98,10 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
       const data = await request.get(`/tasks/${taskId}`)
 
       if (data.task) {
+        if (!data.task.project_name && data.task.project_id) {
+          data.task.project_name = data.task.project_id
+        }
+
         await loadTaskImage(data.task)
 
         if (data.annotations && data.annotations.length > 0) {

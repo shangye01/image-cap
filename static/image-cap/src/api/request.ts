@@ -6,6 +6,7 @@ const instance = axios.create({
   timeout: 10000,
 })
 
+
 // 请求拦截器
 instance.interceptors.request.use((config) => {
   const store = useUserStore()

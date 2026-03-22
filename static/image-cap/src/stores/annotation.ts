@@ -3,7 +3,7 @@ import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
 import { supabase } from '@/supabase'
 
-// ========== 类型定义保持不变 ==========
+// ========== 类型定义 ==========
 
 export interface Annotation {
   id?: string
@@ -20,6 +20,7 @@ export interface Annotation {
 export interface TaskInfo {
   id?: string
   projectId?: string
+  projectName?: string  // ✅ 新增：项目名称
   imageUrl?: string
   imageStoragePath?: string
   yoloVersion?: string
@@ -44,6 +45,7 @@ export const useAnnotationStore = defineStore('annotation', () => {
   // 任务相关
   const currentTaskId = ref<string | null>(null)
   const currentProjectId = ref<string | null>(null)
+  const currentProjectName = ref<string | null>(null)  // ✅ 新增：项目名称
   const taskStatus = ref<TaskStatus>('idle')
   const taskInfo = ref<TaskInfo>({})
   
@@ -55,7 +57,6 @@ export const useAnnotationStore = defineStore('annotation', () => {
   
   const generateId = (prefix = 'ann') => `${prefix}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
   
-  // ✅ 修复：使用 ReturnType 代替 NodeJS.Timeout
   let autoSaveTimer: ReturnType<typeof setTimeout> | null = null
   
   const debouncedAutoSave = () => {
@@ -107,9 +108,11 @@ export const useAnnotationStore = defineStore('annotation', () => {
       
       currentTaskId.value = taskId
       currentProjectId.value = task.project_id || null
+      currentProjectName.value = task.project_name || null  // ✅ 加载项目名
       taskInfo.value = {
         id: task.id,
         projectId: task.project_id,
+        projectName: task.project_name,  // ✅ 存储项目名
         imageUrl: task.image_url,
         imageStoragePath: task.image_storage_path,
         yoloVersion: task.yolo_version
@@ -198,7 +201,6 @@ export const useAnnotationStore = defineStore('annotation', () => {
     }
   }
   
-  // ✅ 修复：正确处理 Supabase RPC 返回类型
   const checkTrainingTrigger = async (): Promise<void> => {
     try {
       const { data, error } = await supabase
@@ -206,7 +208,6 @@ export const useAnnotationStore = defineStore('annotation', () => {
       
       if (error) throw error
       
-      // 类型断言为数组
       const result = data as unknown as { count: number }[] | null
       const readyCount = result?.[0]?.count || 0
       
@@ -226,7 +227,7 @@ export const useAnnotationStore = defineStore('annotation', () => {
     annotations.value.push({
       ...ann,
       id,
-      color: undefined // 明确移除color
+      color: undefined
     })
     debouncedAutoSave()
   }
@@ -238,30 +239,27 @@ export const useAnnotationStore = defineStore('annotation', () => {
     }
     debouncedAutoSave()
   }
-  
-// stores/annotation.ts 中的 updateAnnotation
-const updateAnnotation = (id: string, updates: Partial<Annotation>): void => {
-  const index = annotations.value.findIndex(ann => ann.id === id)
-  if (index !== -1) {
-    // 清理更新数据，移除 color（颜色应该从 labelColorMap 获取）
-    const cleanUpdates = { ...updates }
-    delete cleanUpdates.color
-    
-    // 确保数值是数字类型
-    if (cleanUpdates.x !== undefined) cleanUpdates.x = Number(cleanUpdates.x)
-    if (cleanUpdates.y !== undefined) cleanUpdates.y = Number(cleanUpdates.y)
-    if (cleanUpdates.width !== undefined) cleanUpdates.width = Number(cleanUpdates.width)
-    if (cleanUpdates.height !== undefined) cleanUpdates.height = Number(cleanUpdates.height)
-    
-    annotations.value[index] = {
-      ...annotations.value[index],
-      ...cleanUpdates
-    } as Annotation
-    
-    console.log('✅ 更新标注:', id, cleanUpdates)
-    debouncedAutoSave()
+
+  const updateAnnotation = (id: string, updates: Partial<Annotation>): void => {
+    const index = annotations.value.findIndex(ann => ann.id === id)
+    if (index !== -1) {
+      const cleanUpdates = { ...updates }
+      delete cleanUpdates.color
+      
+      if (cleanUpdates.x !== undefined) cleanUpdates.x = Number(cleanUpdates.x)
+      if (cleanUpdates.y !== undefined) cleanUpdates.y = Number(cleanUpdates.y)
+      if (cleanUpdates.width !== undefined) cleanUpdates.width = Number(cleanUpdates.width)
+      if (cleanUpdates.height !== undefined) cleanUpdates.height = Number(cleanUpdates.height)
+      
+      annotations.value[index] = {
+        ...annotations.value[index],
+        ...cleanUpdates
+      } as Annotation
+      
+      console.log('✅ 更新标注:', id, cleanUpdates)
+      debouncedAutoSave()
+    }
   }
-}
   
   const clearAnnotations = (): void => {
     annotations.value = []
@@ -280,16 +278,20 @@ const updateAnnotation = (id: string, updates: Partial<Annotation>): void => {
     debouncedAutoSave()
   }
   
+  // ✅ 修改：同时存储 projectName
   const setCurrentTask = (task: TaskInfo): void => {
     currentTaskId.value = task.id || null
     currentProjectId.value = task.projectId || null
+    currentProjectName.value = task.projectName || task.project_name || null  // ✅ 存储项目名
     taskInfo.value = task
     taskStatus.value = 'annotating'
   }
   
+  // ✅ 修改：同时清空 projectName
   const clearCurrentTask = (): void => {
     currentTaskId.value = null
     currentProjectId.value = null
+    currentProjectName.value = null  // ✅ 清空项目名
     taskInfo.value = {}
     taskStatus.value = 'idle'
     clearAnnotations()
@@ -324,6 +326,7 @@ const updateAnnotation = (id: string, updates: Partial<Annotation>): void => {
     selectedId,
     currentTaskId,
     currentProjectId,
+    currentProjectName,  // ✅ 新增：导出项目名
     taskStatus,
     taskInfo,
     userId,

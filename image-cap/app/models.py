@@ -1,7 +1,10 @@
 # backend/app/models.py
+import uuid
+from uuid import UUID
+
 from sqlalchemy import Column, Integer, String, DateTime, Text, Float, ForeignKey, Boolean, JSON
 from datetime import datetime
-from sqlalchemy.orm import declarative_base
+from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
 
@@ -12,6 +15,38 @@ class User(Base):
     id = Column(String, primary_key=True)
     username = Column(String, unique=True)
     role = Column(String)  # annotator, reviewer, admin
+
+
+class Project(Base):
+    """项目表"""
+    __tablename__ = "projects"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(120), nullable=False)
+    description = Column(Text, nullable=True)
+    owner_id = Column(String(64), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # 关联关系
+    files = relationship("ProjectFile", back_populates="project", cascade="all, delete-orphan")
+
+
+class ProjectFile(Base):
+    """项目文件表"""
+    __tablename__ = "project_files"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    filename = Column(String(255), nullable=False)
+    storage_path = Column(String(512), nullable=False)
+    mime_type = Column(String(100), nullable=False)
+    size_bytes = Column(Integer, nullable=False)
+    uploaded_by = Column(String(100), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    status = Column(String(20), default="pending")  # ✅ pending, labeling, done
+
+    # 关联关系
+    project = relationship("Project", back_populates="files")
 
 
 class Review(Base):
@@ -102,7 +137,7 @@ class ModelVersion(Base):
     training_duration_minutes = Column(Float, default=0.0)
 
     # 数据集信息
-    dataset_info = Column(JSON, default=dict)  # 包含类别分布、图像数量等
+    dataset_info = Column(JSON, default=dict)
 
 
 # 新增：训练任务队列表
@@ -136,3 +171,7 @@ class TrainingJob(Base):
 
     # 创建者
     created_by = Column(String, default='system')
+    # 调试：打印 ProjectFile 的所有列
+    print("=" * 50)
+    print("ProjectFile 列:", ProjectFile.__table__.columns.keys())
+    print("=" * 50)

@@ -940,3 +940,411 @@ html, body, #app {
 .smart-dialog-footer { margin-top: 24px; display: flex; justify-content: flex-end; gap: 12px; }
 
 
+.task-nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.task-counter {
+  font-size: 14px;
+  color: #666;
+}
+
+.folder-tag {
+  margin-left: 8px;
+  padding: 2px 6px;
+  background: #e0f2fe;
+  color: #0369a1;
+  font-size: 12px;
+  border-radius: 4px;
+}
+
+.nav-btn {
+  padding: 6px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: white;
+  cursor: pointer;
+  
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  
+  &:hover:not(:disabled) {
+    background: #f3f4f6;
+  }
+}
+/* ========== 任务导航器样式 ========== */
+
+.task-navigator {
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+
+.navigator-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.task-counter {
+  font-size: 14px;
+  font-weight: 600;
+  color: #0369a1;
+}
+
+.task-filename {
+  font-size: 12px;
+  color: #6b7280;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.navigator-buttons {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.navigator-buttons .btn {
+  flex: 1;
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.navigator-progress {
+  width: 100%;
+}
+
+.progress-bar {
+  height: 6px;
+  background: #e5e7eb;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #3b82f6, #06b6d4);
+  transition: width 0.3s ease;
+}
+
+/* ========== 按钮样式补充 ========== */
+
+.btn-small {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+/* 禁用状态 */
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* 返回按钮 */
+.btn-secondary {
+  background: #f3f4f6;
+  color: #374151;
+  border: 1px solid #d1d5db;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: #e5e7eb;
+}
+
+/* 对话框样式 */
+.dialog-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(15, 23, 42, 0.72);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  box-sizing: border-box;
+}
+
+.dialog-panel {
+  width: min(420px, 92vw);
+  background: #fff;
+  border-radius: 18px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.24);
+  padding: 22px;
+  box-sizing: border-box;
+}
+
+.dialog-panel.work-dialog-panel {
+  width: min(840px, 96vw);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.work-dialog-header {
+  padding: 22px 22px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.work-dialog-close {
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  font-size: 26px;
+  line-height: 1;
+  color: #999;
+  cursor: pointer;
+  transition: background-color 0.2s ease, color 0.2s ease;
+  flex-shrink: 0;
+}
+
+.work-dialog-close:hover {
+  background: #f3f4f6;
+  color: #666;
+}
+
+.dialog-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: #111827;
+}
+
+.dialog-body {
+  margin-top: 16px;
+}
+
+.work-dialog-body {
+  padding: 18px 22px 0;
+  overflow-y: auto;
+}
+
+.work-file-summary {
+  margin-bottom: 16px;
+  font-size: 14px;
+  color: #6b7280;
+  word-break: break-all;
+}
+
+.mode-row {
+  display: flex;
+  align-items: center;
+  gap: 48px;
+  margin: 8px 0 18px;
+  flex-wrap: wrap;
+}
+
+.radio-item {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.radio-dot {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid #a6a6a6;
+  margin-right: 10px;
+  box-sizing: border-box;
+  position: relative;
+  flex-shrink: 0;
+  transition: border-color 0.2s ease, transform 0.2s ease;
+}
+
+.radio-dot.active {
+  border-color: #3c8596;
+}
+
+.radio-dot.active::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  background: #3c8596;
+}
+
+.radio-item:hover .radio-dot {
+  transform: scale(1.05);
+}
+
+.radio-text {
+  font-size: 15px;
+  color: #737373;
+}
+
+.radio-text.strong {
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.tag-panel {
+  background: #fafafa;
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.selected-title {
+  font-size: 15px;
+  color: #2b2f36;
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+
+.selected-box {
+  min-height: 76px;
+  border: 2px solid #b8b8b8;
+  border-radius: 14px;
+  background: #fff;
+  padding: 14px;
+  box-sizing: border-box;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.scene-block {
+  padding-top: 18px;
+  margin-top: 18px;
+  border-top: 1px solid #dddddd;
+}
+
+.scene-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #2b2f36;
+  margin-bottom: 14px;
+}
+
+.scene-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.tag-chip {
+  position: relative;
+  border: none;
+  border-radius: 14px;
+  padding: 10px 14px;
+  font-size: 14px;
+  color: #2d3748;
+  cursor: pointer;
+  line-height: 1;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
+}
+
+.tag-chip:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.08);
+  filter: brightness(1.02);
+}
+
+.tag-chip.selected {
+  padding-right: 32px;
+}
+
+.scene-chip.active {
+  box-shadow: 0 0 0 2px rgba(88, 121, 91, 0.16);
+}
+
+.tag-remove {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid #95a47b;
+  background: #dce8cb;
+  color: #7d8e68;
+  font-size: 18px;
+  line-height: 16px;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tag-remove.small {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+}
+
+.empty-text {
+  font-size: 13px;
+  color: #9aa1a9;
+}
+
+.dialog-footer {
+  margin-top: 18px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.work-dialog-panel .dialog-footer {
+  margin-top: 0;
+  padding: 20px 32px 28px;
+  justify-content: flex-end;
+}
+
+.dialog-btn {
+  padding: 9px 16px;
+  font-size: 14px;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: transform 0.18s ease, filter 0.18s ease, box-shadow 0.18s ease;
+}
+
+.dialog-btn:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.02);
+}
+
+.dialog-btn.secondary {
+  background: #eef2f7;
+  color: #374151;
+}
+
+.dialog-btn.primary {
+  background: linear-gradient(135deg, #43c7db, #2faec6);
+  color: #fff;
+}
+
+.dialog-btn:disabled {
+  background: #9ca3af;
+  cursor: not-allowed;
+  transform: none;
+  filter: none;
+}
+
+/* 过渡动画 */
+.preview-fade-enter-active,
+.preview-fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.preview-fade-enter-from,
+.preview-fade-leave-to {
+  opacity: 0;
+}

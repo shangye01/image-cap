@@ -53,7 +53,6 @@
             {{ trainingMessage.text }}
           </div>
 
-          <!-- 模型列表 -->
           <div v-if="trainingStatus.local_models?.length" class="model-list">
             <h4>可用模型</h4>
             <div
@@ -63,18 +62,57 @@
               @click="switchModel(model)"
             >
               <span class="model-name">{{ model.name }}</span>
-              <span v-if="model.name === trainingStatus.current_model" class="current-badge"
-                >当前</span
-              >
+              <span v-if="model.name === trainingStatus.current_model" class="current-badge">
+                当前
+              </span>
             </div>
           </div>
         </div>
       </section>
+
       <section class="tool-section task-section">
         <div class="section-header">
           <h3 class="section-title">🎯 任务管理</h3>
         </div>
         <div class="section-content">
+          <div v-if="totalTasks > 0" class="task-navigator">
+            <div class="navigator-header">
+              <span class="task-counter">任务进度: {{ taskNavigatorText }}</span>
+              <span v-if="taskList[currentTaskIndex]?.filename" class="task-filename">
+                {{ taskList[currentTaskIndex].filename }}
+              </span>
+            </div>
+
+            <div class="navigator-buttons">
+              <button
+                @click="goToPrevTask"
+                class="btn btn-secondary btn-small"
+                :disabled="!canGoPrev || submitLoading"
+                title="上一个任务 (Alt+←)"
+              >
+                ⬅️ 上一个
+              </button>
+
+              <button
+                @click="goToNextTask"
+                class="btn btn-secondary btn-small"
+                :disabled="!canGoNext || submitLoading"
+                title="下一个任务 (Alt+→)"
+              >
+                下一个 ➡️
+              </button>
+            </div>
+
+            <div class="navigator-progress">
+              <div class="progress-bar">
+                <div
+                  class="progress-fill"
+                  :style="{ width: `${((currentTaskIndex + 1) / totalTasks) * 100}%` }"
+                ></div>
+              </div>
+            </div>
+          </div>
+
           <div v-if="store.currentTaskId" class="task-info">
             <div class="task-item">
               <span class="task-label">任务ID:</span>
@@ -82,33 +120,46 @@
             </div>
             <div class="task-item">
               <span class="task-label">项目:</span>
-              <span class="task-value">{{ store.currentProjectId || '未指定' }}</span>
+              <span class="task-value">
+                {{
+                  store.currentProjectName || route.query.projectName || routeProjectId || '未指定'
+                }}
+              </span>
             </div>
             <div class="task-item">
               <span class="task-label">状态:</span>
-              <span class="task-value" style="color: #52c41a">标注中</span>
+              <span
+                class="task-value"
+                :style="{ color: getStatusColor(taskList[currentTaskIndex]?.status) }"
+              >
+                {{ getStatusText(taskList[currentTaskIndex]?.status) }}
+              </span>
             </div>
           </div>
+
           <div v-else class="task-empty">
             <div class="empty-icon">📋</div>
             <p>暂无任务</p>
           </div>
+
           <div v-if="taskError" class="message error">⚠️ {{ taskError }}</div>
           <div v-if="taskSuccess" class="message success">✅ {{ taskSuccess }}</div>
 
           <button
+            v-if="totalTasks === 0"
             @click="loadNextTask()"
             class="btn btn-primary"
             :disabled="taskLoading || submitLoading"
           >
             {{ taskLoading ? '⏳ 获取中...' : '🎯 获取新任务' }}
           </button>
+
           <button
             @click="handleCustomSubmit()"
             class="btn btn-success"
             :disabled="!store.currentTaskId || submitLoading || store.annotations.length === 0"
           >
-            {{ submitLoading ? '⏳ 提交中...' : '✅ 提交标注' }}
+            {{ submitLoading ? '⏳ 提交中...' : '✅ 提交并继续' }}
           </button>
 
           <button
@@ -119,13 +170,14 @@
             💾 保存草稿
           </button>
 
+          <button @click="backToProject" class="btn btn-secondary">📁 返回项目</button>
+
           <button @click="abandonTask()" class="btn btn-danger" :disabled="!store.currentTaskId">
             ❌ 放弃任务
           </button>
         </div>
       </section>
 
-      <!-- 图片操作区域 -->
       <section class="tool-section" :class="{ collapsed: collapsedSections.image }">
         <div class="section-header" @click="collapsedSections.image = !collapsedSections.image">
           <h3 class="section-title">📷 图片操作</h3>
@@ -145,14 +197,13 @@
           <button
             @click="openSmartAnnotateDialog()"
             class="btn btn-success"
-            :disabled="!imageObj || isPredicting"
+            :disabled="!imageObj || predicting"
           >
-            {{ isPredicting ? '⏳ 识别中...' : '🤖 智能预标注' }}
+            {{ predicting ? '⏳ 识别中...' : '🤖 智能预标注' }}
           </button>
         </div>
       </section>
-      <!-- 视图控制区域 -->
-      <!-- 视图控制区域 -->
+
       <section class="tool-section" :class="{ collapsed: collapsedSections.zoom }">
         <div class="section-header" @click="collapsedSections.zoom = !collapsedSections.zoom">
           <h3 class="section-title">🔍 视图控制</h3>
@@ -166,7 +217,6 @@
             <button @click="resetZoom()" class="btn btn-secondary btn-small" title="重置">⟲</button>
           </div>
 
-          <!-- ✅ 新增：拖拽控制 -->
           <div
             class="pan-controls"
             style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #e8e8e8"
@@ -204,7 +254,6 @@
         </div>
       </section>
 
-      <!-- 选中标注详情区域 -->
       <transition name="fade">
         <section
           class="tool-section selected-annotation-section"
@@ -240,30 +289,29 @@
               </div>
               <div class="info-row">
                 <span class="info-label">位置坐标：</span>
-                <span class="info-value"
-                  >X: {{ Math.round(selectedAnnotation.x) }}, Y:
-                  {{ Math.round(selectedAnnotation.y) }}</span
-                >
+                <span class="info-value">
+                  X: {{ Math.round(selectedAnnotation.x) }}, Y:
+                  {{ Math.round(selectedAnnotation.y) }}
+                </span>
               </div>
               <div class="info-row">
                 <span class="info-label">尺寸大小：</span>
-                <span class="info-value"
-                  >{{ Math.round(selectedAnnotation.width) }} ×
-                  {{ Math.round(selectedAnnotation.height) }} px</span
-                >
+                <span class="info-value">
+                  {{ Math.round(selectedAnnotation.width) }} ×
+                  {{ Math.round(selectedAnnotation.height) }} px
+                </span>
               </div>
               <div class="info-row" v-if="selectedAnnotation.confidence">
                 <span class="info-label">置信度：</span>
-                <span class="info-value"
-                  >{{ (selectedAnnotation.confidence * 100).toFixed(1) }}%</span
-                >
+                <span class="info-value">
+                  {{ (selectedAnnotation.confidence * 100).toFixed(1) }}%
+                </span>
               </div>
             </div>
           </div>
         </section>
       </transition>
 
-      <!-- 标签管理区域 -->
       <section class="tool-section" :class="{ collapsed: collapsedSections.label }">
         <div class="section-header" @click="collapsedSections.label = !collapsedSections.label">
           <h3 class="section-title">🏷️ 标签管理</h3>
@@ -376,7 +424,6 @@
         </div>
       </section>
 
-      <!-- 统计信息区域 -->
       <section class="tool-section" :class="{ collapsed: collapsedSections.stats }">
         <div class="section-header" @click="collapsedSections.stats = !collapsedSections.stats">
           <h3 class="section-title">📊 统计信息</h3>
@@ -396,7 +443,6 @@
         </div>
       </section>
 
-      <!-- 标注操作区域 -->
       <section class="tool-section action-section">
         <button
           @click.stop="handleDeleteAnnotation"
@@ -408,7 +454,6 @@
         <div class="divider"></div>
       </section>
 
-      <!-- 导出区域 -->
       <section class="tool-section export-section">
         <button
           @click.stop="clearAll()"
@@ -480,92 +525,93 @@
   </div>
 
   <teleport to="body">
-    <transition name="fade">
-      <div
-        v-if="smartAnnotateVisible"
-        class="smart-dialog-overlay"
-        @click="smartAnnotateVisible = false"
-      >
-        <div class="smart-dialog-box" @click.stop>
-          <div class="smart-dialog-header">
-            <h3>🤖 智能预标注设置</h3>
-            <button class="smart-dialog-close" @click="smartAnnotateVisible = false">×</button>
+    <transition name="preview-fade">
+      <div v-if="smartAnnotateVisible" class="dialog-mask" @click="smartAnnotateVisible = false">
+        <div class="dialog-panel work-dialog-panel" @click.stop>
+          <div class="work-dialog-header">
+            <div class="dialog-title">智能预标注</div>
+            <button class="work-dialog-close" type="button" @click="smartAnnotateVisible = false">
+              ×
+            </button>
           </div>
 
-          <div class="smart-dialog-body">
-            <div class="form-group" style="margin-bottom: 24px; display: flex; gap: 20px">
-              <label style="cursor: pointer; display: flex; align-items: center; gap: 6px">
-                <input type="radio" v-model="smartAnnotateMode" value="all" /> 识别所有目标
+          <div class="dialog-body work-dialog-body">
+            <div class="work-file-summary">
+              {{ smartAnnotateSummaryText }}
+            </div>
+
+            <div class="mode-row">
+              <label class="radio-item" @click="smartAnnotateMode = 'keyword'">
+                <span class="radio-dot" :class="{ active: smartAnnotateMode === 'keyword' }"></span>
+                <span class="radio-text" :class="{ strong: smartAnnotateMode === 'keyword' }">
+                  关键词模型
+                </span>
               </label>
-              <label
-                style="
-                  cursor: pointer;
-                  display: flex;
-                  align-items: center;
-                  gap: 6px;
-                  color: #1890ff;
-                  font-weight: bold;
-                "
-              >
-                <input type="radio" v-model="smartAnnotateMode" value="keyword" /> 仅标注指定关键词
+
+              <label class="radio-item" @click="smartAnnotateMode = 'nonKeyword'">
+                <span
+                  class="radio-dot"
+                  :class="{ active: smartAnnotateMode === 'nonKeyword' }"
+                ></span>
+                <span class="radio-text" :class="{ strong: smartAnnotateMode === 'nonKeyword' }">
+                  非关键词模型
+                </span>
               </label>
             </div>
 
-            <div v-if="smartAnnotateMode === 'keyword'">
-              <div style="margin-bottom: 8px; font-size: 13px; font-weight: bold; color: #333">
-                已选择的标签：
-              </div>
-              <div class="selected-tags-box">
-                <span
-                  v-for="tag in selectedSmartKeywords"
-                  :key="tag"
-                  class="smart-tag selected"
-                  :style="{ backgroundColor: labelColorMap.get(tag) || '#f56c6c' }"
-                >
-                  {{ tag }} <span class="remove-tag" @click="removeSmartKeyword(tag)">×</span>
-                </span>
-                <span v-if="selectedSmartKeywords.length === 0" style="color: #999; font-size: 12px"
-                  >请从下方点选</span
-                >
+            <div v-if="smartAnnotateMode === 'keyword'" class="tag-panel">
+              <div class="selected-title">已选择的标签</div>
+
+              <div class="selected-box">
+                <template v-if="selectedSmartKeywords.length">
+                  <div
+                    v-for="tag in selectedSmartKeywords"
+                    :key="tag"
+                    class="tag-chip selected"
+                    :style="{ backgroundColor: labelColorMap.get(tag) || '#f56c6c' }"
+                  >
+                    <span>{{ tag }}</span>
+                    <button class="tag-remove" type="button" @click="removeSmartKeyword(tag)">
+                      ×
+                    </button>
+                  </div>
+                </template>
+                <div v-else class="empty-text">请选择下方标签</div>
               </div>
 
-              <div
-                style="
-                  margin-bottom: 8px;
-                  margin-top: 16px;
-                  font-size: 13px;
-                  font-weight: bold;
-                  color: #333;
-                "
-              >
-                可用标签库：
-              </div>
-              <div class="available-tags-box">
-                <span
-                  v-for="label in labels"
-                  :key="label.id"
-                  class="smart-tag"
-                  :class="{ active: selectedSmartKeywords.includes(label.name) }"
-                  :style="{ backgroundColor: labelColorMap.get(label.name) || label.color }"
-                  @click="toggleSmartKeyword(label.name)"
-                >
-                  {{ label.name }}
-                </span>
+              <div v-for="scene in scenes" :key="scene.id" class="scene-block">
+                <div class="scene-title">{{ scene.name }}</div>
+                <div class="scene-tags">
+                  <button
+                    v-for="tag in scene.tags"
+                    :key="tag.id"
+                    type="button"
+                    class="tag-chip scene-chip"
+                    :class="{ active: selectedSmartKeywords.includes(tag.name) }"
+                    :style="{ backgroundColor: tag.color }"
+                    @click="toggleSmartKeyword(tag.name)"
+                  >
+                    <span>{{ tag.name }}</span>
+                    <span v-if="selectedSmartKeywords.includes(tag.name)" class="tag-remove small">
+                      ×
+                    </span>
+                  </button>
+                </div>
               </div>
             </div>
           </div>
 
-          <div class="smart-dialog-footer">
+          <div class="dialog-footer">
             <button
-              class="btn btn-secondary"
-              style="width: auto; padding: 8px 24px"
+              class="dialog-btn secondary"
+              type="button"
               @click="smartAnnotateVisible = false"
             >
               取消
             </button>
             <button
-              class="btn btn-primary"
-              style="width: auto; padding: 8px 24px"
+              class="dialog-btn primary"
+              type="button"
               :disabled="smartAnnotateMode === 'keyword' && selectedSmartKeywords.length === 0"
               @click="executeSmartAnnotation"
             >
@@ -577,6 +623,7 @@
     </transition>
   </teleport>
 </template>
+
 <script setup>
 import { ref, computed, reactive, onMounted, onUnmounted, watch, toRef, nextTick } from 'vue'
 import { useAnnotationStore } from '@/stores/annotation'
@@ -588,8 +635,7 @@ import { confirmDialog, promptDialog, alertDialog } from '@/composables/useDialo
 import { supabase } from '@/supabase'
 import { useAutoSave } from '@/supabase'
 import request from '@/api/request'
-
-import { useRoute, useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 
 const route = useRoute()
 const router = useRouter()
@@ -603,7 +649,7 @@ const routeBatchSize = computed(() => {
   const raw = typeof route.query.batchSize === 'string' ? Number(route.query.batchSize) : 0
   return Number.isFinite(raw) ? raw : 0
 })
-// ========== 响应式状态定义 ==========
+
 const imageObj = ref(null)
 const fileInput = ref(null)
 const transformer = ref(null)
@@ -628,14 +674,11 @@ const editingAnnotationLabel = ref('')
 const editingAnnotationColor = ref('#ff0000')
 const dialogLock = ref(false)
 
-// ========== 缩放相关状态 ==========
 const zoomScale = ref(1)
 const MIN_ZOOM = 0.1
 const MAX_ZOOM = 5
 const ZOOM_STEP = 0.1
 
-// ========== 容器尺寸计算 ==========
-// baseContainerSize: 基础尺寸（不包含 zoomScale，用于坐标计算）
 const baseContainerSize = computed(() => {
   if (!canvasContainer.value || !imageObj.value) {
     return { width: 800, height: 600, scale: 1 }
@@ -653,11 +696,10 @@ const baseContainerSize = computed(() => {
   return {
     width: imgWidth * scale,
     height: imgHeight * scale,
-    scale: scale,
+    scale,
   }
 })
 
-// containerSize: 实际显示尺寸（包含 zoomScale，用于 Stage 配置）
 const containerSize = computed(() => {
   const base = baseContainerSize.value
   return {
@@ -667,14 +709,11 @@ const containerSize = computed(() => {
   }
 })
 
-// ========== Stage 配置 ==========
 const scaledStageConfig = computed(() => {
   const base = baseContainerSize.value
-
   return {
     width: base.width * zoomScale.value,
     height: base.height * zoomScale.value,
-    // ✅ 关键：不使用 scaleX/scaleY，而是通过计算宽高来实现缩放
     scaleX: 1,
     scaleY: 1,
     x: 0,
@@ -682,15 +721,11 @@ const scaledStageConfig = computed(() => {
   }
 })
 
-// ========== 计算属性 ==========
 watch(currentLabel, (label) => {
   selectedColor.value = labelColorMap.get(label) || '#ff0000'
 })
 
-const drawingColor = computed(() => {
-  return labelColorMap.get(currentLabel.value) || '#ff0000'
-})
-
+const drawingColor = computed(() => labelColorMap.get(currentLabel.value) || '#ff0000')
 const annotations = computed(() => store.annotations || [])
 const selectedId = computed(() => store.selectedId)
 
@@ -698,19 +733,15 @@ const selectedAnnotation = computed(() => {
   return annotations.value.find((a) => a.id === selectedId.value)
 })
 
-// ========== 缩放控制函数 ==========
-// ========== 缩放控制函数（以中心为锚点）==========
 const zoomIn = () => {
   if (zoomScale.value < MAX_ZOOM) {
     const oldScale = zoomScale.value
     zoomScale.value = Math.min(zoomScale.value + ZOOM_STEP, MAX_ZOOM)
 
-    // 以画布中心为锚点缩放
     const base = baseContainerSize.value
     const centerX = base.width / 2
     const centerY = base.height / 2
 
-    // 计算新的偏移，保持中心点不变
     stageX.value = centerX - (centerX - stageX.value) * (zoomScale.value / oldScale)
     stageY.value = centerY - (centerY - stageY.value) * (zoomScale.value / oldScale)
 
@@ -723,12 +754,10 @@ const zoomOut = () => {
     const oldScale = zoomScale.value
     zoomScale.value = Math.max(zoomScale.value - ZOOM_STEP, MIN_ZOOM)
 
-    // 以画布中心为锚点缩放
     const base = baseContainerSize.value
     const centerX = base.width / 2
     const centerY = base.height / 2
 
-    // 计算新的偏移，保持中心点不变
     stageX.value = centerX - (centerX - stageX.value) * (zoomScale.value / oldScale)
     stageY.value = centerY - (centerY - stageY.value) * (zoomScale.value / oldScale)
 
@@ -738,7 +767,6 @@ const zoomOut = () => {
 
 const resetZoom = () => {
   zoomScale.value = 1
-  // 重置时可以选择是否重置位置，这里保持位置不变
   updateZoom()
 }
 
@@ -754,7 +782,6 @@ const actualSize = () => {
   const baseScale = baseContainerSize.value.scale
   zoomScale.value = 1 / baseScale
 
-  // 以画布中心为锚点缩放
   const base = baseContainerSize.value
   const centerX = base.width / 2
   const centerY = base.height / 2
@@ -781,28 +808,22 @@ const handleWheel = (e) => {
 
   e.preventDefault()
 
-  const stage = stage.value?.getNode()
-  if (!stage) return
+  const stageNode = stage.value?.getNode()
+  if (!stageNode) return
 
   const oldScale = zoomScale.value
   const delta = e.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP
   const newScale = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoomScale.value + delta))
 
   if (newScale !== oldScale) {
-    // 获取鼠标在画布上的位置
-    const pointer = stage.getPointerPosition()
+    const pointer = stageNode.getPointerPosition()
     if (!pointer) return
 
-    const base = baseContainerSize.value
-
-    // 计算鼠标在图片上的相对位置（考虑当前缩放和偏移）
     const mouseX = (pointer.x - stageX.value) / oldScale
     const mouseY = (pointer.y - stageY.value) / oldScale
 
-    // 设置新缩放
     zoomScale.value = newScale
 
-    // 调整偏移，使鼠标指向的点保持不变
     stageX.value = pointer.x - mouseX * newScale
     stageY.value = pointer.y - mouseY * newScale
 
@@ -810,8 +831,168 @@ const handleWheel = (e) => {
   }
 }
 
-// ========== Composables ==========
-const { labelColorMap, COLOR_POOL, generateColor, ensureLabelColor, syncLabelsFromMap, labels } =
+const smartAnnotateVisible = ref(false)
+const smartAnnotateMode = ref('keyword')
+const selectedSmartKeywords = ref([])
+
+const scenes = ref([
+  {
+    id: 1,
+    name: '常用标签',
+    tags: [
+      { id: 1, name: 'person', color: '#d9c2f2' },
+      { id: 2, name: 'car', color: '#f4b4af' },
+      { id: 3, name: 'dog', color: '#b8c9f6' },
+      { id: 4, name: 'cat', color: '#ecd68d' },
+      { id: 5, name: 'cow', color: '#a9cf96' },
+    ],
+  },
+  {
+    id: 2,
+    name: '其他标签',
+    tags: [
+      { id: 6, name: 'horse', color: '#aee9ec' },
+      { id: 7, name: 'bird', color: '#f2d562' },
+      { id: 8, name: 'sheep', color: '#eea2ca' },
+    ],
+  },
+])
+
+const smartAnnotateSummaryText = computed(() => {
+  if (!imageObj.value) return '请先加载图片'
+  return `当前图片：${store.currentTaskId || '测试图片'}`
+})
+
+const openSmartAnnotateDialog = () => {
+  if (!imageObj.value) {
+    alert('请先上传或加载图片')
+    return
+  }
+
+  if (selectedSmartKeywords.value.length === 0 && scenes.value.length > 0) {
+    const firstTag = scenes.value[0].tags[0]
+    if (firstTag) {
+      selectedSmartKeywords.value = [firstTag.name]
+    }
+  }
+
+  smartAnnotateVisible.value = true
+}
+
+const toggleSmartKeyword = (name) => {
+  const index = selectedSmartKeywords.value.indexOf(name)
+  if (index > -1) {
+    selectedSmartKeywords.value.splice(index, 1)
+  } else {
+    selectedSmartKeywords.value.push(name)
+  }
+}
+
+const removeSmartKeyword = (name) => {
+  const index = selectedSmartKeywords.value.indexOf(name)
+  if (index > -1) {
+    selectedSmartKeywords.value.splice(index, 1)
+  }
+}
+
+const executeSmartAnnotation = async () => {
+  if (!imageObj.value) return
+
+  smartAnnotateVisible.value = false
+  predicting.value = true
+  taskError.value = ''
+  taskSuccess.value = '🔍 正在进行增量智能识别，请稍候...'
+
+  try {
+    const keywords = smartAnnotateMode.value === 'keyword' ? [...selectedSmartKeywords.value] : []
+
+    let data
+
+    if (store.currentTaskId) {
+      const response = await fetch(`/api/tasks/${store.currentTaskId}/smart-annotate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          keywords,
+          iou_threshold: 0.5,
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.detail || '增量预标注失败')
+      }
+
+      data = await response.json()
+    } else {
+      const canvas = document.createElement('canvas')
+      canvas.width = imageObj.value.width
+      canvas.height = imageObj.value.height
+      const ctx = canvas.getContext('2d')
+      ctx.drawImage(imageObj.value, 0, 0)
+
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9))
+      const formData = new FormData()
+      formData.append('file', blob, 'image.jpg')
+
+      if (keywords.length > 0) {
+        formData.append('keywords', JSON.stringify(keywords))
+      }
+
+      const response = await fetch('/api/predict', {
+        method: 'POST',
+        body: formData,
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.detail || '预测失败')
+      }
+
+      data = await response.json()
+    }
+
+    if (!data.success) {
+      throw new Error(data.message || '识别失败')
+    }
+
+    if (data.annotations && data.annotations.length > 0) {
+      data.annotations.forEach((ann) => {
+        if (!labelColorMap.has(ann.label)) {
+          labelColorMap.set(ann.label, ann.color || '#ff0000')
+          saveLabelToBackend(ann.label, ann.color || '#ff0000')
+        } else {
+          ann.color = labelColorMap.get(ann.label)
+        }
+        ann.isNew = true
+      })
+      syncLabelsFromMap()
+
+      const currentAnnotations = store.annotations || []
+      store.setAnnotations([...currentAnnotations, ...data.annotations])
+
+      const stats = data.stats || {}
+      taskSuccess.value = `🤖 增量识别完成！新增 ${data.annotations.length} 个目标（AI检测到${
+        stats.ai_detected || 0
+      }个，跳过重复${stats.duplicate_skipped || 0}个）`
+      setTimeout(() => (taskSuccess.value = ''), 4000)
+      dragTick.value++
+    } else {
+      const stats = data.stats || {}
+      taskSuccess.value = ''
+      taskError.value = `⚠️ 未发现新目标（AI检测到${stats.ai_detected || 0}个，全部与已有标注重复）`
+      setTimeout(() => (taskError.value = ''), 3000)
+    }
+  } catch (error) {
+    console.error('增量智能标注失败:', error)
+    taskError.value = `❌ 智能标注失败: ${error.message}`
+    setTimeout(() => (taskError.value = ''), 3000)
+  } finally {
+    predicting.value = false
+  }
+}
+
+const { labelColorMap, generateColor, ensureLabelColor, syncLabelsFromMap, labels } =
   useColorManager([
     { id: 1, name: 'person', color: '#ff0000' },
     { id: 2, name: 'car', color: '#0000ff' },
@@ -836,7 +1017,6 @@ const {
   isDrawing,
   drawingRect,
   dragTick,
-  isTransforming,
   isPanning,
   stageX,
   stageY,
@@ -861,10 +1041,11 @@ const {
   transformer,
   layer,
   annotations,
-  currentLabel
+  currentLabel,
+  imageObj
 )
 
-const { predicting, runSmartAnnotation } = useAnnotationApi(
+const { predicting } = useAnnotationApi(
   baseContainerSize,
   store,
   imageObj,
@@ -888,90 +1069,300 @@ watch(
   { deep: true }
 )
 
-// ========== 配置函数 ==========
-// 在 loadNextTask 调用前清理旧任务
-const loadNextTaskWithCleanup = async () => {
-  const oldTaskId = store.currentTaskId
-  await loadNextTask()
-  // 如果任务切换成功，清理旧任务的预标注
-  if (oldTaskId && oldTaskId !== store.currentTaskId) {
-    clearPreAnnotations(oldTaskId)
+const loadTaskListFromStorage = async () => {
+  const projectId = routeProjectId.value
+  if (!projectId) return false
+
+  const savedList = localStorage.getItem(`task_list_${projectId}`)
+  const urlBatchSize = parseInt(route.query.batchSize || '0')
+
+  if (savedList) {
+    try {
+      const parsed = JSON.parse(savedList)
+      taskList.value = parsed.tasks || []
+      totalTasks.value = taskList.value.length
+
+      if (urlBatchSize > 0 && taskList.value.length < urlBatchSize) {
+        console.log(`⚠️ 任务列表不匹配: 缓存${taskList.value.length}个, 期望${urlBatchSize}个`)
+        return await loadProjectLabelingTasks(projectId)
+      }
+
+      if (parsed.currentIndex !== undefined) {
+        currentTaskIndex.value = parsed.currentIndex
+      }
+
+      console.log(`📋 从缓存加载任务列表: ${totalTasks.value} 个任务`)
+      return true
+    } catch (e) {
+      console.error('解析任务列表失败:', e)
+    }
+  }
+
+  return await loadProjectLabelingTasks(projectId)
+}
+
+const loadProjectLabelingTasks = async (projectId) => {
+  try {
+    console.log(`🔄 从后端加载项目所有标注中任务: ${projectId}`)
+
+    const response = await fetch(`/api/projects/${projectId}/all-labeling-tasks`)
+
+    if (!response.ok) {
+      console.warn('获取项目所有标注中任务失败，使用当前任务')
+      return false
+    }
+
+    const data = await response.json()
+
+    if (data.tasks && data.tasks.length > 0) {
+      taskList.value = data.tasks
+      totalTasks.value = data.tasks.length
+
+      const currentTaskId = routeTaskId.value
+      const currentIndex = taskList.value.findIndex((t) => t.task_id === currentTaskId)
+
+      if (currentIndex !== -1) {
+        currentTaskIndex.value = currentIndex
+      } else {
+        currentTaskIndex.value = 0
+      }
+
+      localStorage.setItem(
+        `task_list_${projectId}`,
+        JSON.stringify({
+          tasks: taskList.value,
+          currentIndex: currentTaskIndex.value,
+          projectId,
+          projectName: route.query.projectName,
+          folderType: 'labeling',
+        })
+      )
+
+      console.log(`✅ 加载项目所有标注中任务: ${totalTasks.value} 个`)
+      return true
+    }
+
+    return false
+  } catch (error) {
+    console.error('加载项目标注中任务失败:', error)
+    return false
   }
 }
-// 解析 项目名_001 并返回下一个任务ID (项目名_002)
-const getNextTaskId = (currentTaskId) => {
-  if (!currentTaskId) return null
-  const match = currentTaskId.match(/^(.*)_(\d{3})$/)
-  if (match) {
-    const projectName = match[1]
-    const currentIndex = parseInt(match[2], 10)
-    const nextIndex = String(currentIndex + 1).padStart(3, '0')
-    return `${projectName}_${nextIndex}`
-  }
-  return null
+
+const saveTaskListToStorage = () => {
+  const projectId = routeProjectId.value
+  if (!projectId || taskList.value.length === 0) return
+
+  localStorage.setItem(
+    `task_list_${projectId}`,
+    JSON.stringify({
+      tasks: taskList.value,
+      currentIndex: currentTaskIndex.value,
+      projectId,
+      projectName: route.query.projectName || store.currentProjectName,
+      folderType: route.query.folderType || 'labeling',
+    })
+  )
 }
+
+const updateCurrentTaskIndex = (taskId) => {
+  const index = taskList.value.findIndex((t) => t.task_id === taskId)
+  if (index !== -1) {
+    currentTaskIndex.value = index
+    saveTaskListToStorage()
+  }
+}
+
+const loadTask = async (taskId) => {
+  if (!taskId) return false
+
+  try {
+    console.log(`📥 加载任务: ${taskId}`)
+
+    if (routeProjectId.value) {
+      const loaded = await fetchProjectTask(routeProjectId.value, taskId)
+      if (loaded) {
+        loadPreAnnotations(taskId)
+        updateCurrentTaskIndex(taskId)
+        return true
+      }
+    }
+
+    const restored = await restoreTask(taskId)
+    return restored
+  } catch (error) {
+    console.error('加载任务失败:', error)
+    return false
+  }
+}
+
+const goToPrevTask = async () => {
+  if (!canGoPrev.value) {
+    taskError.value = '已经是第一个任务了'
+    setTimeout(() => (taskError.value = ''), 2000)
+    return
+  }
+
+  if (store.currentTaskId && store.annotations.length > 0) {
+    await saveDraftHandler()
+  }
+
+  const prevIndex = currentTaskIndex.value - 1
+  const prevTask = taskList.value[prevIndex]
+
+  if (!prevTask) {
+    taskError.value = '未找到上一个任务'
+    return
+  }
+
+  console.log(`⬅️ 导航到上一个任务: ${prevTask.task_id} (${prevIndex + 1}/${totalTasks.value})`)
+
+  await router.replace({
+    path: '/app/annotate',
+    query: {
+      ...route.query,
+      task: prevTask.task_id,
+      taskIndex: String(prevIndex),
+    },
+  })
+
+  const loaded = await loadTask(prevTask.task_id)
+
+  if (loaded) {
+    taskSuccess.value = `⬅️ 已加载上一个任务 (${prevIndex + 1}/${totalTasks.value})`
+    setTimeout(() => (taskSuccess.value = ''), 2000)
+  } else {
+    taskError.value = '加载上一个任务失败'
+  }
+}
+
+const goToNextTask = async () => {
+  if (!canGoNext.value) {
+    taskError.value = '已经是最后一个任务了'
+    setTimeout(() => (taskError.value = ''), 2000)
+    return
+  }
+
+  if (store.currentTaskId && store.annotations.length > 0) {
+    await saveDraftHandler()
+  }
+
+  const nextIndex = currentTaskIndex.value + 1
+  const nextTask = taskList.value[nextIndex]
+
+  if (!nextTask) {
+    taskError.value = '未找到下一个任务'
+    return
+  }
+
+  console.log(`➡️ 导航到下一个任务: ${nextTask.task_id} (${nextIndex + 1}/${totalTasks.value})`)
+
+  await router.replace({
+    path: '/app/annotate',
+    query: {
+      ...route.query,
+      task: nextTask.task_id,
+      taskIndex: String(nextIndex),
+    },
+  })
+
+  const loaded = await loadTask(nextTask.task_id)
+
+  if (loaded) {
+    taskSuccess.value = `➡️ 已加载下一个任务 (${nextIndex + 1}/${totalTasks.value})`
+    setTimeout(() => (taskSuccess.value = ''), 2000)
+  } else {
+    taskError.value = '加载下一个任务失败'
+  }
+}
+
+const getStatusText = (status) => {
+  const statusMap = {
+    pending: '待标注',
+    labeling: '标注中',
+    done: '已完成',
+    review: '审核中',
+    abandoned: '已放弃',
+  }
+  return statusMap[status] || status || '未知'
+}
+
+const getStatusColor = (status) => {
+  const colorMap = {
+    pending: '#faad14',
+    labeling: '#52c41a',
+    done: '#1890ff',
+    review: '#722ed1',
+    abandoned: '#ff4d4f',
+  }
+  return colorMap[status] || '#666'
+}
+
 const handleCustomSubmit = async () => {
   if (!store.currentTaskId || store.annotations.length === 0) return
 
   try {
-    // 1. 调用原有的提交逻辑（保存标注坐标到数据库）
-    // 假设 submitAnnotations 返回 true 代表成功
-    await submitAnnotations()
+    const submitResult = await submitAnnotations()
+    if (submitResult === false) {
+      throw new Error('标注提交失败')
+    }
 
-    // 2. 调用后端接口：将图片移动到“已标注”文件夹
-    await fetch(`/api/project/${routeProjectId.value}/move-to-done`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        taskId: store.currentTaskId,
-      }),
-    })
+    if (routeProjectId.value) {
+      try {
+        const moveResponse = await fetch(`/api/project/${routeProjectId.value}/move-to-done`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            taskId: store.currentTaskId,
+          }),
+        })
 
-    taskSuccess.value = `✅ 任务 ${store.currentTaskId} 提交成功，已移入已标注文件夹`
+        if (!moveResponse.ok) {
+          console.warn('移动文件到已完成文件夹失败')
+        }
+      } catch (e) {
+        console.warn('调用 move-to-done 接口失败:', e)
+      }
+    }
 
-    // 3. 计算下一个任务的 ID (例如从 Project_001 -> Project_002)
-    const nextTaskId = getNextTaskId(store.currentTaskId)
+    taskSuccess.value = `✅ 任务 ${store.currentTaskId} 提交成功`
 
-    // 4. 尝试加载下一张图片
-    if (nextTaskId) {
+    if (canGoNext.value) {
       setTimeout(() => {
-        // 更新路由，触发重新加载
-        router.replace({
-          path: '/app/annotate',
-          query: {
-            ...route.query,
-            task: nextTaskId,
-          },
-        })
-
-        // 调用你现有的加载任务逻辑
-        fetchProjectTask(routeProjectId.value, nextTaskId).then((loaded) => {
-          if (!loaded) {
-            window.alert('该批次已全部标注完成！')
-            router.push('/app/project') // 返回项目列表
-          } else {
-            // 加载下一张的预标注
-            loadPreAnnotations(nextTaskId)
-          }
-        })
-      }, 1000)
+        goToNextTask()
+      }, 800)
+    } else {
+      window.alert('该批次已全部标注完成！')
+      router.push('/app/project')
     }
   } catch (error) {
     console.error('提交失败:', error)
-    taskError.value = '提交失败，请重试'
+    taskError.value = '提交失败: ' + error.message
   }
 }
 
-// 计算当前实际缩放比例
+const backToProject = () => {
+  window.opener?.postMessage('refresh-project', '*')
+  router.push('/app/project')
+}
+
+const loadNextTaskWithCleanup = async () => {
+  const oldTaskId = store.currentTaskId
+  await loadNextTask()
+  if (oldTaskId && oldTaskId !== store.currentTaskId) {
+    clearPreAnnotations(oldTaskId)
+  }
+}
+
 const currentScale = computed(() => {
   return (baseContainerSize.value?.scale || 1) * zoomScale.value
 })
+
 const getDrawingRectConfig = () => {
   if (!drawingRect.value || !baseContainerSize.value) return {}
 
   const baseScale = baseContainerSize.value.scale || 1
 
-  // ✅ 所有坐标都乘以 zoomScale
   return {
     x: (drawingRect.value.x * baseScale + stageX.value) * zoomScale.value,
     y: (drawingRect.value.y * baseScale + stageY.value) * zoomScale.value,
@@ -1148,7 +1539,6 @@ const transformerConfig = computed(() => {
     centeredScaling: true,
     visible: true,
     boundBoxFunc: (oldBox, newBox) => {
-      // 使用当前 Stage 的实际尺寸作为边界
       const base = baseContainerSize.value
       const maxWidth = base.width * zoomScale.value
       const maxHeight = base.height * zoomScale.value
@@ -1166,78 +1556,6 @@ const transformerConfig = computed(() => {
   }
 })
 
-// ========== 业务函数 ==========
-// ==========================================
-// 🤖 智能预标注相关逻辑
-// ==========================================
-const smartAnnotateVisible = ref(false)
-const smartAnnotateMode = ref('keyword') // 默认选定关键词模式
-const selectedSmartKeywords = ref([])
-
-const openSmartAnnotateDialog = () => {
-  if (!imageObj.value) {
-    alert('请先上传或加载图片')
-    return
-  }
-  if (selectedSmartKeywords.value.length === 0 && labels.value.length > 0) {
-    selectedSmartKeywords.value = [labels.value[0].name]
-  }
-  smartAnnotateVisible.value = true
-}
-
-const toggleSmartKeyword = (name) => {
-  const index = selectedSmartKeywords.value.indexOf(name)
-  if (index > -1) selectedSmartKeywords.value.splice(index, 1)
-  else selectedSmartKeywords.value.push(name)
-}
-
-const removeSmartKeyword = (name) => toggleSmartKeyword(name)
-
-const executeSmartAnnotation = async () => {
-  if (!imageObj.value || !store.currentTaskId) return
-  smartAnnotateVisible.value = false
-  predicting.value = true
-
-  try {
-    const response = await fetch(`/api/tasks/${store.currentTaskId}/predict`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        keywords: smartAnnotateMode.value === 'keyword' ? [...selectedSmartKeywords.value] : [],
-      }),
-    })
-
-    const data = await response.json()
-    if (!response.ok) throw new Error(data.detail || '识别失败')
-
-    if (data.success && data.annotations) {
-      data.annotations.forEach((ann) => {
-        if (!labelColorMap.has(ann.label)) {
-          labelColorMap.set(ann.label, ann.color || '#ff0000')
-          saveLabelToBackend(ann.label, ann.color || '#ff0000')
-        } else {
-          ann.color = labelColorMap.get(ann.label)
-        }
-      })
-      syncLabelsFromMap()
-
-      store.setAnnotations([...store.annotations, ...data.annotations])
-      taskSuccess.value = `🤖 智能识别完成，新增 ${data.annotations.length} 个目标！`
-      setTimeout(() => (taskSuccess.value = ''), 3000)
-      dragTick.value++
-    }
-  } catch (error) {
-    console.error(error)
-    taskError.value = `❌ 智能标注失败: ${error.message}`
-    setTimeout(() => (taskError.value = ''), 3000)
-  } finally {
-    predicting.value = false
-  }
-}
-
-// ==========================================
-// 💾 YOLO 导出逻辑
-// ==========================================
 const exportForYOLO = async () => {
   if (annotations.value.length === 0) {
     await alertDialog({
@@ -1248,13 +1566,11 @@ const exportForYOLO = async () => {
     return
   }
 
-  // ✅ 加上安全判断，防止意外报错
   if (!imageObj.value) {
     console.error('无图片对象')
     return
   }
 
-  // ✅ 这几行代码必须在这个大括号里面！
   const imgWidth = imageObj.value.width
   const imgHeight = imageObj.value.height
 
@@ -1426,8 +1742,8 @@ const saveLabelToBackend = async (name, color) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        name: name,
-        color: color,
+        name,
+        color,
         category: null,
       }),
     })
@@ -1444,7 +1760,7 @@ const saveLabelToBackend = async (name, color) => {
       const updateRes = await fetch(`/api/labels/${encodeURIComponent(name)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ color: color }),
+        body: JSON.stringify({ color }),
       })
 
       if (updateRes.ok) {
@@ -1604,31 +1920,18 @@ const handleKeydown = async (e) => {
 }
 
 const startEditLabel = (label) => {
-  console.log('开始编辑标签:', label.name, 'label对象:', label)
-
   editingLabel.value = label.id
   editLabelName.value = label.name
 
   let color = label.color
-
-  if (!color) {
-    color = labelColorMap.get(label.name)
-  }
-
-  if (!color) {
-    color = '#ff0000'
-  }
+  if (!color) color = labelColorMap.get(label.name)
+  if (!color) color = '#ff0000'
 
   editingOriginalColor.value = color
-
-  console.log('✅ 保存的原始颜色:', editingOriginalColor.value, '标签:', label.name)
 }
 
 const saveLabelEdit = async (oldName) => {
   const newName = editLabelName.value.trim()
-
-  console.log('保存标签编辑:', oldName, '->', newName)
-  console.log('保存的原始颜色:', editingOriginalColor.value)
 
   if (!newName) {
     await alertDialog({ title: '提示', content: '标签名称不能为空', variant: 'error' })
@@ -1647,24 +1950,12 @@ const saveLabelEdit = async (oldName) => {
   }
 
   let color = editingOriginalColor.value
-
-  if (!color) {
-    color = labelColorMap.get(oldName)
-    console.log('从 labelColorMap 获取颜色:', color)
-  }
-
+  if (!color) color = labelColorMap.get(oldName)
   if (!color) {
     const annotation = store.annotations.find((ann) => ann.label === oldName)
     color = annotation?.color
-    console.log('从标注获取颜色:', color)
   }
-
-  if (!color) {
-    color = '#ff0000'
-    console.warn('使用默认红色')
-  }
-
-  console.log('✅ 最终使用的颜色:', color, '用于新标签:', newName)
+  if (!color) color = '#ff0000'
 
   try {
     const createRes = await fetch('/api/labels', {
@@ -1672,7 +1963,7 @@ const saveLabelEdit = async (oldName) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         name: newName,
-        color: color,
+        color,
         category: null,
       }),
     })
@@ -1680,11 +1971,10 @@ const saveLabelEdit = async (oldName) => {
     if (!createRes.ok) {
       const errorData = await createRes.json()
       if (errorData.detail?.includes('已存在')) {
-        console.log('标签已存在，更新颜色:', color)
-        await fetch(`/api/labels/${encodeURIComponent(name)}`, {
+        await fetch(`/api/labels/${encodeURIComponent(newName)}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ color: color }),
+          body: JSON.stringify({ color }),
         })
       } else {
         throw new Error(errorData.detail || '创建新标签失败')
@@ -1692,7 +1982,7 @@ const saveLabelEdit = async (oldName) => {
     }
 
     try {
-      await fetch(`/api/labels/${encodeURIComponent(name)}`, {
+      await fetch(`/api/labels/${encodeURIComponent(oldName)}`, {
         method: 'DELETE',
       })
     } catch (e) {
@@ -1701,42 +1991,35 @@ const saveLabelEdit = async (oldName) => {
 
     labelColorMap.delete(oldName)
     labelColorMap.set(newName, color)
-    console.log('✅ 更新 labelColorMap:', newName, '->', color)
 
     const oldLabelIndex = labels.value.findIndex((l) => l.name === oldName)
     if (oldLabelIndex !== -1) {
       labels.value[oldLabelIndex] = {
         id: labels.value[oldLabelIndex].id,
         name: newName,
-        color: color,
+        color,
       }
-      console.log('✅ 更新 labels 数组索引', oldLabelIndex, ':', labels.value[oldLabelIndex])
     } else {
       labels.value.push({
         id: `label_${Date.now()}`,
         name: newName,
-        color: color,
+        color,
       })
     }
 
-    let updatedCount = 0
     store.annotations.forEach((ann) => {
       if (ann.label === oldName) {
         ann.label = newName
         ann.color = color
-        updatedCount++
       }
     })
-    console.log(`✅ 更新了 ${updatedCount} 个标注的标签`)
 
     if (currentLabel.value === oldName) {
       currentLabel.value = newName
       selectedColor.value = color
-      console.log('✅ 当前标签已更新为:', newName, '颜色:', color)
     }
 
     dragTick.value++
-
     editingLabel.value = null
     editLabelName.value = ''
     editingOriginalColor.value = ''
@@ -1783,7 +2066,7 @@ const removeLabel = async (labelName) => {
 
   if (result.confirmed) {
     try {
-      const response = await fetch(`/api/labels/${encodeURIComponent(name)}`, {
+      const response = await fetch(`/api/labels/${encodeURIComponent(labelName)}`, {
         method: 'DELETE',
       })
 
@@ -1858,28 +2141,28 @@ const updateSelectedLabel = async () => {
 const updateSelectedAnnotationLabel = async () => {
   if (!selectedId.value) return
 
-  const newLabel = editingAnnotationLabel.value.trim()
-  if (!newLabel) return
+  const newLabelValue = editingAnnotationLabel.value.trim()
+  if (!newLabelValue) return
 
   const annotation = store.annotations.find((ann) => ann.id === selectedId.value)
   if (!annotation) return
 
-  if (!labelColorMap.has(newLabel)) {
-    const color = generateColor(newLabel)
-    labelColorMap.set(newLabel, color)
-    await saveLabelToBackend(newLabel, color)
+  if (!labelColorMap.has(newLabelValue)) {
+    const color = generateColor(newLabelValue)
+    labelColorMap.set(newLabelValue, color)
+    await saveLabelToBackend(newLabelValue, color)
     syncLabelsFromMap()
   }
 
-  annotation.label = newLabel
-  annotation.color = labelColorMap.get(newLabel)
+  annotation.label = newLabelValue
+  annotation.color = labelColorMap.get(newLabelValue)
 
-  currentLabel.value = newLabel
-  selectedColor.value = labelColorMap.get(newLabel)
+  currentLabel.value = newLabelValue
+  selectedColor.value = labelColorMap.get(newLabelValue)
 
   dragTick.value++
   editingAnnotationLabel.value = ''
-  taskSuccess.value = `✅ 标注标签已修改为: ${newLabel}`
+  taskSuccess.value = `✅ 标注标签已修改为: ${newLabelValue}`
   setTimeout(() => (taskSuccess.value = ''), 2000)
 }
 
@@ -1923,16 +2206,12 @@ const loadSavedLabels = async () => {
     const data = await response.json()
 
     if (data.labels && data.labels.length > 0) {
-      console.log('📦 从后端加载标签:', data.labels)
-
       data.labels.forEach((label) => {
         if (!labelColorMap.has(label.name)) {
           const color = label.color || ensureLabelColor(label.name)
           labelColorMap.set(label.name, color)
-          console.log(`✅ 加载标签: ${label.name} -> ${color}`)
         }
       })
-
       syncLabelsFromMap()
     }
   } catch (error) {
@@ -1965,41 +2244,37 @@ const loadImageFromSource = async (imageUrl) => {
   return true
 }
 
-// 从 localStorage 加载智能预标注数据
 const loadPreAnnotations = (taskId) => {
   if (!taskId) return false
 
   const preData = localStorage.getItem(`pre_annotations_${taskId}`)
   if (preData) {
     try {
-      const annotations = JSON.parse(preData)
-      if (annotations && annotations.length > 0) {
-        // 确保每个标注都有颜色，并同步到标签库
-        annotations.forEach((ann) => {
+      const result = JSON.parse(preData)
+      const anns = result.annotations || result
+
+      if (anns && anns.length > 0) {
+        anns.forEach((ann) => {
           if (!ann.color) {
             ann.color = labelColorMap.get(ann.label) || ensureLabelColor(ann.label)
           }
-          // 如果标签不存在，添加到标签库
           if (!labelColorMap.has(ann.label)) {
             labelColorMap.set(ann.label, ann.color)
-            // 异步保存到后端（不阻塞）
             saveLabelToBackend(ann.label, ann.color).catch(console.error)
           }
         })
 
-        // 应用到画布
-        store.setAnnotations(annotations)
+        store.setAnnotations(anns)
         syncLabelsFromMap()
         dragTick.value++
 
-        // 自动切换到第一个标注的标签
-        const firstAnn = annotations[0]
+        const firstAnn = anns[0]
         if (firstAnn) {
           currentLabel.value = firstAnn.label
           selectedColor.value = firstAnn.color || labelColorMap.get(firstAnn.label)
         }
 
-        console.log(`✅ 已加载 ${annotations.length} 个智能预标注框`)
+        console.log(`✅ 已加载 ${anns.length} 个智能预标注框`)
         return true
       }
     } catch (e) {
@@ -2009,7 +2284,6 @@ const loadPreAnnotations = (taskId) => {
   return false
 }
 
-// 加载项目关键词设置（可选，用于显示当前模式）
 const loadProjectSettings = (projectId) => {
   const settings = localStorage.getItem(`project_keywords_${projectId}`)
   if (settings) {
@@ -2019,7 +2293,6 @@ const loadProjectSettings = (projectId) => {
         '📋 项目标注模式:',
         data.use_keywords ? `关键词模式 (${data.keywords.join(', ')})` : '非关键词模式'
       )
-      // 可以在这里设置提示信息
       if (data.use_keywords && data.keywords.length > 0) {
         taskSuccess.value = `🎯 当前项目使用关键词: ${data.keywords.join(', ')}`
         setTimeout(() => (taskSuccess.value = ''), 3000)
@@ -2032,14 +2305,25 @@ const loadProjectSettings = (projectId) => {
   return null
 }
 
-// 清理已使用的预标注数据（在提交成功后调用）
 const clearPreAnnotations = (taskId) => {
   if (taskId) {
     localStorage.removeItem(`pre_annotations_${taskId}`)
     console.log(`🧹 已清理任务 ${taskId} 的预标注缓存`)
   }
 }
-// ========== 生命周期 ==========
+
+const taskList = ref([])
+const currentTaskIndex = ref(0)
+const totalTasks = ref(0)
+
+const canGoPrev = computed(() => currentTaskIndex.value > 0)
+const canGoNext = computed(() => currentTaskIndex.value < totalTasks.value - 1)
+
+const taskNavigatorText = computed(() => {
+  if (totalTasks.value === 0) return '无任务'
+  return `${currentTaskIndex.value + 1} / ${totalTasks.value}`
+})
+
 onMounted(async () => {
   console.log('🚀 组件挂载完成')
 
@@ -2051,25 +2335,46 @@ onMounted(async () => {
   defaultLabels.forEach((label) => ensureLabelColor(label.name, label.color))
   await loadSavedLabels()
 
-  // 检查训练状态
   checkTrainingStatus()
 
-  // ========== 修改1：处理从项目页面跳转过来的任务 ==========
   if (routeProjectId.value && routeTaskId.value) {
     console.log(`📥 加载项目任务: ${routeProjectId.value}, 任务ID: ${routeTaskId.value}`)
+
+    const hasTaskList = await loadTaskListFromStorage()
+
+    if (!hasTaskList) {
+      taskList.value = [
+        {
+          task_id: routeTaskId.value,
+          file_id: '',
+          filename: '',
+          image_url: '',
+          status: 'labeling',
+          project_id: routeProjectId.value,
+          use_keywords: route.query.sourceMode === 'keyword',
+          keywords: [],
+        },
+      ]
+      totalTasks.value = 1
+      currentTaskIndex.value = 0
+    }
 
     const loaded = await fetchProjectTask(routeProjectId.value, routeTaskId.value)
 
     if (!loaded) {
       loadTestImage()
     } else {
-      // 加载项目设置（关键词模式提示）
       loadProjectSettings(routeProjectId.value)
 
-      // 加载智能预标注数据（关键修改）
       const hasPreAnnotations = loadPreAnnotations(routeTaskId.value)
+      updateCurrentTaskIndex(routeTaskId.value)
 
-      if (routeBatchSize.value > 0) {
+      if (totalTasks.value > 1) {
+        taskSuccess.value = `✅ 已进入批量标注模式，${taskNavigatorText.value}${
+          hasPreAnnotations ? '，已加载AI预标注' : ''
+        }`
+        setTimeout(() => (taskSuccess.value = ''), 3000)
+      } else if (routeBatchSize.value > 0) {
         taskSuccess.value = `✅ 已进入批量标注模式，共 ${routeBatchSize.value} 张图片，当前: ${
           routeTaskId.value
         }${hasPreAnnotations ? '，已加载AI预标注' : ''}`
@@ -2079,9 +2384,7 @@ onMounted(async () => {
         setTimeout(() => (taskSuccess.value = ''), 2500)
       }
     }
-  }
-  // ========== 处理从外部传入的图片 ==========
-  else if (typeof route.query.sourceImage === 'string' && route.query.sourceImage) {
+  } else if (typeof route.query.sourceImage === 'string' && route.query.sourceImage) {
     try {
       await loadImageFromSource(route.query.sourceImage)
       taskSuccess.value = `✅ 已加载测试图片：${route.query.sourceName || '来自项目选中图片'}`
@@ -2093,9 +2396,7 @@ onMounted(async () => {
       taskError.value = '项目图片加载失败，已切换到默认测试图片'
       loadTestImage()
     }
-  }
-  // ========== 处理从历史记录恢复的任务 ==========
-  else {
+  } else {
     const urlParams = new URLSearchParams(window.location.search)
     let taskId = urlParams.get('task')
 
@@ -2108,13 +2409,15 @@ onMounted(async () => {
 
     if (taskId) {
       console.log('🔍 尝试恢复任务:', taskId)
+
+      await loadTaskListFromStorage()
       const restored = await restoreTask(taskId)
 
       if (restored && store.taskInfo?.imageUrl) {
         console.log('✅ 任务恢复成功')
 
-        // 尝试加载该任务的预标注（如果有）
         loadPreAnnotations(taskId)
+        updateCurrentTaskIndex(taskId)
 
         syncLabelsFromMap()
         dragTick.value++
@@ -2128,7 +2431,6 @@ onMounted(async () => {
     }
   }
 
-  // 窗口大小变化监听
   let resizeObserver = null
   if (canvasContainer.value) {
     resizeObserver = new ResizeObserver(() => {
@@ -2136,9 +2438,6 @@ onMounted(async () => {
     })
     resizeObserver.observe(canvasContainer.value)
   }
-
-  // 键盘和鼠标事件监听...
-  // （保持原有事件监听代码不变）
 
   const globalMouseUpHandler = (e) => {
     if (dialogLock.value) return
@@ -2156,7 +2455,6 @@ onMounted(async () => {
     canvasContainer.value.addEventListener('wheel', handleWheel, { passive: false })
   }
 
-  // Space键拖拽支持
   const handleKeyDown = (e) => {
     if (e.code === 'Space' && !e.repeat) {
       e.preventDefault()

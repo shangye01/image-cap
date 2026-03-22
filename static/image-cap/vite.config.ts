@@ -9,6 +9,10 @@ export default defineConfig({
       '@': path.resolve(__dirname, 'src'),
     },
   },
+
+  // ✅ 暴露 VITE_ 环境变量
+  envPrefix: 'VITE_',
+
   server: {
     port: 5173,
     proxy: {

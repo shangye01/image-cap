@@ -24,13 +24,13 @@ export interface BackendProjectFile {
 }
 
 export interface AnnotationSessionTask {
-  task_id: string
-  file_id: string
+  task_id: string        // ✅ 现在是 "项目名_001" 格式
+  file_id: string  
   filename: string
   storage_path: string
   image_url: string
   project_id: string
-  project_name: string
+  project_name: string 
   use_keywords: boolean
   keywords: string[]
   status: string
@@ -41,6 +41,7 @@ export interface AnnotationSessionResponse {
   success: boolean
   project_id: string
   project_name: string
+
   use_keywords: boolean
   keywords: string[]
   tasks: AnnotationSessionTask[]
@@ -74,6 +75,53 @@ export const deleteProjectApi = (projectId: string) =>
 export const createAnnotationSession = (
   projectId: string,
   payload: { file_ids: string[]; use_keywords: boolean; keywords: string[] }
-) => request.post<AnnotationSessionResponse>(`/projects/${projectId}/sessions`, payload)
+) => request.post<AnnotationSessionResponse>(
+  `/projects/${projectId}/sessions`, 
+  payload,
+  { timeout: 120000 } // 增加到 2 分钟，因为包含 AI 预测
+)
 
 // ❌ 旧的 getAnnotationSessionTask 已彻底删除！
+
+// src/api/projectStorage.ts - 在文件末尾添加
+
+// 获取文件夹中的任务列表（用于标注中文件夹的继续标注功能）
+export const getFolderTasks = (projectId: string, folderName: 'pending' | 'labeling' | 'done') => {
+  const statusMap = {
+    'pending': 'pending',
+    'labeling': 'labeling', 
+    'done': 'done'
+  }
+  const status = statusMap[folderName]
+  
+  console.log(`[API] 获取文件夹任务 | projectId=${projectId}, folder=${folderName}, status=${status}`)
+  
+  return request.get(`/projects/${projectId}/folder-tasks`, {
+    params: { status }
+  })
+}
+
+
+
+// 获取单个文件对应的任务
+export const getTaskByFileId = (projectId: string, fileId: string) => {
+  return request.get(`/projects/${projectId}/file-task`, {
+    params: { file_id: fileId }
+  })
+}
+
+// 获取相邻任务（上一个/下一个）
+export const getAdjacentTask = (
+  projectId: string,
+  currentTaskId: string,
+  direction: 'next' | 'prev'
+) => {
+  return request.get(`/projects/${projectId}/tasks/${currentTaskId}/adjacent`, {
+    params: { direction }
+  })
+}
+
+// 获取任务详情（如果还没有的话）
+export const getTaskById = (taskId: string) => {
+  return request.get(`/tasks/${taskId}`)
+}
