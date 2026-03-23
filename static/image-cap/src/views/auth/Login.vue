@@ -49,10 +49,12 @@ const submit = async () => {
   error.value = ''
   loading.value = true
   try {
-    const { data } = await loginApi(form.value)
-    store.login(data.user, data.access_token)
+    const result = await loginApi(form.value)
+    console.log('login result =', result)
+    store.login(result.user, result.access_token)
     router.push('/app/guide')
   } catch (err: any) {
+    console.error('登录异常 =', err)
     error.value = err?.response?.data?.detail || err?.message || '登录失败'
   } finally {
     loading.value = false

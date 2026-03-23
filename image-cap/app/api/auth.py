@@ -16,7 +16,7 @@ from ..models import Organization, User, UserOrganization
 from ..utils.jwt import ALGORITHM, SECRET_KEY, create_access_token
 from ..utils.security import hash_password, verify_password
 
-router = APIRouter(prefix="/auth", tags=["auth"])
+router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 DEFAULT_ORG_TYPES = {"个人", "团队"}
 AVATAR_BUCKET = os.getenv("SUPABASE_AVATAR_BUCKET", "avatars")

@@ -154,8 +154,8 @@ const submitLogin = async () => {
 
   try {
     loginLoading.value = true
-    const { data } = await loginApi(loginForm.value)
-    userStore.login(data.user, data.access_token)
+    const result = await loginApi(loginForm.value)
+    userStore.login(result.user, result.access_token)
 
     drawerVisible.value = false
     router.push('/app/guide')
