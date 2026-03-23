@@ -1,5 +1,8 @@
 <template>
   <div class="project-content-page">
+    <div class="page-top-actions">
+      <TeamCollaborationActions :project-name="currentProject?.projectName || ''" />
+    </div>
     <!-- 1. 项目列表页 -->
     <template v-if="!currentProject">
       <div class="project-toolbar">
@@ -580,6 +583,7 @@
 import { computed, reactive, ref, onBeforeUnmount, onMounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import CreateBoardCard from '@/views/project/CreateBoardCard.vue'
+import TeamCollaborationActions from '@/components/TeamCollaborationActions.vue'
 import {
   createProject,
   listProjects,
@@ -2923,6 +2927,19 @@ onBeforeUnmount(() => {
     width: 40px;
     height: 72px;
     font-size: 24px;
+  }
+}
+</style>
+<style scoped>
+.page-top-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 20px;
+}
+
+@media (max-width: 768px) {
+  .page-top-actions {
+    margin-bottom: 16px;
   }
 }
 </style>

@@ -85,7 +85,9 @@
           <transition name="slide-up">
             <div v-if="showUserMenu" class="user-dropdown">
               <div class="dropdown-item" @click="goToProfile"><span>👤</span> 个人中心</div>
-              <div class="dropdown-item" @click="showSettings"><span>⚙️</span> 系统设置</div>
+              <div class="dropdown-item" @click="openTeamCreateDialog">
+                <span>👥</span> 团队创建
+              </div>
               <div class="divider"></div>
               <div class="dropdown-item danger" @click="handleLogout"><span>🚪</span> 退出登录</div>
             </div>
@@ -116,11 +118,55 @@
         <button @click="refreshPage" title="刷新">🔄</button>
       </div>
     </div>
+    <teleport to="body">
+      <transition name="fade-dialog">
+        <div v-if="teamDialogVisible" class="team-dialog-mask" @click="closeTeamCreateDialog">
+          <div class="team-dialog-panel" @click.stop>
+            <div class="team-dialog-header">
+              <div>
+                <div class="team-dialog-title">新建团队</div>
+                <div class="team-dialog-subtitle">创建后将自动切换到新的团队空间。</div>
+              </div>
+              <button type="button" class="team-dialog-close" @click="closeTeamCreateDialog">
+                ×
+              </button>
+            </div>
+
+            <div class="team-dialog-body">
+              <div class="team-field">
+                <label class="team-field-label">名称</label>
+                <input
+                  v-model.trim="teamForm.name"
+                  class="team-input"
+                  type="text"
+                  placeholder="请输入团队名称"
+                />
+              </div>
+
+              <div v-if="teamDialogError" class="team-dialog-error">{{ teamDialogError }}</div>
+            </div>
+
+            <div class="team-dialog-footer">
+              <button
+                type="button"
+                class="team-dialog-btn secondary"
+                @click="closeTeamCreateDialog"
+              >
+                取消
+              </button>
+              <button type="button" class="team-dialog-btn primary" @click="confirmTeamCreate">
+                立即创建
+              </button>
+            </div>
+          </div>
+        </div>
+      </transition>
+    </teleport>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { logoutApi } from '@/api/auth'
 import { useUserStore } from '@/stores/user'
@@ -132,10 +178,17 @@ const userStore = useUserStore()
 const isFullscreen = ref(false)
 const showUserMenu = ref(false)
 const showFloatToolbar = ref(false)
+const teamDialogVisible = ref(false)
+const teamForm = reactive({
+  name: '',
+})
 
 // 用户信息
 const userName = computed(() => userStore.user?.username || '匿名用户')
-const userRole = computed(() => userStore.user?.organizations?.[0]?.organization_type || '标注员')
+const userRole = computed(() => {
+  const organization = userStore.currentOrganization || userStore.user?.organizations?.[0]
+  return organization?.organization_type || '标注员'
+})
 const userInitials = computed(() => {
   const name = userName.value
   return name.length > 2 ? name.slice(0, 2).toUpperCase() : name.toUpperCase()
@@ -171,9 +224,38 @@ const goToProfile = () => {
   showUserMenu.value = false
   router.push('/app/profile')
 }
-const showSettings = () => {
+const teamDialogError = computed(() => {
+  const name = teamForm.name.trim()
+  if (!teamDialogVisible.value) return ''
+  if (!name) return '请输入团队名称'
+
+  const exists = (userStore.user?.organizations || []).some(
+    (item) => item.organization_nickname.toLowerCase() === name.toLowerCase()
+  )
+
+  return exists ? '该名称已存在，请更换后再创建' : ''
+})
+
+const openTeamCreateDialog = () => {
   showUserMenu.value = false
-  window.alert('设置功能开发中...')
+  teamForm.name = ''
+  teamDialogVisible.value = true
+}
+
+const closeTeamCreateDialog = () => {
+  teamDialogVisible.value = false
+}
+
+const confirmTeamCreate = () => {
+  if (teamDialogError.value) return
+
+  try {
+    userStore.addOrganization(teamForm.name)
+    closeTeamCreateDialog()
+    window.alert(`团队“${teamForm.name.trim()}”创建成功`)
+  } catch (error) {
+    window.alert(error?.message || '创建失败，请稍后重试')
+  }
 }
 const handleLogout = async () => {
   showUserMenu.value = false
@@ -445,5 +527,119 @@ onUnmounted(() => {
 .slide-up-leave-to {
   opacity: 0;
   transform: translateY(10px);
+}
+</style>
+<style scoped>
+.team-dialog-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 90;
+}
+
+.team-dialog-panel {
+  width: min(520px, 100%);
+  background: #fff;
+  border-radius: 20px;
+  padding: 24px;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.2);
+}
+
+.team-dialog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.team-dialog-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: #111827;
+}
+
+.team-dialog-subtitle {
+  font-size: 13px;
+  color: #64748b;
+  margin-top: 6px;
+}
+
+.team-dialog-close {
+  border: none;
+  background: transparent;
+  font-size: 28px;
+  color: #94a3b8;
+  cursor: pointer;
+}
+
+.team-dialog-body {
+  display: grid;
+  gap: 18px;
+}
+
+.team-field {
+  display: grid;
+  gap: 10px;
+}
+
+.team-field-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #334155;
+}
+
+.team-input {
+  width: 100%;
+  border: 1px solid #d7def0;
+  border-radius: 14px;
+  padding: 12px 14px;
+  font-size: 14px;
+}
+
+.team-dialog-error {
+  color: #dc2626;
+  font-size: 13px;
+}
+
+.team-dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 22px;
+}
+
+.team-dialog-btn {
+  border: none;
+  border-radius: 12px;
+  padding: 10px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.team-dialog-btn.secondary {
+  background: #eef2f7;
+  color: #475569;
+}
+
+.team-dialog-btn.primary {
+  background: linear-gradient(135deg, #5b8def, #7359f8);
+  color: #fff;
+}
+
+.fade-dialog-enter-active,
+.fade-dialog-leave-active {
+  transition: all 0.2s ease;
+}
+
+.fade-dialog-enter-from,
+.fade-dialog-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
 }
 </style>
