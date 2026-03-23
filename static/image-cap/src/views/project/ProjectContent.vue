@@ -1,7 +1,10 @@
 <template>
   <div class="project-content-page">
     <div class="page-top-actions">
-      <TeamCollaborationActions :project-name="currentProject?.projectName || ''" />
+      <TeamCollaborationActions
+        :project-id="currentProject?.id || ''"
+        :project-name="currentProject?.projectName || ''"
+      />
     </div>
     <!-- 1. 项目列表页 -->
     <template v-if="!currentProject">
@@ -37,6 +40,7 @@
           v-for="project in filteredProjectList"
           :key="project.id"
           class="project-folder-card"
+          :class="{ 'project-folder-card--shared': project.isSharedCopy }"
           @mouseenter="showRemark(project.id)"
           @mouseleave="hideRemark"
         >
@@ -89,6 +93,10 @@
 
             <div class="folder-name">
               {{ project.projectName }}
+            </div>
+
+            <div v-if="project.isSharedCopy" class="shared-project-badge">
+              已分享给我 · 来自 {{ project.sharedBy || '团队成员' }}
             </div>
 
             <div class="folder-meta">
@@ -211,9 +219,7 @@
               </template>
 
               <!-- 已标注文件夹：查看 -->
-              <template v-else-if="isDoneFolder">
-                
-              </template>
+              <template v-else-if="isDoneFolder"> </template>
             </div>
           </div>
 
@@ -735,14 +741,27 @@ const filteredProjectList = computed(() => {
     list = list.filter((project) => project.projectName.trim().toLowerCase().includes(keyword))
   }
 
+  list.sort((a, b) => {
+    if (a.isSharedCopy && !b.isSharedCopy) return -1
+    if (!a.isSharedCopy && b.isSharedCopy) return 1
+    if (a.isSharedCopy && b.isSharedCopy) return Number(b.sharedAt || 0) - Number(a.sharedAt || 0)
+    return 0
+  })
+
+  const comparePinned = (a, b) => {
+    if (a.isSharedCopy && !b.isSharedCopy) return -1
+    if (!a.isSharedCopy && b.isSharedCopy) return 1
+    return 0
+  }
+
   if (sortType.value === 'created_desc') {
-    list.sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0))
+    list.sort((a, b) => comparePinned(a, b) || Number(b.createdAt || 0) - Number(a.createdAt || 0))
   } else if (sortType.value === 'created_asc') {
-    list.sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0))
+    list.sort((a, b) => comparePinned(a, b) || Number(a.createdAt || 0) - Number(b.createdAt || 0))
   } else if (sortType.value === 'name_asc') {
-    list.sort((a, b) => a.projectName.localeCompare(b.projectName, 'zh-CN'))
+    list.sort((a, b) => comparePinned(a, b) || a.projectName.localeCompare(b.projectName, 'zh-CN'))
   } else if (sortType.value === 'name_desc') {
-    list.sort((a, b) => b.projectName.localeCompare(a.projectName, 'zh-CN'))
+    list.sort((a, b) => comparePinned(a, b) || b.projectName.localeCompare(a.projectName, 'zh-CN'))
   }
 
   return list
@@ -910,6 +929,10 @@ const loadProjects = async () => {
           selectedTagIds: [],
           selectedTags: [],
           createdAt: new Date(project.created_at).getTime(),
+          sharedAt: project.shared_at ? new Date(project.shared_at).getTime() : null,
+          isSharedCopy: Boolean(project.is_shared_copy),
+          sharedBy: project.shared_by || '',
+          shareMessage: project.share_message || '',
           folders: [
             { id: `pending_${project.id}`, name: '待标注', files: pendingFiles },
             { id: `labeling_${project.id}`, name: '标注中', files: labelingFiles },
@@ -1809,6 +1832,21 @@ onBeforeUnmount(() => {
   align-items: flex-start;
 }
 
+.project-folder-card--shared {
+  opacity: 0.72;
+  background: linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
+}
+
+.project-folder-card--shared .folder-click-area {
+  filter: grayscale(0.18);
+}
+
+.shared-project-badge {
+  margin-top: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #4f46e5;
+}
 .project-folder-card {
   position: relative;
   width: 260px;

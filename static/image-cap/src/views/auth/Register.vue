@@ -18,11 +18,8 @@
         </div>
 
         <div>
-          <label>组织类型</label>
-          <select v-model="form.organization_type">
-            <option value="个人">个人</option>
-            <option value="团队">团队</option>
-          </select>
+          <label>默认组织类型</label>
+          <input value="个人" type="text" disabled />
         </div>
 
         <div>

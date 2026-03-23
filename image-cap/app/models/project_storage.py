@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -18,10 +18,18 @@ class Project(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    source_project_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    is_shared_copy: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    shared_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    shared_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    share_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     files: Mapped[list["ProjectFile"]] = relationship(
         "ProjectFile", back_populates="project", cascade="all, delete-orphan"
     )
+    source_project: Mapped["Project | None"] = relationship("Project", remote_side=[id])
 
 
 class ProjectFile(Base):

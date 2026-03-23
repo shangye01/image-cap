@@ -7,6 +7,11 @@ export interface BackendProject {
   description: string | null
   owner_id: string
   created_at: string
+  source_project_id?: string | null
+  is_shared_copy?: boolean
+  shared_by?: string | null
+  shared_at?: string | null
+  share_message?: string | null
 }
 
 export interface BackendProjectFile {
@@ -70,6 +75,11 @@ export const getProjectFileDownloadUrl = (fileId: string) => `/api/projects/file
 
 export const deleteProjectApi = (projectId: string) =>
   request.delete(`/projects/${projectId}`)
+
+export const shareProject = (
+  projectId: string,
+  payload: { recipient_ids: string[]; organization_nickname: string; message?: string },
+) => request.post<{ message: string; copied_to: Array<{ user_id: string; username: string; project_id: string }> }>(`/projects/${projectId}/share`, payload)
 
 // ✅ 路径已更改为 /sessions，与后端严格对齐
 export const createAnnotationSession = (

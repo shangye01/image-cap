@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
+
 
 class User(Base):
     __tablename__ = "users"
@@ -20,6 +21,17 @@ class User(Base):
 
     organizations: Mapped[list[UserOrganization]] = relationship(
         "UserOrganization", back_populates="user", cascade="all, delete-orphan"
+    )
+    sent_team_invitations: Mapped[list[TeamInvitation]] = relationship(
+        "TeamInvitation",
+        back_populates="inviter",
+        foreign_keys="TeamInvitation.inviter_id",
+        cascade="all, delete-orphan",
+    )
+    accepted_team_invitations: Mapped[list[TeamInvitation]] = relationship(
+        "TeamInvitation",
+        back_populates="accepted_by_user",
+        foreign_keys="TeamInvitation.accepted_by",
     )
 
 
@@ -36,6 +48,9 @@ class Organization(Base):
     members: Mapped[list[UserOrganization]] = relationship(
         "UserOrganization", back_populates="organization", cascade="all, delete-orphan"
     )
+    invitations: Mapped[list[TeamInvitation]] = relationship(
+        "TeamInvitation", back_populates="organization", cascade="all, delete-orphan"
+    )
 
 
 class UserOrganization(Base):
@@ -51,3 +66,28 @@ class UserOrganization(Base):
 
     user: Mapped[User] = relationship("User", back_populates="organizations")
     organization: Mapped[Organization] = relationship("Organization", back_populates="members")
+
+
+class TeamInvitation(Base):
+    __tablename__ = "team_invitations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    token: Mapped[str] = mapped_column(String(120), unique=True, nullable=False, index=True)
+    organization_id: Mapped[int] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    inviter_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=lambda: datetime.utcnow() + timedelta(days=7)
+    )
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    accepted_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
+    organization: Mapped[Organization] = relationship("Organization", back_populates="invitations")
+    inviter: Mapped[User] = relationship(
+        "User", back_populates="sent_team_invitations", foreign_keys=[inviter_id]
+    )
+    accepted_by_user: Mapped[User | None] = relationship(
+        "User", back_populates="accepted_team_invitations", foreign_keys=[accepted_by]
+    )

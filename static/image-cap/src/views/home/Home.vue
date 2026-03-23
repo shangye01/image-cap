@@ -30,9 +30,20 @@
         <template v-else>
           <div class="user-dropdown">
             <div class="user-chip" @click="toggleDropdown">
-              <img :src="userStore.user?.avatar || '/image/default-avatar.png'" alt="avatar" class="user-chip__avatar" />
+              <img
+                :src="userStore.user?.avatar || '/image/default-avatar.png'"
+                alt="avatar"
+                class="user-chip__avatar"
+              />
               <span class="username">{{ userStore.user?.username }}</span>
-              <svg class="dropdown-arrow" :class="{ open: dropdownOpen }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <svg
+                class="dropdown-arrow"
+                :class="{ open: dropdownOpen }"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+              >
                 <path d="M6 9l6 6 6-6" />
               </svg>
             </div>
@@ -57,12 +68,12 @@
             <span class="badge-dot"></span>
             <span>v2.0 全新上线</span>
           </div>
-          
+
           <h1 class="hero-title">
             让图像标注
             <span class="gradient-text">更智能、更高效</span>
           </h1>
-          
+
           <p class="hero-desc">
             新一代 AI 辅助协同标注平台，支持图像标注。
             实时协作、智能预标注、质量管控，一站式解决您的数据准备需求。
@@ -125,8 +136,15 @@
                     <stop offset="100%" stop-color="#764ba2" />
                   </linearGradient>
                 </defs>
-                <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
-                <path class="circle" stroke-dasharray="85, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                <path
+                  class="circle-bg"
+                  d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                />
+                <path
+                  class="circle"
+                  stroke-dasharray="85, 100"
+                  d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                />
               </svg>
               <div class="ring-text">85%</div>
             </div>
@@ -158,7 +176,7 @@
           </svg>
         </button>
       </div>
-      
+
       <div class="form-wrapper">
         <div class="form-container">
           <div class="form-header">
@@ -182,7 +200,7 @@
               <span v-if="loginLoading" class="spinner"></span>
               <span v-else>登录</span>
             </button>
-            
+
             <div class="form-footer">
               <span>还没有账号？</span>
               <a @click="drawerMode = 'register'">立即注册</a>
@@ -197,30 +215,38 @@
             <div class="input-row">
               <div class="input-group">
                 <label>组织昵称 <span class="optional">选填</span></label>
-                <input v-model.trim="registerForm.organization_nickname" placeholder="您的组织名称" />
+                <input
+                  v-model.trim="registerForm.organization_nickname"
+                  placeholder="您的组织名称"
+                />
               </div>
               <div class="input-group">
-                <label>组织类型</label>
-                <select v-model="registerForm.organization_type">
-                  <option value="个人">个人开发者</option>
-                  <option value="团队">企业团队</option>
-                </select>
+                <label>默认组织类型</label>
+                <input value="个人开发者" disabled />
               </div>
             </div>
             <div class="input-group">
               <label>密码</label>
-              <input v-model="registerForm.password" type="password" placeholder="设置登录密码（至少6位）" />
+              <input
+                v-model="registerForm.password"
+                type="password"
+                placeholder="设置登录密码（至少6位）"
+              />
             </div>
             <div class="input-group">
               <label>确认密码</label>
-              <input v-model="registerForm.confirmPassword" type="password" placeholder="再次输入密码" />
+              <input
+                v-model="registerForm.confirmPassword"
+                type="password"
+                placeholder="再次输入密码"
+              />
             </div>
             <div v-if="registerError" class="error">{{ registerError }}</div>
             <button class="submit-btn" @click="submitRegister" :disabled="registerLoading">
               <span v-if="registerLoading" class="spinner"></span>
               <span v-else>创建账号</span>
             </button>
-            
+
             <div class="form-footer">
               <span>已有账号？</span>
               <a @click="drawerMode = 'login'">直接登录</a>
@@ -425,16 +451,26 @@ const submitRegister = async () => {
 .grid-pattern {
   position: absolute;
   inset: 0;
-  background-image: 
-    radial-gradient(circle at 1px 1px, rgba(102, 126, 234, 0.15) 1px, transparent 0);
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    rgba(102, 126, 234, 0.15) 1px,
+    transparent 0
+  );
   background-size: 40px 40px;
   mask-image: linear-gradient(to bottom, transparent 0%, black 20%, black 80%, transparent 100%);
 }
 
 @keyframes float {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  33% { transform: translate(30px, -30px) scale(1.1); }
-  66% { transform: translate(-20px, 20px) scale(0.9); }
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  33% {
+    transform: translate(30px, -30px) scale(1.1);
+  }
+  66% {
+    transform: translate(-20px, 20px) scale(0.9);
+  }
 }
 
 /* 顶部栏 - 玻璃拟态 */
@@ -673,8 +709,13 @@ const submitRegister = async () => {
 }
 
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
 }
 
 .hero-title {
@@ -784,9 +825,7 @@ const submitRegister = async () => {
   position: relative;
   border-radius: 24px;
   overflow: hidden;
-  box-shadow: 
-    0 25px 80px rgba(102, 126, 234, 0.15),
-    0 10px 30px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 25px 80px rgba(102, 126, 234, 0.15), 0 10px 30px rgba(0, 0, 0, 0.1);
   border: 1px solid rgba(102, 126, 234, 0.1);
 }
 
@@ -813,9 +852,16 @@ const submitRegister = async () => {
 }
 
 @keyframes shine {
-  0%, 100% { transform: translateX(-100%); }
-  50% { transform: translateX(100%); }
-  100% { transform: translateX(100%); }
+  0%,
+  100% {
+    transform: translateX(-100%);
+  }
+  50% {
+    transform: translateX(100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
 }
 
 .floating-card {
@@ -847,8 +893,13 @@ const submitRegister = async () => {
 }
 
 @keyframes float-card {
-  0%, 100% { transform: translateY(0) rotate(0deg); }
-  50% { transform: translateY(-15px) rotate(2deg); }
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-15px) rotate(2deg);
+  }
 }
 
 .mini-stat {
@@ -1190,7 +1241,9 @@ const submitRegister = async () => {
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .form-footer {
@@ -1229,17 +1282,17 @@ const submitRegister = async () => {
     grid-template-columns: 1fr;
     gap: 80px;
   }
-  
+
   .hero-visual {
     order: -1;
     max-width: 600px;
     margin: 0 auto;
   }
-  
+
   .floating-card {
     display: none;
   }
-  
+
   .features-section {
     grid-template-columns: repeat(2, 1fr);
   }
@@ -1249,40 +1302,40 @@ const submitRegister = async () => {
   .header {
     padding: 0 24px;
   }
-  
+
   .main {
     padding: 120px 24px 80px;
   }
-  
+
   .hero-title {
     font-size: 40px;
   }
-  
+
   .hero-stats {
     gap: 32px;
   }
-  
+
   .stat:not(:last-child)::after {
     display: none;
   }
-  
+
   .hero-actions {
     flex-direction: column;
   }
-  
+
   .btn-main {
     width: 100%;
     justify-content: center;
   }
-  
+
   .features-section {
     grid-template-columns: 1fr;
   }
-  
+
   .form-wrapper {
     padding: 0 24px 24px;
   }
-  
+
   .input-row {
     grid-template-columns: 1fr;
   }

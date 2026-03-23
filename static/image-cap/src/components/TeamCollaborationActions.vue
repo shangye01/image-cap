@@ -43,7 +43,7 @@
     <button
       class="team-action-btn primary"
       type="button"
-      :disabled="!projectName || !currentOrganization"
+      :disabled="!projectName || !projectId || !currentOrganization"
       @click="openShareDialog"
     >
       <span>🔗</span>
@@ -71,7 +71,10 @@
               </div>
 
               <div class="share-member-header">选择团队成员</div>
-              <div v-if="teamMembers.length" class="member-list">
+              <div v-if="loadingMembers" class="team-empty team-empty-dialog">
+                正在加载团队成员...
+              </div>
+              <div v-else-if="teamMembers.length" class="member-list">
                 <label
                   v-for="member in teamMembers"
                   :key="member.id"
@@ -99,8 +102,13 @@
               <button class="dialog-btn secondary" type="button" @click="closeShareDialog">
                 取消
               </button>
-              <button class="dialog-btn primary" type="button" @click="confirmShare">
-                确认分享
+              <button
+                class="dialog-btn primary"
+                type="button"
+                :disabled="shareSubmitting"
+                @click="confirmShare"
+              >
+                {{ shareSubmitting ? '分享中...' : '确认分享' }}
               </button>
             </div>
           </div>
@@ -132,8 +140,17 @@
               <div class="invite-link-card">
                 <div class="invite-link-label">团队邀请链接</div>
                 <div class="invite-link-row">
-                  <input :value="currentInviteLink" class="invite-link-input" readonly />
-                  <button class="dialog-btn primary small" type="button" @click="copyInviteLink">
+                  <input
+                    :value="inviteLoading ? '正在生成邀请链接...' : currentInviteLink"
+                    class="invite-link-input"
+                    readonly
+                  />
+                  <button
+                    class="dialog-btn primary small"
+                    type="button"
+                    :disabled="inviteLoading || !currentInviteLink"
+                    @click="copyInviteLink"
+                  >
                     复制链接
                   </button>
                 </div>
@@ -181,31 +198,26 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
-import type { UserOrganization } from '@/api/auth'
-import { useUserStore } from '@/stores/user'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import {
-  createTeamInvite,
-  isInvitationExpired,
-  listOrganizationInvites,
-  type TeamInvitationRecord,
-} from '@/services/teamInvitations'
+  createTeamInvitationApi,
+  listOrganizationMembersApi,
+  type TeamMember,
+  type UserOrganization,
+} from '@/api/auth'
+import { shareProject } from '@/api/projectStorage'
+import { useUserStore } from '@/stores/user'
 
 const props = defineProps({
   projectName: {
     type: String,
     default: '',
   },
+  projectId: {
+    type: String,
+    default: '',
+  },
 })
-
-const TEAM_MEMBER_STORAGE_KEY = 'team_member_map'
-const PROJECT_SHARE_STORAGE_KEY = 'project_share_history'
-
-interface TeamMember {
-  id: string
-  name: string
-  role: string
-}
 
 const userStore = useUserStore()
 const actionRootRef = ref<HTMLElement | null>(null)
@@ -213,57 +225,22 @@ const teamMenuVisible = ref(false)
 const shareVisible = ref(false)
 const inviteVisible = ref(false)
 const currentInviteLink = ref('')
+const teamMembers = ref<TeamMember[]>([])
+const loadingMembers = ref(false)
+const inviteLoading = ref(false)
+const shareSubmitting = ref(false)
 const shareForm = reactive({
   memberIds: [] as string[],
   message: '',
 })
 
 const organizations = computed(() => userStore.user?.organizations || [])
-const currentOrganization = computed(() => {
-  const storeOrganization = userStore.currentOrganization
-  if (storeOrganization && storeOrganization.organization_type !== '个人') return storeOrganization
-  return (
-    organizations.value.find((item) => item.organization_type !== '个人') ||
-    organizations.value[0] ||
-    null
-  )
-})
+const currentOrganization = computed(
+  () => userStore.currentOrganization || organizations.value[0] || null
+)
 const activeOrganizationName = computed(
   () => currentOrganization.value?.organization_nickname || userStore.currentOrganizationName
 )
-
-const inviteHistory = computed(() => {
-  if (!activeOrganizationName.value) return []
-  return listOrganizationInvites(activeOrganizationName.value)
-})
-
-const teamMembers = computed<TeamMember[]>(() => {
-  if (!currentOrganization.value) return []
-
-  const memberMap = readMemberMap()
-  const storedMembers = memberMap[currentOrganization.value.organization_nickname] || []
-  const baseMembers = storedMembers.length
-    ? storedMembers
-    : buildDefaultMembers(currentOrganization.value)
-  const acceptedMembers = inviteHistory.value.flatMap((invite) =>
-    invite.accepted_members.map((member) => ({
-      id: member.user_id,
-      name: member.username,
-      role: '团队成员',
-    }))
-  )
-  const mergedMembers = [...baseMembers]
-
-  acceptedMembers.forEach((member) => {
-    if (!mergedMembers.some((item) => item.id === member.id)) {
-      mergedMembers.push(member)
-    }
-  })
-
-  memberMap[currentOrganization.value.organization_nickname] = mergedMembers
-  localStorage.setItem(TEAM_MEMBER_STORAGE_KEY, JSON.stringify(memberMap))
-  return mergedMembers
-})
 
 const toggleTeamMenu = () => {
   teamMenuVisible.value = !teamMenuVisible.value
@@ -274,67 +251,84 @@ const selectOrganization = (organizationName: string) => {
   teamMenuVisible.value = false
 }
 
-const openShareDialog = () => {
-  if (!props.projectName || !currentOrganization.value) return
+const loadMembers = async () => {
+  if (!activeOrganizationName.value) {
+    teamMembers.value = []
+    return
+  }
+
+  loadingMembers.value = true
+  try {
+    const response = await listOrganizationMembersApi(activeOrganizationName.value)
+    const currentUserId = userStore.user?.id
+    teamMembers.value = response.members.filter((member) => member.id !== currentUserId)
+  } catch (error: any) {
+    teamMembers.value = []
+    window.alert(error?.response?.data?.detail || error?.message || '读取团队成员失败')
+  } finally {
+    loadingMembers.value = false
+  }
+}
+
+const openShareDialog = async () => {
+  if (!props.projectName || !props.projectId || !currentOrganization.value) return
   shareForm.memberIds = []
   shareForm.message = ''
   shareVisible.value = true
+  await loadMembers()
 }
 
 const closeShareDialog = () => {
   shareVisible.value = false
 }
 
-const openInviteDialog = () => {
+const openInviteDialog = async () => {
   if (!currentOrganization.value || currentOrganization.value.organization_type !== '团队') return
   inviteVisible.value = true
-  if (!inviteHistory.value.length) {
-    generateInviteLink()
-    return
+  inviteLoading.value = true
+  try {
+    const invitation = await createTeamInvitationApi({
+      organization_nickname: currentOrganization.value.organization_nickname,
+    })
+    currentInviteLink.value = `${window.location.origin}${invitation.invite_link}`
+  } catch (error: any) {
+    currentInviteLink.value = ''
+    window.alert(error?.response?.data?.detail || error?.message || '生成邀请链接失败')
+  } finally {
+    inviteLoading.value = false
   }
-  currentInviteLink.value = inviteHistory.value[0]?.invite_link || ''
 }
 
 const closeInviteDialog = () => {
   inviteVisible.value = false
 }
 
-const confirmShare = () => {
+const confirmShare = async () => {
+  if (!props.projectId || !currentOrganization.value) return
   if (!shareForm.memberIds.length) {
     window.alert('请至少选择一位团队成员')
     return
   }
 
-  const history = JSON.parse(localStorage.getItem(PROJECT_SHARE_STORAGE_KEY) || '[]')
-  const selectedMembers = teamMembers.value.filter((member) =>
-    shareForm.memberIds.includes(member.id)
-  )
-
-  history.unshift({
-    id: `${Date.now()}`,
-    projectName: props.projectName,
-    organizationName: activeOrganizationName.value,
-    memberIds: [...shareForm.memberIds],
-    memberNames: selectedMembers.map((member) => member.name),
-    message: shareForm.message,
-    sharedAt: new Date().toISOString(),
-  })
-
-  localStorage.setItem(PROJECT_SHARE_STORAGE_KEY, JSON.stringify(history))
-  closeShareDialog()
-  window.alert(
-    `已将“${props.projectName}”分享给 ${selectedMembers.map((member) => member.name).join('、')}`
-  )
-}
-
-const generateInviteLink = () => {
-  if (!currentOrganization.value || !userStore.user) return
-
-  const invitation = createTeamInvite({
-    organization: currentOrganization.value,
-    inviter: userStore.user,
-  })
-  currentInviteLink.value = invitation.invite_link
+  shareSubmitting.value = true
+  try {
+    const selectedMembers = teamMembers.value.filter((member) =>
+      shareForm.memberIds.includes(member.id)
+    )
+    await shareProject(props.projectId, {
+      recipient_ids: [...shareForm.memberIds],
+      organization_nickname: currentOrganization.value.organization_nickname,
+      message: shareForm.message || undefined,
+    })
+    closeShareDialog()
+    window.alert(
+      `已将“${props.projectName}”分享给 ${selectedMembers.map((member) => member.name).join('、')}`
+    )
+  } catch (error: any) {
+    window.alert(error?.response?.data?.detail || error?.message || '分享项目失败')
+  } finally {
+    shareSubmitting.value = false
+  }
 }
 
 const copyLink = async (link: string) => {
@@ -349,38 +343,13 @@ const copyLink = async (link: string) => {
 }
 
 const copyInviteLink = async () => {
-  if (!currentInviteLink.value) {
-    generateInviteLink()
-  }
+  if (!currentInviteLink.value) return
 
   await copyLink(currentInviteLink.value)
 }
 
 const getOrganizationTypeLabel = (organization: UserOrganization) =>
   organization.organization_type || '团队'
-
-const readMemberMap = (): Record<string, TeamMember[]> => {
-  try {
-    return JSON.parse(localStorage.getItem(TEAM_MEMBER_STORAGE_KEY) || '{}') as Record<
-      string,
-      TeamMember[]
-    >
-  } catch {
-    return {}
-  }
-}
-
-const buildDefaultMembers = (organization: UserOrganization): TeamMember[] => {
-  const count = Math.max(organization.member_count || 1, 1)
-  return Array.from({ length: count }, (_, index) => ({
-    id: `${organization.organization_nickname}-${index + 1}`,
-    name:
-      index === 0
-        ? `${organization.organization_nickname}负责人`
-        : `${organization.organization_nickname}成员${index + 1}`,
-    role: index === 0 ? '管理员' : '团队成员',
-  }))
-}
 
 const handleClickOutside = (event: MouseEvent) => {
   const target = event.target as Node | null
@@ -389,15 +358,11 @@ const handleClickOutside = (event: MouseEvent) => {
   }
 }
 
-const formatDateTime = (value: string) =>
-  new Date(value).toLocaleString('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-
-const isInviteExpired = (invite: TeamInvitationRecord) => isInvitationExpired(invite)
+watch(activeOrganizationName, () => {
+  if (shareVisible.value) {
+    loadMembers()
+  }
+})
 
 onMounted(() => {
   window.addEventListener('click', handleClickOutside)

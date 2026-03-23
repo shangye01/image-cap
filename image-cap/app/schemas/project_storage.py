@@ -23,7 +23,7 @@ class AnnotationSessionTask(BaseModel):
     use_keywords: bool
     keywords: List[str]
     status: str
-    annotations: Optional[List[dict]] = []  # ✅ 新增预标注数组
+    annotations: Optional[List[dict]] = []
 
 
 class AnnotationSessionResponse(BaseModel):
@@ -42,12 +42,31 @@ class ProjectCreate(BaseModel):
     owner_id: str = Field(min_length=1, max_length=64)
 
 
+class ProjectShareCreate(BaseModel):
+    recipient_ids: List[str] = Field(min_length=1)
+    organization_nickname: str = Field(min_length=1, max_length=100)
+    message: str | None = Field(default=None, max_length=500)
+
+
+class SharedProjectMeta(BaseModel):
+    is_shared_copy: bool = False
+    source_project_id: UUID | None = None
+    shared_by: str | None = None
+    shared_at: datetime | None = None
+    share_message: str | None = None
+
+
 class ProjectOut(BaseModel):
     id: UUID
     name: str
     description: str | None
     owner_id: str
     created_at: datetime
+    source_project_id: UUID | None = None
+    is_shared_copy: bool = False
+    shared_by: str | None = None
+    shared_at: datetime | None = None
+    share_message: str | None = None
 
     class Config:
         from_attributes = True

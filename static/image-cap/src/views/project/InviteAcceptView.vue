@@ -74,7 +74,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import {
   acceptTeamInvitation,
@@ -84,6 +84,7 @@ import {
 } from '@/services/teamInvitations'
 
 const route = useRoute()
+const router = useRouter()
 const userStore = useUserStore()
 
 const loading = ref(true)
@@ -101,41 +102,51 @@ const registerTarget = computed(() => ({
   query: { redirect: redirectPath.value },
 }))
 
-const loadInvitation = () => {
+const loadInvitation = async () => {
   loading.value = true
-  invitation.value = token.value ? getInvitationByToken(token.value) : null
-  if (!invitation.value) {
-    statusMessage.value = '邀请链接不存在或已失效。'
+  try {
+    invitation.value = token.value ? await getInvitationByToken(token.value) : null
+    if (!invitation.value) {
+      statusMessage.value = '邀请链接不存在或已失效。'
+      inviteStatusType.value = 'error'
+      return
+    }
+
+    if (expired.value) {
+      statusMessage.value = '该邀请链接已过期，请联系团队重新生成。'
+      inviteStatusType.value = 'warning'
+    } else {
+      statusMessage.value = ''
+    }
+  } catch (error: any) {
+    invitation.value = null
+    statusMessage.value =
+      error?.response?.data?.detail || error?.message || '邀请链接不存在或已失效。'
     inviteStatusType.value = 'error'
+  } finally {
     loading.value = false
-    return
   }
-
-  if (expired.value) {
-    statusMessage.value = '该邀请链接已过期，请联系团队重新生成。'
-    inviteStatusType.value = 'warning'
-  } else {
-    statusMessage.value = ''
-  }
-
-  loading.value = false
 }
 
-const acceptInvite = () => {
+const acceptInvite = async () => {
   if (!userStore.user || !invitation.value || !token.value) return
 
   accepting.value = true
   try {
-    const result = acceptTeamInvitation(token.value, userStore.user)
-    userStore.refreshUserOrganizations()
+    const result = await acceptTeamInvitation(token.value, userStore.user)
+    userStore.refreshUserOrganizations(result.user)
     userStore.setCurrentOrganization(result.organization.organization_nickname)
     statusMessage.value = result.alreadyJoined
       ? `你已在“${result.organization.organization_nickname}”团队中，无需重复加入。`
-      : `已成功加入“${result.organization.organization_nickname}”，现在可以在创建页切换到该团队。`
+      : `已成功加入“${result.organization.organization_nickname}”，正在跳转到首页。`
     inviteStatusType.value = result.alreadyJoined ? 'warning' : 'success'
-    loadInvitation()
-  } catch (error) {
-    statusMessage.value = error instanceof Error ? error.message : '加入团队失败，请稍后重试。'
+    await loadInvitation()
+    window.setTimeout(() => {
+      router.push('/app/guide')
+    }, 600)
+  } catch (error: any) {
+    statusMessage.value =
+      error?.response?.data?.detail || error?.message || '加入团队失败，请稍后重试。'
     inviteStatusType.value = 'error'
   } finally {
     accepting.value = false

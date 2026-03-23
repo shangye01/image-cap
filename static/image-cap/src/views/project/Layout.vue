@@ -168,7 +168,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { logoutApi } from '@/api/auth'
+import { createOrganizationApi, logoutApi } from '@/api/auth'
 import { useUserStore } from '@/stores/user'
 
 const router = useRouter()
@@ -246,15 +246,20 @@ const closeTeamCreateDialog = () => {
   teamDialogVisible.value = false
 }
 
-const confirmTeamCreate = () => {
+const confirmTeamCreate = async () => {
   if (teamDialogError.value) return
 
   try {
-    userStore.addOrganization(teamForm.name)
+    const response = await createOrganizationApi({
+      organization_nickname: teamForm.name.trim(),
+      organization_type: '团队',
+    })
+    userStore.refreshUserOrganizations(response.user)
+    userStore.setCurrentOrganization(response.organization.organization_nickname)
     closeTeamCreateDialog()
     window.alert(`团队“${teamForm.name.trim()}”创建成功`)
   } catch (error) {
-    window.alert(error?.message || '创建失败，请稍后重试')
+    window.alert(error?.response?.data?.detail || error?.message || '创建失败，请稍后重试')
   }
 }
 const handleLogout = async () => {

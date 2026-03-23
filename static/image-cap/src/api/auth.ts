@@ -8,6 +8,32 @@ export interface UserOrganization {
   organization_created_at: string
 }
 
+export interface TeamMember {
+  id: string
+  name: string
+  role: string
+  joined_at?: string | null
+}
+
+export interface TeamInvitationRecord {
+  token: string
+  organization_nickname: string
+  organization_type: '个人' | '团队'
+  organization_created_at: string
+  inviter_id: string
+  inviter_name: string
+  invite_link: string
+  created_at: string
+  expires_at: string
+  accepted_user_ids: string[]
+  accepted_members: Array<{
+    user_id: string
+    username: string
+  }>
+  accepted_at?: string | null
+  accepted_by?: string | null
+}
+
 export interface UserProfile {
   id: string
   username: string
@@ -37,4 +63,37 @@ export function logoutApi() {
 
 export function getMeApi() {
   return request.get<{ user: UserProfile }>('/auth/me')
+}
+
+export function createOrganizationApi(data: {
+  organization_nickname: string
+  organization_type?: '团队'
+}) {
+  return request.post<{ message: string; organization: UserOrganization; user: UserProfile }>(
+    '/auth/organizations',
+    data,
+  )
+}
+
+export function listOrganizationMembersApi(organizationNickname: string) {
+  return request.get<{ organization_nickname: string; members: TeamMember[] }>(
+    `/auth/organizations/${encodeURIComponent(organizationNickname)}/members`,
+  )
+}
+
+export function createTeamInvitationApi(data: { organization_nickname: string }) {
+  return request.post<TeamInvitationRecord>('/auth/team-invitations', data)
+}
+
+export function getTeamInvitationApi(token: string) {
+  return request.get<TeamInvitationRecord>(`/auth/team-invitations/${encodeURIComponent(token)}`)
+}
+
+export function acceptTeamInvitationApi(token: string) {
+  return request.post<{
+    alreadyJoined: boolean
+    organization: UserOrganization
+    invitation: TeamInvitationRecord
+    user: UserProfile
+  }>(`/auth/team-invitations/${encodeURIComponent(token)}/accept`)
 }

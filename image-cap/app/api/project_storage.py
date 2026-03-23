@@ -1,24 +1,22 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
-from app.config import (
-    SUPABASE_PROJECT_FILES_BUCKET,
-    SUPABASE_PROJECT_FILES_PUBLIC,
-    supabase,
-)
 
+from app.config import SUPABASE_PROJECT_FILES_BUCKET, SUPABASE_PROJECT_FILES_PUBLIC, supabase
 from app.db.session import get_db
-import logging
-logger = logging.getLogger(__name__)
-from app.models import Project, ProjectFile
-from app.schemas.project_storage import FileOut, ProjectCreate, ProjectOut
+from app.models import Organization, Project, ProjectFile, User, UserOrganization
+from app.schemas.project_storage import FileOut, ProjectCreate, ProjectOut, ProjectShareCreate
+from app.utils.jwt import ALGORITHM, SECRET_KEY
+from jose import jwt
 
 router = APIRouter(prefix="/api/projects", tags=["project-storage"])
+
 
 def _build_file_urls(file_record: ProjectFile, request: Request) -> tuple[str, str]:
     download_url = str(request.url_for("download_project_file", file_id=str(file_record.id)))
@@ -56,6 +54,33 @@ def _ensure_storage_client():
     return supabase.storage.from_(SUPABASE_PROJECT_FILES_BUCKET)
 
 
+def _resolve_user_id_from_token(authorization: str | None) -> str | None:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        return None
+    token = authorization.split(" ", 1)[1].strip()
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload.get("user_id")
+    except Exception:
+        return None
+
+
+def _require_current_user(db: Session, authorization: str | None) -> User:
+    user_id = _resolve_user_id_from_token(authorization)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="未登录或 token 无效")
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    return user
+
+
+def _serialize_project(project: Project) -> ProjectOut:
+    return ProjectOut.model_validate(project)
+
+
 @router.post("", response_model=ProjectOut)
 def create_project(payload: ProjectCreate, db: Session = Depends(get_db)):
     existed = db.query(Project).filter(Project.name == payload.name).first()
@@ -67,15 +92,102 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db)):
     db.add(project)
     db.commit()
     db.refresh(project)
-    return project
+    return _serialize_project(project)
 
 
 @router.get("", response_model=list[ProjectOut])
 def list_projects(owner_id: str | None = None, db: Session = Depends(get_db)):
-    query = db.query(Project).order_by(Project.created_at.desc())
+    query = db.query(Project).order_by(Project.shared_at.desc().nullslast(), Project.created_at.desc())
     if owner_id:
         query = query.filter(Project.owner_id == owner_id)
-    return query.all()
+    return [_serialize_project(project) for project in query.all()]
+
+    @router.post("/{project_id}/share")
+    def share_project(
+            project_id: uuid.UUID,
+            payload: ProjectShareCreate,
+            authorization: str | None = Header(default=None),
+            db: Session = Depends(get_db),
+    ):
+        user = _require_current_user(db, authorization)
+        project = db.query(Project).filter(Project.id == project_id).first()
+        if not project:
+            raise HTTPException(status_code=404, detail="项目不存在")
+        if project.owner_id != user.username:
+            raise HTTPException(status_code=403, detail="仅项目拥有者可以分享项目")
+
+        organization = (
+            db.query(Organization)
+            .join(UserOrganization, UserOrganization.organization_id == Organization.id)
+            .filter(Organization.nickname == payload.organization_nickname, UserOrganization.user_id == user.id)
+            .first()
+        )
+        if not organization:
+            raise HTTPException(status_code=404, detail="组织不存在或你尚未加入该组织")
+
+        memberships = (
+            db.query(UserOrganization)
+            .filter(
+                UserOrganization.organization_id == organization.id,
+                UserOrganization.user_id.in_(payload.recipient_ids),
+            )
+            .all()
+        )
+        membership_map = {membership.user_id: membership for membership in memberships}
+        if len(membership_map) != len(set(payload.recipient_ids)):
+            raise HTTPException(status_code=400, detail="所选成员必须属于当前组织")
+
+        existing_copies = (
+            db.query(Project)
+            .filter(Project.source_project_id == project.id,
+                    Project.owner_id.in_([m.user.username for m in memberships]))
+            .all()
+        )
+        existing_by_owner = {item.owner_id: item for item in existing_copies}
+
+        copied_to = []
+        for membership in memberships:
+            recipient = membership.user
+            copied_name = f"[分享] {project.name} - {recipient.username}"
+            existing_copy = existing_by_owner.get(recipient.username)
+            if existing_copy:
+                existing_copy.description = project.description
+                existing_copy.share_message = payload.message
+                existing_copy.shared_by = user.username
+                existing_copy.shared_at = datetime.utcnow()
+                copied_project = existing_copy
+                db.query(ProjectFile).filter(ProjectFile.project_id == existing_copy.id).delete()
+            else:
+                copied_project = Project(
+                    name=copied_name,
+                    description=project.description,
+                    owner_id=recipient.username,
+                    source_project_id=project.id,
+                    is_shared_copy=True,
+                    shared_by=user.username,
+                    shared_at=datetime.utcnow(),
+                    share_message=payload.message,
+                )
+                db.add(copied_project)
+                db.flush()
+
+            for source_file in project.files:
+                db.add(
+                    ProjectFile(
+                        project_id=copied_project.id,
+                        filename=source_file.filename,
+                        storage_path=source_file.storage_path,
+                        mime_type=source_file.mime_type,
+                        size_bytes=source_file.size_bytes,
+                        uploaded_by=user.username,
+                        status=source_file.status,
+                    )
+                )
+
+            copied_to.append({"user_id": recipient.id, "username": recipient.username, "project_id": copied_project.id})
+
+        db.commit()
+        return {"message": "项目分享成功", "copied_to": copied_to}
 
 
 @router.post("/{project_id}/files", response_model=FileOut)
@@ -118,7 +230,7 @@ def upload_project_file(
         mime_type=file.content_type or "application/octet-stream",
         size_bytes=len(file_bytes),
         uploaded_by=uploaded_by,
-        status="pending"  # ✅ 数据库层面记录分类
+        status="pending",
     )
     db.add(file_record)
     db.commit()
@@ -128,39 +240,14 @@ def upload_project_file(
 
 @router.get("/{project_id}/files", response_model=list[FileOut])
 def list_project_files(project_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
-    logger.info(f"【FILES-001】查询项目文件列表 | project_id={project_id}")
-
-    # 强制刷新会话
-    logger.info(f"【FILES-002】执行db.expire_all()")
-    db.expire_all()
-
-    logger.info(f"【FILES-003】执行db.commit()")
-    db.commit()
-
-    # 查询文件
-    logger.info(f"【FILES-004】查询ProjectFile表")
     file_records = (
         db.query(ProjectFile)
         .filter(ProjectFile.project_id == project_id)
         .order_by(ProjectFile.created_at.desc())
         .all()
     )
+    return [_serialize_file(file_record, request) for file_record in file_records]
 
-    logger.info(f"【FILES-005】查询结果 | total_files={len(file_records)}")
-
-    # 记录每个文件的状态
-    status_summary = {}
-    for f in file_records:
-        status_summary[f.status] = status_summary.get(f.status, 0) + 1
-        logger.info(f"【FILES-006】文件详情 | file_id={f.id}, filename={f.filename}, status={f.status}")
-
-    logger.info(f"【FILES-007】状态统计 | {status_summary}")
-
-    # 序列化并返回
-    result = [_serialize_file(file_record, request) for file_record in file_records]
-    logger.info(f"【FILES-008】返回文件列表 | count={len(result)}")
-
-    return result
 
 @router.get("/files/{file_id}/download")
 def download_project_file(file_id: uuid.UUID, db: Session = Depends(get_db)):
@@ -186,6 +273,7 @@ def download_project_file(file_id: uuid.UUID, db: Session = Depends(get_db)):
         },
     )
 
+
 @router.delete("/{project_id}")
 def delete_project(project_id: uuid.UUID, db: Session = Depends(get_db)):
     project = db.query(Project).filter(Project.id == project_id).first()
@@ -193,14 +281,19 @@ def delete_project(project_id: uuid.UUID, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="项目不存在")
 
     storage_keys = [file_record.storage_path for file_record in project.files if file_record.storage_path]
-    if storage_keys:
-        bucket = _ensure_storage_client()
-        try:
-            bucket.remove(storage_keys)
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"删除 Supabase Storage 文件失败: {exc}") from exc
+    if storage_keys and not project.is_shared_copy:
+        other_file_count = (
+            db.query(ProjectFile)
+            .filter(ProjectFile.storage_path.in_(storage_keys), ProjectFile.project_id != project.id)
+            .count()
+        )
+        if other_file_count == 0:
+            bucket = _ensure_storage_client()
+            try:
+                bucket.remove(storage_keys)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"删除 Supabase Storage 文件失败: {exc}") from exc
 
-    # 删除数据库记录（会自动级联删除 files）
     db.delete(project)
     db.commit()
 
