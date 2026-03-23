@@ -43,7 +43,7 @@
     <button
       class="team-action-btn primary"
       type="button"
-      :disabled="!projectName || !projectId || !currentOrganization"
+      :disabled="!currentOrganization || !shareableProjects.length"
       @click="openShareDialog"
     >
       <span>🔗</span>
@@ -66,8 +66,18 @@
 
             <div class="dialog-body">
               <div class="share-project-card">
-                <div class="share-project-label">项目名称</div>
-                <div class="share-project-name">{{ projectName || '请先进入项目后再分享' }}</div>
+                <div class="share-project-label">选择分享项目</div>
+                <select v-model="shareForm.projectId" class="share-project-select">
+                  <option value="" disabled>请选择要分享的整个项目</option>
+                  <option
+                    v-for="project in shareableProjects"
+                    :key="project.id"
+                    :value="project.id"
+                  >
+                    {{ project.name }}
+                  </option>
+                </select>
+                <div class="share-project-hint">分享后，成员会收到该项目的完整副本。</div>
               </div>
 
               <div class="share-member-header">选择团队成员</div>
@@ -217,6 +227,10 @@ const props = defineProps({
     type: String,
     default: '',
   },
+  projectOptions: {
+    type: Array as () => Array<{ id: string; name: string; isSharedCopy?: boolean }>,
+    default: () => [],
+  },
 })
 
 const userStore = useUserStore()
@@ -230,6 +244,7 @@ const loadingMembers = ref(false)
 const inviteLoading = ref(false)
 const shareSubmitting = ref(false)
 const shareForm = reactive({
+  projectId: '',
   memberIds: [] as string[],
   message: '',
 })
@@ -241,6 +256,13 @@ const currentOrganization = computed(
 const activeOrganizationName = computed(
   () => currentOrganization.value?.organization_nickname || userStore.currentOrganizationName
 )
+const shareableProjects = computed(() =>
+  (props.projectOptions || []).filter((project) => !project.isSharedCopy)
+)
+const selectedShareProject = computed(() => {
+  if (!shareForm.projectId) return null
+  return shareableProjects.value.find((project) => project.id === shareForm.projectId) || null
+})
 
 const toggleTeamMenu = () => {
   teamMenuVisible.value = !teamMenuVisible.value
@@ -271,7 +293,11 @@ const loadMembers = async () => {
 }
 
 const openShareDialog = async () => {
-  if (!props.projectName || !props.projectId || !currentOrganization.value) return
+  if (!currentOrganization.value || !shareableProjects.value.length) return
+  shareForm.projectId =
+    shareableProjects.value.find((project) => project.id === props.projectId)?.id ||
+    shareableProjects.value[0]?.id ||
+    ''
   shareForm.memberIds = []
   shareForm.message = ''
   shareVisible.value = true
@@ -304,7 +330,7 @@ const closeInviteDialog = () => {
 }
 
 const confirmShare = async () => {
-  if (!props.projectId || !currentOrganization.value) return
+  if (!currentOrganization.value || !shareForm.projectId) return
   if (!shareForm.memberIds.length) {
     window.alert('请至少选择一位团队成员')
     return
@@ -315,14 +341,15 @@ const confirmShare = async () => {
     const selectedMembers = teamMembers.value.filter((member) =>
       shareForm.memberIds.includes(member.id)
     )
-    await shareProject(props.projectId, {
+    await shareProject(shareForm.projectId, {
       recipient_ids: [...shareForm.memberIds],
       organization_nickname: currentOrganization.value.organization_nickname,
       message: shareForm.message || undefined,
     })
+    const sharedProjectName = selectedShareProject.value?.name || props.projectName || '当前项目'
     closeShareDialog()
     window.alert(
-      `已将“${props.projectName}”分享给 ${selectedMembers.map((member) => member.name).join('、')}`
+      `已将“${sharedProjectName}”分享给 ${selectedMembers.map((member) => member.name).join('、')}`
     )
   } catch (error: any) {
     window.alert(error?.response?.data?.detail || error?.message || '分享项目失败')
@@ -565,6 +592,29 @@ onUnmounted(() => {
   font-size: 16px;
   font-weight: 700;
   color: #0f172a;
+}
+
+.share-project-select {
+  width: 100%;
+  margin-top: 10px;
+  border: 1px solid #d7def0;
+  border-radius: 12px;
+  padding: 11px 14px;
+  font-size: 14px;
+  color: #111827;
+  background: #fff;
+  outline: none;
+}
+
+.share-project-select:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.share-project-hint {
+  margin-top: 10px;
+  font-size: 12px;
+  color: #64748b;
 }
 
 .member-list {

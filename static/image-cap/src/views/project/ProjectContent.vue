@@ -4,6 +4,13 @@
       <TeamCollaborationActions
         :project-id="currentProject?.id || ''"
         :project-name="currentProject?.projectName || ''"
+        :project-options="
+          projectList.map((item) => ({
+            id: item.id,
+            name: item.projectName,
+            isSharedCopy: item.isSharedCopy,
+          }))
+        "
       />
     </div>
     <!-- 1. 项目列表页 -->
