@@ -212,17 +212,7 @@
 
               <!-- 已标注文件夹：查看 -->
               <template v-else-if="isDoneFolder">
-                <button type="button" class="file-action-btn batch" @click="selectAllFilesInFolder">
-                  批量选择
-                </button>
-                <button
-                  type="button"
-                  class="file-action-btn work review-btn"
-                  @click="reviewCompleted"
-                  :disabled="doneTasks.length === 0"
-                >
-                  {{ doneTasks.length > 0 ? `查看已标注 (${doneTasks.length})` : '暂无已标注' }}
-                </button>
+                
               </template>
             </div>
           </div>

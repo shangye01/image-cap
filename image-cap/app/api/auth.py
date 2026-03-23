@@ -18,6 +18,7 @@ from ..utils.security import hash_password, verify_password
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
+
 DEFAULT_ORG_TYPES = {"个人", "团队"}
 AVATAR_BUCKET = os.getenv("SUPABASE_AVATAR_BUCKET", "avatars")
 DEFAULT_AVATAR_SVGS = [
