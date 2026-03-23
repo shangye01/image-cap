@@ -1,6 +1,11 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import type { UserProfile } from '@/api/auth'
+import type { UserOrganization, UserProfile } from '@/api/auth'
+import {
+  mergeAcceptedOrganizations,
+  syncOrganizationRegistryFromUser,
+  withComputedMemberCount,
+} from '@/services/teamInvitations'
 
 const USER_STORAGE_KEY = 'auth_user'
 const TOKEN_STORAGE_KEY = 'token'
@@ -11,7 +16,8 @@ function readStoredUser(): UserProfile | null {
   if (!raw) return null
 
   try {
-    return JSON.parse(raw) as UserProfile
+    const parsed = JSON.parse(raw) as UserProfile
+    return mergeAcceptedOrganizations(parsed)
   } catch {
     localStorage.removeItem(USER_STORAGE_KEY)
     return null
@@ -39,6 +45,26 @@ export const useUserStore = defineStore('user', () => {
     return matched || organizations[0]
   })
 
+  function persistUser(userInfo: UserProfile | null) {
+    if (!userInfo) {
+      localStorage.removeItem(USER_STORAGE_KEY)
+      return
+    }
+
+    const merged = mergeAcceptedOrganizations({
+      ...userInfo,
+      organizations: userInfo.organizations.map((organization) =>
+        withComputedMemberCount(organization),
+      ),
+    })
+
+    if (!merged) return
+
+    syncOrganizationRegistryFromUser(merged)
+    user.value = merged
+    localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(merged))
+  }
+
   function syncCurrentOrganization() {
     const organizations = user.value?.organizations || []
 
@@ -63,23 +89,22 @@ export const useUserStore = defineStore('user', () => {
   }
 
   function login(userInfo: UserProfile, tokenStr: string) {
-    user.value = userInfo
     token.value = tokenStr
     localStorage.setItem(TOKEN_STORAGE_KEY, tokenStr)
-    localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(userInfo))
+    persistUser(userInfo)
     syncCurrentOrganization()
   }
 
   function setUser(userInfo: UserProfile | null) {
-    user.value = userInfo
     if (userInfo) {
-      localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(userInfo))
+      persistUser(userInfo)
       syncCurrentOrganization()
-    } else {
-      localStorage.removeItem(USER_STORAGE_KEY)
-      currentOrganizationName.value = ''
-      localStorage.removeItem(CURRENT_ORG_STORAGE_KEY)
+      return
     }
+    user.value = null
+    localStorage.removeItem(USER_STORAGE_KEY)
+    currentOrganizationName.value = ''
+    localStorage.removeItem(CURRENT_ORG_STORAGE_KEY)
   }
 
   function setCurrentOrganization(name: string) {
@@ -103,7 +128,7 @@ export const useUserStore = defineStore('user', () => {
       throw new Error('团队名称已存在')
     }
 
-    user.value.organizations = [
+    const nextOrganizations: UserOrganization[] = [
       ...user.value.organizations,
       {
         organization_nickname: trimmedName,
@@ -114,9 +139,22 @@ export const useUserStore = defineStore('user', () => {
       },
     ]
 
-    localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user.value))
+    persistUser({
+      ...user.value,
+      organizations: nextOrganizations,
+    })
     setCurrentOrganization(trimmedName)
     return true
+  }
+
+  function refreshUserOrganizations() {
+    if (!user.value) return
+
+    persistUser({
+      ...user.value,
+      organizations: user.value.organizations,
+    })
+    syncCurrentOrganization()
   }
 
   function logout() {
@@ -128,7 +166,7 @@ export const useUserStore = defineStore('user', () => {
     localStorage.removeItem(CURRENT_ORG_STORAGE_KEY)
   }
 
-   syncCurrentOrganization()
+  syncCurrentOrganization()
 
   return {
     user,
@@ -140,6 +178,7 @@ export const useUserStore = defineStore('user', () => {
     setUser,
     setCurrentOrganization,
     addOrganization,
+    refreshUserOrganizations,
     logout,
   }
 })

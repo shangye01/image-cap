@@ -44,17 +44,19 @@
 
       <p class="switch-link">
         已有账号？
-        <router-link to="/login">去登录</router-link>
+        <router-link :to="loginLink">去登录</router-link>
       </p>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+defineOptions({ name: 'AuthRegister' })
+import { computed, ref } from 'vue'
 import { registerApi } from '@/api/auth'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
+const route = useRoute()
 const router = useRouter()
 const confirmPassword = ref('')
 
@@ -67,6 +69,11 @@ const form = ref({
 
 const loading = ref(false)
 const error = ref('')
+const redirectTarget = computed(() => String(route.query.redirect || '/app/guide'))
+const loginLink = computed(() => ({
+  path: '/login',
+  query: route.query.redirect ? { redirect: redirectTarget.value } : {},
+}))
 
 const submit = async () => {
   error.value = ''
@@ -85,9 +92,10 @@ const submit = async () => {
       ...form.value,
       organization_nickname: form.value.organization_nickname || undefined,
     })
-    router.push('/login')
-  } catch (err: any) {
-    error.value = err?.response?.data?.detail || err?.message || '注册失败'
+    router.push(loginLink.value)
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : ''
+    error.value = message || '注册失败'
   } finally {
     loading.value = false
   }

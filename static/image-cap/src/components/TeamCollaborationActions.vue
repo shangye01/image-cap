@@ -31,6 +31,16 @@
     </div>
 
     <button
+      class="team-action-btn secondary accent"
+      type="button"
+      :disabled="!currentOrganization || currentOrganization.organization_type !== '团队'"
+      @click="openInviteDialog"
+    >
+      <span>✉️</span>
+      <span>邀请成员</span>
+    </button>
+
+    <button
       class="team-action-btn primary"
       type="button"
       :disabled="!projectName || !currentOrganization"
@@ -97,12 +107,89 @@
         </div>
       </transition>
     </teleport>
+
+    <teleport to="body">
+      <transition name="dialog-fade">
+        <div v-if="inviteVisible" class="dialog-mask" @click="closeInviteDialog">
+          <div class="dialog-panel invite-dialog-panel" @click.stop>
+            <div class="share-dialog-header invite-dialog-header">
+              <div>
+                <div class="dialog-title">邀请成员加入团队</div>
+                <div class="dialog-subtitle">
+                  分享链接后，被邀请人登录并打开链接即可加入
+                  {{ activeOrganizationName || '当前团队' }}
+                </div>
+              </div>
+              <button class="dialog-close-btn" type="button" @click="closeInviteDialog">×</button>
+            </div>
+
+            <div class="dialog-body invite-dialog-body">
+              <div class="invite-current-team">
+                <span class="invite-badge">{{ activeOrganizationName || '未选择团队' }}</span>
+                <span class="invite-tip">邀请链接 7 天内有效，可重复分享。</span>
+              </div>
+
+              <div class="invite-link-card">
+                <div class="invite-link-label">团队邀请链接</div>
+                <div class="invite-link-row">
+                  <input :value="currentInviteLink" class="invite-link-input" readonly />
+                  <button class="dialog-btn primary small" type="button" @click="copyInviteLink">
+                    复制链接
+                  </button>
+                </div>
+                <div class="invite-helper-text">
+                  发送给成员后，对方进入链接并确认加入即可完成入队。
+                </div>
+              </div>
+
+              <!-- <div class="invite-history-header">
+                <span>最近生成的邀请</span>
+                <button class="text-action" type="button" @click="generateInviteLink">
+                  重新生成
+                </button>
+              </div> -->
+
+              <!-- <div v-if="inviteHistory.length" class="invite-history-list">
+                <div
+                  v-for="invite in inviteHistory"
+                  :key="invite.token"
+                  class="invite-history-item"
+                >
+                  <div>
+                    <div class="invite-history-time">{{ formatDateTime(invite.created_at) }}</div>
+                    <div class="invite-history-meta">
+                      已加入 {{ invite.accepted_user_ids.length }} 人 ·
+                      {{ isInviteExpired(invite) ? '已过期' : '有效中' }}
+                    </div>
+                  </div>
+                  <button
+                    class="dialog-btn secondary small"
+                    type="button"
+                    @click="copyLink(invite.invite_link)"
+                  >
+                    复制
+                  </button>
+                </div>
+              </div>
+              <div v-else class="team-empty team-empty-dialog">暂未生成邀请链接</div> -->
+            </div>
+          </div>
+        </div>
+      </transition>
+    </teleport>
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import type { UserOrganization } from '@/api/auth'
 import { useUserStore } from '@/stores/user'
+import {
+  createTeamInvite,
+  isInvitationExpired,
+  listOrganizationInvites,
+  type TeamInvitationRecord,
+} from '@/services/teamInvitations'
 
 const props = defineProps({
   projectName: {
@@ -114,12 +201,20 @@ const props = defineProps({
 const TEAM_MEMBER_STORAGE_KEY = 'team_member_map'
 const PROJECT_SHARE_STORAGE_KEY = 'project_share_history'
 
+interface TeamMember {
+  id: string
+  name: string
+  role: string
+}
+
 const userStore = useUserStore()
-const actionRootRef = ref(null)
+const actionRootRef = ref<HTMLElement | null>(null)
 const teamMenuVisible = ref(false)
 const shareVisible = ref(false)
+const inviteVisible = ref(false)
+const currentInviteLink = ref('')
 const shareForm = reactive({
-  memberIds: [],
+  memberIds: [] as string[],
   message: '',
 })
 
@@ -127,30 +222,54 @@ const organizations = computed(() => userStore.user?.organizations || [])
 const currentOrganization = computed(() => {
   const storeOrganization = userStore.currentOrganization
   if (storeOrganization && storeOrganization.organization_type !== '个人') return storeOrganization
-  return organizations.value[0] || null
+  return (
+    organizations.value.find((item) => item.organization_type !== '个人') ||
+    organizations.value[0] ||
+    null
+  )
 })
 const activeOrganizationName = computed(
   () => currentOrganization.value?.organization_nickname || userStore.currentOrganizationName
 )
 
-const teamMembers = computed(() => {
+const inviteHistory = computed(() => {
+  if (!activeOrganizationName.value) return []
+  return listOrganizationInvites(activeOrganizationName.value)
+})
+
+const teamMembers = computed<TeamMember[]>(() => {
   if (!currentOrganization.value) return []
 
   const memberMap = readMemberMap()
-  const existing = memberMap[currentOrganization.value.organization_nickname]
-  if (existing?.length) return existing
+  const storedMembers = memberMap[currentOrganization.value.organization_nickname] || []
+  const baseMembers = storedMembers.length
+    ? storedMembers
+    : buildDefaultMembers(currentOrganization.value)
+  const acceptedMembers = inviteHistory.value.flatMap((invite) =>
+    invite.accepted_members.map((member) => ({
+      id: member.user_id,
+      name: member.username,
+      role: '团队成员',
+    }))
+  )
+  const mergedMembers = [...baseMembers]
 
-  const generatedMembers = buildDefaultMembers(currentOrganization.value)
-  memberMap[currentOrganization.value.organization_nickname] = generatedMembers
+  acceptedMembers.forEach((member) => {
+    if (!mergedMembers.some((item) => item.id === member.id)) {
+      mergedMembers.push(member)
+    }
+  })
+
+  memberMap[currentOrganization.value.organization_nickname] = mergedMembers
   localStorage.setItem(TEAM_MEMBER_STORAGE_KEY, JSON.stringify(memberMap))
-  return generatedMembers
+  return mergedMembers
 })
 
 const toggleTeamMenu = () => {
   teamMenuVisible.value = !teamMenuVisible.value
 }
 
-const selectOrganization = (organizationName) => {
+const selectOrganization = (organizationName: string) => {
   userStore.setCurrentOrganization(organizationName)
   teamMenuVisible.value = false
 }
@@ -164,6 +283,20 @@ const openShareDialog = () => {
 
 const closeShareDialog = () => {
   shareVisible.value = false
+}
+
+const openInviteDialog = () => {
+  if (!currentOrganization.value || currentOrganization.value.organization_type !== '团队') return
+  inviteVisible.value = true
+  if (!inviteHistory.value.length) {
+    generateInviteLink()
+    return
+  }
+  currentInviteLink.value = inviteHistory.value[0]?.invite_link || ''
+}
+
+const closeInviteDialog = () => {
+  inviteVisible.value = false
 }
 
 const confirmShare = () => {
@@ -194,17 +327,50 @@ const confirmShare = () => {
   )
 }
 
-const getOrganizationTypeLabel = (organization) => organization.organization_type || '团队'
+const generateInviteLink = () => {
+  if (!currentOrganization.value || !userStore.user) return
 
-const readMemberMap = () => {
+  const invitation = createTeamInvite({
+    organization: currentOrganization.value,
+    inviter: userStore.user,
+  })
+  currentInviteLink.value = invitation.invite_link
+}
+
+const copyLink = async (link: string) => {
+  if (!link) return
+
   try {
-    return JSON.parse(localStorage.getItem(TEAM_MEMBER_STORAGE_KEY) || '{}')
+    await navigator.clipboard.writeText(link)
+    window.alert('邀请链接已复制，可直接发送给团队成员')
+  } catch {
+    window.prompt('复制失败，请手动复制以下链接', link)
+  }
+}
+
+const copyInviteLink = async () => {
+  if (!currentInviteLink.value) {
+    generateInviteLink()
+  }
+
+  await copyLink(currentInviteLink.value)
+}
+
+const getOrganizationTypeLabel = (organization: UserOrganization) =>
+  organization.organization_type || '团队'
+
+const readMemberMap = (): Record<string, TeamMember[]> => {
+  try {
+    return JSON.parse(localStorage.getItem(TEAM_MEMBER_STORAGE_KEY) || '{}') as Record<
+      string,
+      TeamMember[]
+    >
   } catch {
     return {}
   }
 }
 
-const buildDefaultMembers = (organization) => {
+const buildDefaultMembers = (organization: UserOrganization): TeamMember[] => {
   const count = Math.max(organization.member_count || 1, 1)
   return Array.from({ length: count }, (_, index) => ({
     id: `${organization.organization_nickname}-${index + 1}`,
@@ -216,11 +382,22 @@ const buildDefaultMembers = (organization) => {
   }))
 }
 
-const handleClickOutside = (event) => {
-  if (!actionRootRef.value?.contains(event.target)) {
+const handleClickOutside = (event: MouseEvent) => {
+  const target = event.target as Node | null
+  if (!actionRootRef.value?.contains(target)) {
     teamMenuVisible.value = false
   }
 }
+
+const formatDateTime = (value: string) =>
+  new Date(value).toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+
+const isInviteExpired = (invite: TeamInvitationRecord) => isInvitationExpired(invite)
 
 onMounted(() => {
   window.addEventListener('click', handleClickOutside)
@@ -237,6 +414,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 12px;
   position: relative;
+  flex-wrap: wrap;
 }
 
 .switch-team-wrap {
@@ -261,17 +439,22 @@ onUnmounted(() => {
 
 .team-action-btn:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.1);
+  box-shadow: 0 12px 26px rgba(15, 23, 42, 0.1);
 }
 
 .team-action-btn.primary {
   color: #fff;
   border-color: transparent;
-  background: linear-gradient(135deg, #5b8def, #7359f8);
+  background: linear-gradient(135deg, #4f46e5, #2563eb);
 }
 
 .team-action-btn.secondary {
-  background: rgba(255, 255, 255, 0.95);
+  background: #fff;
+}
+
+.team-action-btn.secondary.accent {
+  border-color: rgba(79, 70, 229, 0.22);
+  color: #4338ca;
 }
 
 .team-action-btn:disabled {
@@ -282,84 +465,87 @@ onUnmounted(() => {
 
 .team-menu-dropdown {
   position: absolute;
-  right: 0;
   top: calc(100% + 10px);
-  width: 300px;
+  left: 0;
+  width: 260px;
   background: #fff;
-  border: 1px solid #e6ebf5;
+  border: 1px solid #e2e8f0;
   border-radius: 16px;
-  padding: 14px;
-  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.12);
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.16);
+  padding: 12px;
   z-index: 30;
 }
 
 .team-menu-title {
   font-size: 13px;
   color: #64748b;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 .team-menu-item {
   width: 100%;
   border: none;
   border-radius: 12px;
-  background: #f8fafc;
-  padding: 12px 14px;
+  background: transparent;
+  padding: 12px;
+  text-align: left;
   display: flex;
   justify-content: space-between;
   align-items: center;
   cursor: pointer;
-  margin-bottom: 8px;
 }
 
+.team-menu-item:hover,
 .team-menu-item.active {
-  background: #eef4ff;
-  color: #3157c9;
+  background: #eef2ff;
 }
 
 .team-menu-item-main {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
   gap: 4px;
 }
 
 .team-menu-name {
-  font-size: 14px;
-  font-weight: 600;
+  font-weight: 700;
+  color: #0f172a;
 }
 
 .team-menu-type,
 .team-menu-meta,
-.dialog-subtitle {
-  font-size: 12px;
+.team-empty,
+.dialog-subtitle,
+.member-role,
+.invite-helper-text,
+.invite-history-meta,
+.invite-tip {
   color: #64748b;
-}
-
-.team-empty {
-  padding: 18px 12px;
-  text-align: center;
-  color: #94a3b8;
   font-size: 13px;
 }
 
 .dialog-mask {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.42);
+  background: rgba(15, 23, 42, 0.45);
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 20px;
-  z-index: 80;
+  padding: 24px;
+  z-index: 1000;
 }
 
 .dialog-panel {
-  width: min(560px, 100%);
+  width: min(92vw, 640px);
   background: #fff;
-  border-radius: 20px;
-  padding: 24px;
-  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.2);
+  border-radius: 24px;
+  box-shadow: 0 30px 80px rgba(15, 23, 42, 0.24);
+  overflow: hidden;
+}
+
+.share-dialog-panel,
+.invite-dialog-panel {
+  max-height: min(86vh, 760px);
+  overflow: auto;
 }
 
 .share-dialog-header {
@@ -367,66 +553,75 @@ onUnmounted(() => {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 18px;
+  padding: 24px 24px 0;
 }
 
 .dialog-title {
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 700;
-  color: #111827;
+  color: #0f172a;
 }
 
 .dialog-close-btn {
   border: none;
-  background: transparent;
-  font-size: 28px;
-  color: #94a3b8;
-  cursor: pointer;
-}
-
-.share-project-card {
-  padding: 14px 16px;
-  border-radius: 14px;
   background: #f8fafc;
-  margin-bottom: 18px;
+  color: #475569;
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 22px;
 }
 
-.share-project-label {
-  font-size: 12px;
-  color: #94a3b8;
-  margin-bottom: 6px;
+.dialog-body {
+  padding: 24px;
 }
 
-.share-project-name,
-.share-member-header {
-  font-size: 15px;
-  font-weight: 600;
-  color: #1f2937;
+.share-project-card,
+.invite-link-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 18px;
+  padding: 16px;
+  margin-bottom: 20px;
 }
 
-.share-member-header {
-  margin-bottom: 12px;
+.share-project-label,
+.invite-link-label,
+.share-member-header,
+.invite-history-header {
+  font-size: 14px;
+  font-weight: 700;
+  color: #334155;
+}
+
+.share-project-name {
+  margin-top: 8px;
+  font-size: 16px;
+  font-weight: 700;
+  color: #0f172a;
 }
 
 .member-list {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
   gap: 12px;
+  margin-top: 12px;
 }
 
 .member-item {
-  border: 1px solid #e5e7eb;
-  border-radius: 14px;
-  padding: 12px;
+  border: 1px solid #dbe3f3;
+  border-radius: 16px;
+  padding: 14px;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   cursor: pointer;
 }
 
 .member-item.selected {
-  border-color: #5b8def;
-  background: #eef4ff;
+  border-color: #4f46e5;
+  background: #eef2ff;
 }
 
 .member-item input {
@@ -434,10 +629,10 @@ onUnmounted(() => {
 }
 
 .member-avatar {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #5b8def, #7359f8);
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #4f46e5, #7c3aed);
   color: #fff;
   display: flex;
   align-items: center;
@@ -446,42 +641,38 @@ onUnmounted(() => {
 }
 
 .member-content {
-  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .member-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: #1f2937;
+  font-weight: 700;
+  color: #0f172a;
 }
 
-.member-role {
-  font-size: 12px;
-  color: #64748b;
-}
-
-.team-empty-dialog {
-  margin-bottom: 12px;
-  background: #f8fafc;
+.share-message,
+.invite-link-input {
+  width: 100%;
+  border: 1px solid #d7def0;
   border-radius: 14px;
+  padding: 12px 14px;
+  font-size: 14px;
+  color: #1f2937;
+  background: #fff;
 }
 
 .share-message {
-  width: 100%;
   min-height: 96px;
-  border-radius: 14px;
-  border: 1px solid #d7def0;
-  padding: 12px 14px;
-  font-size: 14px;
   resize: vertical;
-  margin-top: 16px;
+  margin-top: 20px;
 }
 
 .dialog-footer {
   display: flex;
   justify-content: flex-end;
   gap: 12px;
-  margin-top: 20px;
+  padding: 0 24px 24px;
 }
 
 .dialog-btn {
@@ -489,18 +680,94 @@ onUnmounted(() => {
   border-radius: 12px;
   padding: 10px 18px;
   font-size: 14px;
-  font-weight: 600;
+  font-weight: 700;
   cursor: pointer;
 }
 
-.dialog-btn.secondary {
-  background: #eef2f7;
-  color: #475569;
+.dialog-btn.primary {
+  background: linear-gradient(135deg, #4f46e5, #2563eb);
+  color: #fff;
 }
 
-.dialog-btn.primary {
-  background: linear-gradient(135deg, #5b8def, #7359f8);
-  color: #fff;
+.dialog-btn.secondary {
+  background: #e2e8f0;
+  color: #334155;
+}
+
+.dialog-btn.small {
+  padding: 10px 14px;
+  white-space: nowrap;
+}
+
+.team-empty-dialog {
+  margin-top: 12px;
+}
+
+.invite-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.invite-current-team {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.invite-badge {
+  display: inline-flex;
+  align-items: center;
+  background: #eef2ff;
+  color: #4338ca;
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-weight: 700;
+}
+
+.invite-link-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.invite-history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.invite-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.invite-history-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  padding: 14px 16px;
+}
+
+.invite-history-time {
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.text-action {
+  border: none;
+  background: transparent;
+  color: #4f46e5;
+  font-weight: 700;
+  cursor: pointer;
 }
 
 .menu-fade-enter-active,
@@ -521,20 +788,27 @@ onUnmounted(() => {
 @media (max-width: 768px) {
   .team-actions {
     width: 100%;
-    flex-wrap: wrap;
   }
 
-  .switch-team-wrap,
-  .team-action-btn {
+  .team-action-btn,
+  .switch-team-wrap {
     width: 100%;
   }
 
-  .member-list {
-    grid-template-columns: 1fr;
+  .team-action-btn {
+    justify-content: center;
   }
 
-  .team-menu-dropdown {
-    width: min(320px, calc(100vw - 32px));
+  .team-menu-dropdown,
+  .dialog-panel {
+    width: 100%;
+  }
+
+  .invite-link-row,
+  .dialog-footer,
+  .invite-history-item {
+    flex-direction: column;
+    align-items: stretch;
   }
 }
 </style>

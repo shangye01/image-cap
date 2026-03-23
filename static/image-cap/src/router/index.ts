@@ -8,7 +8,7 @@ const router = createRouter({
       path: '/',
       name: 'home',
       component: () => import('@/views/home/Home.vue'),
-       meta: { requiresAuth: false },
+      meta: { requiresAuth: false },
     },
     {
       path: '/login',
@@ -22,7 +22,12 @@ const router = createRouter({
       component: () => import('@/views/auth/Register.vue'),
       meta: { requiresAuth: false },
     },
-    
+    {
+      path: '/invite/:token',
+      name: 'invite-accept',
+      component: () => import('@/views/project/InviteAcceptView.vue'),
+      meta: { requiresAuth: false },
+    },
     {
       path: '/app',
       component: () => import('@/views/project/Layout.vue'),
