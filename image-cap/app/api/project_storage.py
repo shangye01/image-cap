@@ -102,92 +102,91 @@ def list_projects(owner_id: str | None = None, db: Session = Depends(get_db)):
         query = query.filter(Project.owner_id == owner_id)
     return [_serialize_project(project) for project in query.all()]
 
-    @router.post("/{project_id}/share")
-    def share_project(
-            project_id: uuid.UUID,
-            payload: ProjectShareCreate,
-            authorization: str | None = Header(default=None),
-            db: Session = Depends(get_db),
-    ):
-        user = _require_current_user(db, authorization)
-        project = db.query(Project).filter(Project.id == project_id).first()
-        if not project:
-            raise HTTPException(status_code=404, detail="项目不存在")
-        if project.owner_id != user.username:
-            raise HTTPException(status_code=403, detail="仅项目拥有者可以分享项目")
+@router.post("/{project_id}/share")
+def share_project(
+    project_id: uuid.UUID,
+    payload: ProjectShareCreate,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    user = _require_current_user(db, authorization)
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    if project.owner_id != user.username:
+        raise HTTPException(status_code=403, detail="仅项目拥有者可以分享项目")
 
-        organization = (
-            db.query(Organization)
-            .join(UserOrganization, UserOrganization.organization_id == Organization.id)
-            .filter(Organization.nickname == payload.organization_nickname, UserOrganization.user_id == user.id)
-            .first()
+    organization = (
+        db.query(Organization)
+        .join(UserOrganization, UserOrganization.organization_id == Organization.id)
+        .filter(Organization.nickname == payload.organization_nickname, UserOrganization.user_id == user.id)
+        .first()
+    )
+    if not organization:
+        raise HTTPException(status_code=404, detail="组织不存在或你尚未加入该组织")
+
+    memberships = (
+        db.query(UserOrganization)
+        .filter(
+            UserOrganization.organization_id == organization.id,
+            UserOrganization.user_id.in_(payload.recipient_ids),
         )
-        if not organization:
-            raise HTTPException(status_code=404, detail="组织不存在或你尚未加入该组织")
+        .all()
+    )
+    membership_map = {membership.user_id: membership for membership in memberships}
+    if len(membership_map) != len(set(payload.recipient_ids)):
+        raise HTTPException(status_code=400, detail="所选成员必须属于当前组织")
 
-        memberships = (
-            db.query(UserOrganization)
-            .filter(
-                UserOrganization.organization_id == organization.id,
-                UserOrganization.user_id.in_(payload.recipient_ids),
+    existing_copies = (
+        db.query(Project)
+        .filter(Project.source_project_id == project.id, Project.owner_id.in_([m.user.username for m in memberships]))
+        .all()
+    )
+    existing_by_owner = {item.owner_id: item for item in existing_copies}
+
+    copied_to = []
+    for membership in memberships:
+        recipient = membership.user
+        copied_name = f"[分享] {project.name} - {recipient.username}"
+        existing_copy = existing_by_owner.get(recipient.username)
+        if existing_copy:
+            existing_copy.description = project.description
+            existing_copy.share_message = payload.message
+            existing_copy.shared_by = user.username
+            existing_copy.shared_at = datetime.utcnow()
+            copied_project = existing_copy
+            db.query(ProjectFile).filter(ProjectFile.project_id == existing_copy.id).delete()
+        else:
+            copied_project = Project(
+                name=copied_name,
+                description=project.description,
+                owner_id=recipient.username,
+                source_project_id=project.id,
+                is_shared_copy=True,
+                shared_by=user.username,
+                shared_at=datetime.utcnow(),
+                share_message=payload.message,
             )
-            .all()
-        )
-        membership_map = {membership.user_id: membership for membership in memberships}
-        if len(membership_map) != len(set(payload.recipient_ids)):
-            raise HTTPException(status_code=400, detail="所选成员必须属于当前组织")
+            db.add(copied_project)
+            db.flush()
 
-        existing_copies = (
-            db.query(Project)
-            .filter(Project.source_project_id == project.id,
-                    Project.owner_id.in_([m.user.username for m in memberships]))
-            .all()
-        )
-        existing_by_owner = {item.owner_id: item for item in existing_copies}
-
-        copied_to = []
-        for membership in memberships:
-            recipient = membership.user
-            copied_name = f"[分享] {project.name} - {recipient.username}"
-            existing_copy = existing_by_owner.get(recipient.username)
-            if existing_copy:
-                existing_copy.description = project.description
-                existing_copy.share_message = payload.message
-                existing_copy.shared_by = user.username
-                existing_copy.shared_at = datetime.utcnow()
-                copied_project = existing_copy
-                db.query(ProjectFile).filter(ProjectFile.project_id == existing_copy.id).delete()
-            else:
-                copied_project = Project(
-                    name=copied_name,
-                    description=project.description,
-                    owner_id=recipient.username,
-                    source_project_id=project.id,
-                    is_shared_copy=True,
-                    shared_by=user.username,
-                    shared_at=datetime.utcnow(),
-                    share_message=payload.message,
+        for source_file in project.files:
+            db.add(
+                ProjectFile(
+                    project_id=copied_project.id,
+                    filename=source_file.filename,
+                    storage_path=source_file.storage_path,
+                    mime_type=source_file.mime_type,
+                    size_bytes=source_file.size_bytes,
+                    uploaded_by=user.username,
+                    status=source_file.status,
                 )
-                db.add(copied_project)
-                db.flush()
+            )
 
-            for source_file in project.files:
-                db.add(
-                    ProjectFile(
-                        project_id=copied_project.id,
-                        filename=source_file.filename,
-                        storage_path=source_file.storage_path,
-                        mime_type=source_file.mime_type,
-                        size_bytes=source_file.size_bytes,
-                        uploaded_by=user.username,
-                        status=source_file.status,
-                    )
-                )
+        copied_to.append({"user_id": recipient.id, "username": recipient.username, "project_id": copied_project.id})
 
-            copied_to.append({"user_id": recipient.id, "username": recipient.username, "project_id": copied_project.id})
-
-        db.commit()
-        return {"message": "项目分享成功", "copied_to": copied_to}
+    db.commit()
+    return {"message": "项目分享成功", "copied_to": copied_to}
 
 
 @router.post("/{project_id}/files", response_model=FileOut)
