@@ -23,6 +23,12 @@
             type="text"
             placeholder="搜索项目名"
           />
+          <input
+            v-model="teamSearchKeyword"
+            class="toolbar-input team-toolbar-input"
+            type="text"
+            placeholder="按团队搜索（团队创建/分享）"
+          />
 
           <select v-model="sortType" class="toolbar-select">
             <option value="created_desc">按创建时间（新到旧）</option>
@@ -47,7 +53,10 @@
           v-for="project in filteredProjectList"
           :key="project.id"
           class="project-folder-card"
-          :class="{ 'project-folder-card--shared': project.isSharedCopy }"
+          :class="{
+            'project-folder-card--shared': project.isSharedCopy,
+            'project-folder-card--shared-pending': project.isSharedCopy && !project.shareAcceptedAt,
+          }"
           @mouseenter="showRemark(project.id)"
           @mouseleave="hideRemark"
         >
@@ -104,6 +113,15 @@
 
             <div v-if="project.isSharedCopy" class="shared-project-badge">
               已分享给我 · 来自 {{ project.sharedBy || '团队成员' }}
+            </div>
+            <div v-if="project.organizationNickname" class="project-team-badge">
+              团队：{{ project.organizationNickname }}
+            </div>
+            <div
+              v-if="project.isSharedCopy && !project.shareAcceptedAt"
+              class="project-pending-acceptance"
+            >
+              待接收：点击进入后正式接收
             </div>
 
             <div class="folder-meta">
@@ -604,6 +622,7 @@ import {
   uploadProjectFile,
   getProjectFileDownloadUrl,
   deleteProjectApi,
+  acceptSharedProject,
   createAnnotationSession,
   getFolderTasks,
   getTaskByFileId,
@@ -620,6 +639,7 @@ const currentFolderId = ref(null)
 const openedProjectMenuId = ref(null)
 
 const searchKeyword = ref('')
+const teamSearchKeyword = ref('')
 const sortType = ref('created_desc')
 
 const renameVisible = ref(false)
@@ -742,10 +762,16 @@ const workSelectedTags = computed(() =>
 
 const filteredProjectList = computed(() => {
   const keyword = searchKeyword.value.trim().toLowerCase()
+  const teamKeyword = teamSearchKeyword.value.trim().toLowerCase()
   let list = [...projectList.value]
 
   if (keyword) {
     list = list.filter((project) => project.projectName.trim().toLowerCase().includes(keyword))
+  }
+  if (teamKeyword) {
+    list = list.filter((project) =>
+      (project.organizationNickname || '').trim().toLowerCase().includes(teamKeyword)
+    )
   }
 
   list.sort((a, b) => {
@@ -756,8 +782,10 @@ const filteredProjectList = computed(() => {
   })
 
   const comparePinned = (a, b) => {
-    if (a.isSharedCopy && !b.isSharedCopy) return -1
-    if (!a.isSharedCopy && b.isSharedCopy) return 1
+    const aPendingShared = Boolean(a.isSharedCopy && !a.shareAcceptedAt)
+    const bPendingShared = Boolean(b.isSharedCopy && !b.shareAcceptedAt)
+    if (aPendingShared && !bPendingShared) return -1
+    if (!aPendingShared && bPendingShared) return 1
     return 0
   }
 
@@ -940,6 +968,10 @@ const loadProjects = async () => {
           isSharedCopy: Boolean(project.is_shared_copy),
           sharedBy: project.shared_by || '',
           shareMessage: project.share_message || '',
+          organizationNickname: project.organization_nickname || '',
+          shareAcceptedAt: project.share_accepted_at
+            ? new Date(project.share_accepted_at).getTime()
+            : null,
           folders: [
             { id: `pending_${project.id}`, name: '待标注', files: pendingFiles },
             { id: `labeling_${project.id}`, name: '标注中', files: labelingFiles },
@@ -1020,6 +1052,7 @@ const handleCreateProject = async (projectData) => {
       name: projectData.projectName,
       description: projectData.remark || '',
       owner_id,
+      organization_nickname: userStore.currentOrganization?.organization_nickname || undefined,
     })
 
     const folders = Array.isArray(projectData.folders) ? projectData.folders : []
@@ -1039,8 +1072,19 @@ const handleCreateProject = async (projectData) => {
   }
 }
 
-const enterProject = (project) => {
+const enterProject = async (project) => {
   closeProjectMenu()
+  if (project.isSharedCopy && !project.shareAcceptedAt) {
+    try {
+      const resp = await acceptSharedProject(project.id)
+      project.shareAcceptedAt = resp?.accepted_at
+        ? new Date(resp.accepted_at).getTime()
+        : Date.now()
+    } catch (error) {
+      window.alert(error?.response?.data?.detail || error?.message || '接收分享项目失败')
+      return
+    }
+  }
   currentProjectId.value = project.id
   currentFolderId.value = null
 }
@@ -1817,6 +1861,10 @@ onBeforeUnmount(() => {
   padding: 0 14px;
 }
 
+.team-toolbar-input {
+  width: 300px;
+}
+
 .toolbar-select {
   padding: 0 14px;
 }
@@ -1840,11 +1888,14 @@ onBeforeUnmount(() => {
 }
 
 .project-folder-card--shared {
-  opacity: 0.72;
   background: linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
 }
 
-.project-folder-card--shared .folder-click-area {
+.project-folder-card--shared-pending {
+  opacity: 0.72;
+}
+
+.project-folder-card--shared-pending .folder-click-area {
   filter: grayscale(0.18);
 }
 
@@ -1853,6 +1904,17 @@ onBeforeUnmount(() => {
   font-size: 12px;
   font-weight: 600;
   color: #4f46e5;
+}
+
+.project-team-badge,
+.project-pending-acceptance {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.project-pending-acceptance {
+  color: #92400e;
 }
 .project-folder-card {
   position: relative;

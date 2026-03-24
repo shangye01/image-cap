@@ -12,6 +12,8 @@ export interface BackendProject {
   shared_by?: string | null
   shared_at?: string | null
   share_message?: string | null
+  organization_nickname?: string | null
+  share_accepted_at?: string | null
 }
 
 export interface BackendProjectFile {
@@ -53,7 +55,12 @@ export interface AnnotationSessionResponse {
   first_task: AnnotationSessionTask
 }
 
-export const createProject = (payload: { name: string; description?: string; owner_id: string }) =>
+export const createProject = (payload: {
+  name: string
+  description?: string
+  owner_id: string
+  organization_nickname?: string
+}) =>
   request.post<BackendProject>('/projects', payload)
 
 export const listProjects = (ownerId?: string) =>
@@ -80,6 +87,9 @@ export const shareProject = (
   projectId: string,
   payload: { recipient_ids: string[]; organization_nickname: string; message?: string },
 ) => request.post<{ message: string; copied_to: Array<{ user_id: string; username: string; project_id: string }> }>(`/projects/${projectId}/share`, payload)
+
+export const acceptSharedProject = (projectId: string) =>
+  request.post<{ message: string; accepted_at?: string | null }>(`/projects/${projectId}/accept-share`)
 
 // ✅ 路径已更改为 /sessions，与后端严格对齐
 export const createAnnotationSession = (

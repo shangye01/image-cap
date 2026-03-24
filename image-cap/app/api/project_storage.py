@@ -102,6 +102,7 @@ def list_projects(owner_id: str | None = None, db: Session = Depends(get_db)):
         query = query.filter(Project.owner_id == owner_id)
     return [_serialize_project(project) for project in query.all()]
 
+
 @router.post("/{project_id}/share")
 def share_project(
     project_id: uuid.UUID,
@@ -154,6 +155,8 @@ def share_project(
             existing_copy.share_message = payload.message
             existing_copy.shared_by = user.username
             existing_copy.shared_at = datetime.utcnow()
+            existing_copy.organization_nickname = payload.organization_nickname
+            existing_copy.share_accepted_at = None
             copied_project = existing_copy
             db.query(ProjectFile).filter(ProjectFile.project_id == existing_copy.id).delete()
         else:
@@ -166,6 +169,8 @@ def share_project(
                 shared_by=user.username,
                 shared_at=datetime.utcnow(),
                 share_message=payload.message,
+                organization_nickname=payload.organization_nickname,
+                share_accepted_at=None,
             )
             db.add(copied_project)
             db.flush()
@@ -187,6 +192,29 @@ def share_project(
 
     db.commit()
     return {"message": "项目分享成功", "copied_to": copied_to}
+
+
+@router.post("/{project_id}/accept-share")
+def accept_shared_project(
+    project_id: uuid.UUID,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    user = _require_current_user(db, authorization)
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    if not project.is_shared_copy:
+        return {"message": "当前项目不是分享副本", "accepted_at": None}
+    if project.owner_id != user.username:
+        raise HTTPException(status_code=403, detail="仅项目接收者可以确认接收")
+
+    if not project.share_accepted_at:
+        project.share_accepted_at = datetime.utcnow()
+        db.commit()
+        db.refresh(project)
+
+    return {"message": "已确认接收分享项目", "accepted_at": project.share_accepted_at}
 
 
 @router.post("/{project_id}/files", response_model=FileOut)

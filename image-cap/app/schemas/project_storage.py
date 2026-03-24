@@ -40,6 +40,7 @@ class ProjectCreate(BaseModel):
     name: str = Field(min_length=2, max_length=120)
     description: str | None = None
     owner_id: str = Field(min_length=1, max_length=64)
+    organization_nickname: str | None = Field(default=None, max_length=100)
 
 
 class ProjectShareCreate(BaseModel):
@@ -54,6 +55,8 @@ class SharedProjectMeta(BaseModel):
     shared_by: str | None = None
     shared_at: datetime | None = None
     share_message: str | None = None
+    organization_nickname: str | None = None
+    share_accepted_at: datetime | None = None
 
 
 class ProjectOut(BaseModel):
@@ -67,6 +70,8 @@ class ProjectOut(BaseModel):
     shared_by: str | None = None
     shared_at: datetime | None = None
     share_message: str | None = None
+    organization_nickname: str | None = None
+    share_accepted_at: datetime | None = None
 
     class Config:
         from_attributes = True
