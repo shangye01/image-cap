@@ -19,3 +19,11 @@ def init_db() -> None:
             connection.execute(
                 text("ALTER TABLE projects ADD COLUMN share_accepted_at TIMESTAMPTZ")
             )
+        if "share_mode" not in columns:
+            connection.execute(
+                text("ALTER TABLE projects ADD COLUMN share_mode VARCHAR(24) DEFAULT 'single' NOT NULL")
+            )
+        if "reviewer_id" not in columns:
+            connection.execute(
+                text("ALTER TABLE projects ADD COLUMN reviewer_id VARCHAR(64)")
+            )

@@ -27,6 +27,8 @@ class Project(Base):
     share_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     organization_nickname: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     share_accepted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    share_mode: Mapped[str] = mapped_column(String(24), nullable=False, default="single")
+    reviewer_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
     files: Mapped[list["ProjectFile"]] = relationship(
         "ProjectFile", back_populates="project", cascade="all, delete-orphan"

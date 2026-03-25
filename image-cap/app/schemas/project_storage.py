@@ -47,6 +47,8 @@ class ProjectShareCreate(BaseModel):
     recipient_ids: List[str] = Field(min_length=1)
     organization_nickname: str = Field(min_length=1, max_length=100)
     message: str | None = Field(default=None, max_length=500)
+    share_mode: str = Field(default="single", pattern="^(single|collaborative)$")
+    reviewer_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 class SharedProjectMeta(BaseModel):
@@ -57,6 +59,8 @@ class SharedProjectMeta(BaseModel):
     share_message: str | None = None
     organization_nickname: str | None = None
     share_accepted_at: datetime | None = None
+    share_mode: str = "single"
+    reviewer_id: str | None = None
 
 
 class ProjectOut(BaseModel):
@@ -72,6 +76,8 @@ class ProjectOut(BaseModel):
     share_message: str | None = None
     organization_nickname: str | None = None
     share_accepted_at: datetime | None = None
+    share_mode: str = "single"
+    reviewer_id: str | None = None
 
     class Config:
         from_attributes = True

@@ -101,6 +101,45 @@
               </div>
               <div v-else class="team-empty team-empty-dialog">当前团队暂无可分享成员</div>
 
+              <div v-if="shareForm.memberIds.length > 1" class="share-mode-wrap">
+                <div class="share-member-header">分配模式</div>
+                <label class="mode-option">
+                  <input v-model="shareForm.shareMode" type="radio" value="single" />
+                  <div>
+                    <div class="mode-title">单人标注（按比例分配）</div>
+                    <div class="mode-desc">每张图片只分配给 1 人，成员标完即作为最终标注。</div>
+                  </div>
+                </label>
+                <label class="mode-option">
+                  <input v-model="shareForm.shareMode" type="radio" value="collaborative" />
+                  <div>
+                    <div class="mode-title">协作标注（三人交叉）</div>
+                    <div class="mode-desc">
+                      每张图片分配给 3 位成员，自动一致性合并后偏差大的交由审核人处理。
+                    </div>
+                  </div>
+                </label>
+              </div>
+              <div v-else class="share-project-hint">
+                已选择 1 位成员：默认单人标注，TA 标注完成后会自动同步到分享人的“已标注”。
+              </div>
+
+              <div
+                v-if="shareForm.memberIds.length > 1 && shareForm.shareMode === 'collaborative'"
+                class="reviewer-wrap"
+              >
+                <div class="share-member-header">选择审核人（第 4 人）</div>
+                <select v-model="shareForm.reviewerId" class="share-project-select">
+                  <option value="" disabled>请选择审核人</option>
+                  <option v-for="member in reviewerCandidates" :key="member.id" :value="member.id">
+                    {{ member.name }}（{{ member.role }}）
+                  </option>
+                </select>
+                <div v-if="!reviewerCandidates.length" class="team-empty team-empty-dialog">
+                  暂无可选审核人（审核人不能与标注成员重复）
+                </div>
+              </div>
+
               <textarea
                 v-model.trim="shareForm.message"
                 class="share-message"
@@ -246,6 +285,8 @@ const shareSubmitting = ref(false)
 const shareForm = reactive({
   projectId: '',
   memberIds: [] as string[],
+  shareMode: 'single' as 'single' | 'collaborative',
+  reviewerId: '',
   message: '',
 })
 
@@ -263,6 +304,9 @@ const selectedShareProject = computed(() => {
   if (!shareForm.projectId) return null
   return shareableProjects.value.find((project) => project.id === shareForm.projectId) || null
 })
+const reviewerCandidates = computed(() =>
+  teamMembers.value.filter((member) => !shareForm.memberIds.includes(member.id))
+)
 
 const toggleTeamMenu = () => {
   teamMenuVisible.value = !teamMenuVisible.value
@@ -299,6 +343,8 @@ const openShareDialog = async () => {
     shareableProjects.value[0]?.id ||
     ''
   shareForm.memberIds = []
+  shareForm.shareMode = 'single'
+  shareForm.reviewerId = ''
   shareForm.message = ''
   shareVisible.value = true
   await loadMembers()
@@ -335,6 +381,18 @@ const confirmShare = async () => {
     window.alert('请至少选择一位团队成员')
     return
   }
+  if (shareForm.memberIds.length === 1) {
+    shareForm.shareMode = 'single'
+    shareForm.reviewerId = ''
+  }
+  if (
+    shareForm.memberIds.length > 1 &&
+    shareForm.shareMode === 'collaborative' &&
+    !shareForm.reviewerId
+  ) {
+    window.alert('协作标注模式下请先选择审核人')
+    return
+  }
 
   shareSubmitting.value = true
   try {
@@ -345,6 +403,8 @@ const confirmShare = async () => {
       recipient_ids: [...shareForm.memberIds],
       organization_nickname: currentOrganization.value.organization_nickname,
       message: shareForm.message || undefined,
+      share_mode: shareForm.shareMode,
+      reviewer_id: shareForm.shareMode === 'collaborative' ? shareForm.reviewerId : undefined,
     })
     const sharedProjectName = selectedShareProject.value?.name || props.projectName || '当前项目'
     closeShareDialog()
@@ -390,6 +450,20 @@ watch(activeOrganizationName, () => {
     loadMembers()
   }
 })
+
+watch(
+  () => shareForm.memberIds.slice(),
+  (memberIds) => {
+    if (memberIds.length <= 1) {
+      shareForm.shareMode = 'single'
+      shareForm.reviewerId = ''
+      return
+    }
+    if (memberIds.includes(shareForm.reviewerId)) {
+      shareForm.reviewerId = ''
+    }
+  }
+)
 
 onMounted(() => {
   window.addEventListener('click', handleClickOutside)
@@ -613,6 +687,34 @@ onUnmounted(() => {
 
 .share-project-hint {
   margin-top: 10px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.share-mode-wrap,
+.reviewer-wrap {
+  margin-top: 18px;
+}
+
+.mode-option {
+  margin-top: 10px;
+  border: 1px solid #dbe3f3;
+  border-radius: 12px;
+  padding: 12px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.mode-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.mode-desc {
+  margin-top: 4px;
   font-size: 12px;
   color: #64748b;
 }

@@ -1221,17 +1221,38 @@ async def move_to_done(project_id: str, payload: dict, db: Session = Depends(get
     task_data = task_res.data[0]
     storage_path = task_data.get("image_storage_path")
 
-    # ✅ 修复：更新文件状态为 done
+    updated_rows = 0
+    # ✅ 修复：更新文件状态为 done，并同步到同源分享项目
     if storage_path:
-        project_file = db.query(ProjectFile).filter(
-            ProjectFile.storage_path == storage_path
-        ).first()
+        project_uuid = uuid.UUID(project_id)
+        current_project = db.query(Project).filter(Project.id == project_uuid).first()
+        related_project_ids = [project_id]
+        if current_project:
+            root_project_id = current_project.source_project_id or current_project.id
+            sibling_projects = (
+                db.query(Project.id)
+                .filter((Project.id == root_project_id) | (Project.source_project_id == root_project_id))
+                .all()
+            )
+            related_project_ids = [item[0] for item in sibling_projects] or [project_uuid]
 
-        if project_file:
-            project_file.status = "done"
+        matched_files = (
+            db.query(ProjectFile)
+            .filter(
+                ProjectFile.storage_path == storage_path,
+                ProjectFile.project_id.in_(related_project_ids),
+            )
+            .all()
+        )
+
+        for project_file in matched_files:
+            if project_file.status != "done":
+                project_file.status = "done"
+                updated_rows += 1
+
+        if matched_files:
             db.commit()
-            db.refresh(project_file)  # ✅ 确保状态已持久化
-            logger.info(f"文件 {project_file.id} 状态已更新为 done")
+            logger.info(f"文件状态已同步为 done | storage_path={storage_path}, updated={updated_rows}")
         else:
             logger.warning(f"未找到对应的文件记录: {storage_path}")
 

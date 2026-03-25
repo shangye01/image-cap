@@ -18,6 +18,34 @@ from jose import jwt
 router = APIRouter(prefix="/api/projects", tags=["project-storage"])
 
 
+def _build_assignment_map(
+    source_files: list[ProjectFile], recipient_user_ids: list[str], share_mode: str
+) -> dict[str, set[uuid.UUID]]:
+    assignment_map: dict[str, set[uuid.UUID]] = {user_id: set() for user_id in recipient_user_ids}
+    if not source_files or not recipient_user_ids:
+        return assignment_map
+
+    if share_mode == "single":
+        for idx, source_file in enumerate(source_files):
+            user_id = recipient_user_ids[idx % len(recipient_user_ids)]
+            assignment_map[user_id].add(source_file.id)
+        return assignment_map
+
+    if len(recipient_user_ids) < 3:
+        raise HTTPException(status_code=400, detail="协作标注至少需要选择 3 位成员")
+
+    for idx, source_file in enumerate(source_files):
+        base = idx % len(recipient_user_ids)
+        selected = {
+            recipient_user_ids[base],
+            recipient_user_ids[(base + 1) % len(recipient_user_ids)],
+            recipient_user_ids[(base + 2) % len(recipient_user_ids)],
+        }
+        for user_id in selected:
+            assignment_map[user_id].add(source_file.id)
+    return assignment_map
+
+
 def _build_file_urls(file_record: ProjectFile, request: Request) -> tuple[str, str]:
     download_url = str(request.url_for("download_project_file", file_id=str(file_record.id)))
     if SUPABASE_PROJECT_FILES_PUBLIC and supabase is not None:
@@ -137,6 +165,28 @@ def share_project(
     membership_map = {membership.user_id: membership for membership in memberships}
     if len(membership_map) != len(set(payload.recipient_ids)):
         raise HTTPException(status_code=400, detail="所选成员必须属于当前组织")
+    if len(payload.recipient_ids) == 1:
+        payload.share_mode = "single"
+    if payload.share_mode == "collaborative" and len(payload.recipient_ids) < 3:
+        raise HTTPException(status_code=400, detail="协作标注模式下至少需要 3 位标注成员")
+    if payload.share_mode == "single":
+        payload.reviewer_id = None
+    if payload.share_mode == "collaborative":
+        if not payload.reviewer_id:
+            raise HTTPException(status_code=400, detail="协作标注模式下必须选择审核人")
+        reviewer_membership = membership_map.get(payload.reviewer_id)
+        if reviewer_membership is not None:
+            raise HTTPException(status_code=400, detail="审核人不能与标注成员重复")
+        reviewer_belongs_to_org = (
+            db.query(UserOrganization)
+            .filter(
+                UserOrganization.organization_id == organization.id,
+                UserOrganization.user_id == payload.reviewer_id,
+            )
+            .first()
+        )
+        if not reviewer_belongs_to_org:
+            raise HTTPException(status_code=400, detail="审核人必须属于当前组织")
 
     existing_copies = (
         db.query(Project)
@@ -144,6 +194,8 @@ def share_project(
         .all()
     )
     existing_by_owner = {item.owner_id: item for item in existing_copies}
+    membership_user_ids = [membership.user_id for membership in memberships]
+    assignment_map = _build_assignment_map(project.files, membership_user_ids, payload.share_mode)
 
     copied_to = []
     for membership in memberships:
@@ -157,6 +209,8 @@ def share_project(
             existing_copy.shared_at = datetime.utcnow()
             existing_copy.organization_nickname = payload.organization_nickname
             existing_copy.share_accepted_at = None
+            existing_copy.share_mode = payload.share_mode
+            existing_copy.reviewer_id = payload.reviewer_id
             copied_project = existing_copy
             db.query(ProjectFile).filter(ProjectFile.project_id == existing_copy.id).delete()
         else:
@@ -171,10 +225,13 @@ def share_project(
                 share_message=payload.message,
                 organization_nickname=payload.organization_nickname,
                 share_accepted_at=None,
+                share_mode=payload.share_mode,
+                reviewer_id=payload.reviewer_id,
             )
             db.add(copied_project)
             db.flush()
 
+        assigned_file_ids = assignment_map.get(membership.user_id, set())
         for source_file in project.files:
             db.add(
                 ProjectFile(
@@ -184,7 +241,7 @@ def share_project(
                     mime_type=source_file.mime_type,
                     size_bytes=source_file.size_bytes,
                     uploaded_by=user.username,
-                    status=source_file.status,
+                    status=source_file.status if source_file.id in assigned_file_ids else "archived",
                 )
             )
 

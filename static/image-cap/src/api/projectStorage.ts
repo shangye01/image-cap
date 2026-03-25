@@ -14,6 +14,8 @@ export interface BackendProject {
   share_message?: string | null
   organization_nickname?: string | null
   share_accepted_at?: string | null
+  share_mode?: 'single' | 'collaborative'
+  reviewer_id?: string | null
 }
 
 export interface BackendProjectFile {
@@ -85,7 +87,13 @@ export const deleteProjectApi = (projectId: string) =>
 
 export const shareProject = (
   projectId: string,
-  payload: { recipient_ids: string[]; organization_nickname: string; message?: string },
+  payload: {
+    recipient_ids: string[]
+    organization_nickname: string
+    message?: string
+    share_mode?: 'single' | 'collaborative'
+    reviewer_id?: string
+  },
 ) => request.post<{ message: string; copied_to: Array<{ user_id: string; username: string; project_id: string }> }>(`/projects/${projectId}/share`, payload)
 
 export const acceptSharedProject = (projectId: string) =>
