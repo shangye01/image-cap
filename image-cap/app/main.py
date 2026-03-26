@@ -110,6 +110,22 @@ class ProgressConnectionManager:
 progress_ws_manager = ProgressConnectionManager()
 
 
+def _load_task_annotations(task: dict[str, Any]) -> list[dict[str, Any]]:
+    """统一读取任务标注（优先草稿，其次已提交标注）。"""
+    task_id = task.get("id")
+    if not task_id:
+        return []
+
+    if task.get("status") == "completed":
+        anns_result = supabase.table("annotations").select("*").eq("task_id", task_id).execute()
+        return anns_result.data or [] if anns_result else []
+
+    draft_result = supabase.table("drafts").select("*").eq("task_id", task_id).maybe_single().execute()
+    if draft_result and draft_result.data:
+        return draft_result.data.get("annotations_json", [])
+    return []
+
+
 def _resolve_ws_username(token: str | None) -> str | None:
     if not token:
         return None
@@ -634,6 +650,7 @@ async def get_folder_tasks(
     # 构建响应
     task_list = []
     for task in tasks:
+        annotations = _load_task_annotations(task)
         task_list.append({
             "task_id": task["id"],
             "file_id": task.get("file_id"),
@@ -644,7 +661,7 @@ async def get_folder_tasks(
             "project_id": project_id,
             "use_keywords": task.get("use_keywords", False),
             "keywords": task.get("keywords", []),
-            "annotations": task.get("annotations", [])
+            "annotations": annotations
         })
 
     logger.info(f"【FOLDER-TASKS】返回 {len(task_list)} 个任务")
@@ -678,15 +695,7 @@ async def get_file_task(
     task = task_result.data
 
     # 查询草稿或标注
-    annotations = []
-    if task.get("status") == "completed":
-        anns_result = supabase.table("annotations").select("*").eq("task_id", task["id"]).execute()
-        annotations = anns_result.data or [] if anns_result else []  # ✅ 同样检查 None
-    else:
-        draft_result = supabase.table("drafts").select("*").eq("task_id", task["id"]).maybe_single().execute()
-        # ✅ 修复：检查 draft_result 是否为 None
-        if draft_result and draft_result.data:
-            annotations = draft_result.data.get("annotations_json", [])
+    annotations = _load_task_annotations(task)
 
     task_obj = {
         "task_id": task["id"],
@@ -753,14 +762,7 @@ async def get_adjacent_task(
     file_result = db.query(ProjectFile).filter(ProjectFile.id == target_task.get("file_id")).first()
 
     # 获取标注/草稿
-    annotations = []
-    if target_task.get("status") == "completed":
-        anns_result = supabase.table("annotations").select("*").eq("task_id", target_task["id"]).execute()
-        annotations = anns_result.data or []
-    else:
-        draft_result = supabase.table("drafts").select("*").eq("task_id", target_task["id"]).maybe_single().execute()
-        if draft_result.data:
-            annotations = draft_result.data.get("annotations_json", [])
+    annotations = _load_task_annotations(target_task)
 
     task_obj = {
         "task_id": target_task["id"],
@@ -817,6 +819,7 @@ async def get_all_project_labeling_tasks(
         # 获取文件信息
         file_id = task.get("file_id")
         file_info = next((f for f in files_result if str(f.id) == file_id), None)
+        annotations = _load_task_annotations(task)
 
         task_list.append({
             "task_id": task["id"],
@@ -828,7 +831,7 @@ async def get_all_project_labeling_tasks(
             "project_id": project_id,
             "use_keywords": task.get("use_keywords", False),
             "keywords": task.get("keywords", []),
-            "annotations": task.get("annotations", [])
+            "annotations": annotations
         })
 
     logger.info(f"【ALL-LABELING】返回 {len(task_list)} 个标注中任务")
