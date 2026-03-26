@@ -261,7 +261,7 @@
               @change="toggleFileSelection(file.id)"
             />
           </label>
-          <div class="image-card-preview" @click.stop="previewFile(file)">
+          <div class="image-card-preview" @click.stop="handleImagePreview(file)">
             <template v-if="isImageFile(file) && getFilePreviewUrl(file)">
               <img :src="getFilePreviewUrl(file)" :alt="file.name" class="image-thumb" />
             </template>
@@ -600,6 +600,12 @@
                 来源: {{ annotationDataSource }}
               </span>
             </div>
+
+            <div v-if="annotationLabels.length > 0" class="annotation-label-list">
+              <span v-for="label in annotationLabels" :key="label" class="annotation-label-chip">
+                🏷️ {{ label }}
+              </span>
+            </div>
           </div>
         </div>
 
@@ -839,6 +845,12 @@ const getEmptyFolderText = computed(() => {
 
 const canGoPrev = computed(() => currentPreviewIndex.value > 0)
 const canGoNext = computed(() => currentPreviewIndex.value < previewableFiles.value.length - 1)
+const annotationLabels = computed(() => {
+  const labels = currentAnnotations.value
+    .map((anno) => (anno.label || '').trim())
+    .filter((label) => Boolean(label))
+  return [...new Set(labels)]
+})
 
 const imageContainerStyle = computed(() => {
   if (!annotationImageLoaded.value) {
@@ -1163,6 +1175,17 @@ const previewFile = (file) => {
 
   previewImageUrl.value = imageUrl
   previewVisible.value = true
+}
+
+const handleImagePreview = (file) => {
+  if (isDoneFolder.value || isLabelingFolder.value) {
+    openAnnotationPreview(
+      file,
+      currentFolder.value?.files.findIndex((f) => f.id === file.id)
+    )
+    return
+  }
+  previewFile(file)
 }
 
 const closePreview = () => {
@@ -3006,11 +3029,13 @@ onBeforeUnmount(() => {
   padding: 16px 24px;
   background: #ffffff;
   border-top: 1px solid #e5e7eb;
-  height: 56px;
+  min-height: 56px;
   box-sizing: border-box;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 10px;
   flex-shrink: 0;
 }
 
@@ -3036,6 +3061,22 @@ onBeforeUnmount(() => {
 .stat-item.empty {
   color: #9ca3af;
   background: #f9fafb;
+}
+
+.annotation-label-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+
+.annotation-label-chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #4338ca;
+  font-size: 12px;
+  line-height: 1.2;
 }
 
 /* 左右切换箭头 */

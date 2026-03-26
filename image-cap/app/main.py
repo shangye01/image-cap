@@ -638,23 +638,49 @@ async def get_folder_tasks(
         return {"tasks": [], "total": 0}
 
     file_ids = [str(f.id) for f in files_result]
+    storage_paths = [f.storage_path for f in files_result if f.storage_path]
 
-    # 查询对应的任务
+    # 优先按 file_id 命中任务（文件原拥有者/接收者自己的任务）
     tasks_result = supabase.table("tasks").select("*").in_("file_id", file_ids).execute()
-    tasks = tasks_result.data or []
+    direct_tasks = tasks_result.data or []
+    direct_task_map = {task.get("file_id"): task for task in direct_tasks if task.get("file_id")}
+
+    # 兜底：按 storage_path 补齐跨分享副本的任务（分享者可查看接收者已标注结果）
+    storage_tasks = []
+    if storage_paths:
+        storage_task_result = (
+            supabase.table("tasks")
+            .select("*")
+            .in_("image_storage_path", storage_paths)
+            .order("updated_at", desc=True)
+            .execute()
+        )
+        storage_tasks = storage_task_result.data or []
+
+    storage_task_map = {}
+    for task in storage_tasks:
+        task_storage_path = task.get("image_storage_path")
+        if task_storage_path and task_storage_path not in storage_task_map:
+            storage_task_map[task_storage_path] = task
+
+    # 按当前项目文件顺序构建任务列表，确保每张图都能映射到最合适任务
+    matched_pairs = []
+    for file_record in files_result:
+        matched_task = direct_task_map.get(str(file_record.id)) or storage_task_map.get(file_record.storage_path)
+        if matched_task:
+            matched_pairs.append((file_record, matched_task))
 
     # 按文件创建时间排序
-    file_order = {str(f.id): f.created_at for f in files_result}
-    tasks.sort(key=lambda t: file_order.get(t.get("file_id", ""), datetime.min))
+    matched_pairs.sort(key=lambda pair: pair[0].created_at or datetime.min)
 
     # 构建响应
     task_list = []
-    for task in tasks:
+    for file_record, task in matched_pairs:
         annotations = _load_task_annotations(task)
         task_list.append({
             "task_id": task["id"],
-            "file_id": task.get("file_id"),
-            "filename": task.get("filename", ""),
+            "file_id": str(file_record.id),
+            "filename": file_record.filename or task.get("filename", ""),
             "image_url": task.get("image_url"),
             "status": task.get("status", "labeling"),
             "project_name": task.get("project_name"),
@@ -686,13 +712,25 @@ async def get_file_task(
     if not file_record:
         raise HTTPException(status_code=404, detail="文件不存在")
 
-    # 查询任务
+    # 先按 file_id 查询任务
     task_result = supabase.table("tasks").select("*").eq("file_id", file_id).maybe_single().execute()
+    task = task_result.data if task_result else None
 
-    if not task_result or not task_result.data:  # ✅ 修复：检查 task_result 是否为 None
+    # 兜底：按 storage_path 查询同源任务（满足“谁标注谁可看，分享者均可看”）
+    if not task and file_record.storage_path:
+        fallback_result = (
+            supabase.table("tasks")
+            .select("*")
+            .eq("image_storage_path", file_record.storage_path)
+            .order("updated_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        fallback_tasks = fallback_result.data if fallback_result else []
+        task = fallback_tasks[0] if fallback_tasks else None
+
+    if not task:
         return {"task": None}
-
-    task = task_result.data
 
     # 查询草稿或标注
     annotations = _load_task_annotations(task)
