@@ -637,6 +637,10 @@ async def get_folder_tasks(
     if not files_result:
         return {"tasks": [], "total": 0}
 
+    project_uuid = uuid.UUID(project_id)
+    project_record = db.query(Project).filter(Project.id == project_uuid).first()
+    allow_cross_project_fallback = bool(project_record and not project_record.is_shared_copy)
+
     file_ids = [str(f.id) for f in files_result]
     storage_paths = [f.storage_path for f in files_result if f.storage_path]
 
@@ -647,7 +651,7 @@ async def get_folder_tasks(
 
     # 兜底：按 storage_path 补齐跨分享副本的任务（分享者可查看接收者已标注结果）
     storage_tasks = []
-    if storage_paths:
+    if allow_cross_project_fallback and storage_paths:
         storage_task_result = (
             supabase.table("tasks")
             .select("*")
@@ -703,10 +707,15 @@ async def get_file_task(
     """获取单个文件对应的标注任务"""
     logger.info(f"【FILE-TASK】获取文件任务 | project_id={project_id}, file_id={file_id}")
 
+    project_uuid = uuid.UUID(project_id)
+    project_record = db.query(Project).filter(Project.id == project_uuid).first()
+    if not project_record:
+        raise HTTPException(status_code=404, detail="项目不存在")
+
     # 验证文件存在
     file_record = db.query(ProjectFile).filter(
         ProjectFile.id == file_id,
-        ProjectFile.project_id == project_id
+        ProjectFile.project_id == project_uuid
     ).first()
 
     if not file_record:
@@ -717,7 +726,7 @@ async def get_file_task(
     task = task_result.data if task_result else None
 
     # 兜底：按 storage_path 查询同源任务（满足“谁标注谁可看，分享者均可看”）
-    if not task and file_record.storage_path:
+    if not task and file_record.storage_path and not project_record.is_shared_copy:
         fallback_result = (
             supabase.table("tasks")
             .select("*")
@@ -1351,20 +1360,21 @@ async def move_to_done(project_id: str, payload: dict, db: Session = Depends(get
 
     updated_rows = 0
     notify_usernames: set[str] = set()
-    # ✅ 修复：更新文件状态为 done，并同步到同源分享项目
+    # 仅同步到当前标注者项目与分享者项目（谁标注谁可看，分享者均可看）
     if storage_path:
         project_uuid = uuid.UUID(project_id)
         current_project = db.query(Project).filter(Project.id == project_uuid).first()
-        related_project_ids = [project_id]
+        related_project_ids = [project_uuid]
         if current_project:
             root_project_id = current_project.source_project_id or current_project.id
-            sibling_projects = (
-                db.query(Project.id, Project.owner_id)
-                .filter((Project.id == root_project_id) | (Project.source_project_id == root_project_id))
-                .all()
-            )
-            related_project_ids = [item[0] for item in sibling_projects] or [project_uuid]
-            notify_usernames = {item[1] for item in sibling_projects if item[1]}
+            root_project = db.query(Project).filter(Project.id == root_project_id).first()
+            related_project_ids = [project_uuid]
+            if root_project_id not in related_project_ids:
+                related_project_ids.append(root_project_id)
+
+            notify_usernames = {current_project.owner_id}
+            if root_project and root_project.owner_id:
+                notify_usernames.add(root_project.owner_id)
 
         matched_files = (
             db.query(ProjectFile)
