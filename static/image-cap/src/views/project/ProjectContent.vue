@@ -1122,7 +1122,12 @@ const hideRemark = () => {
   hoveredProjectId.value = null
 }
 
-const isImageFile = (file) => typeof file.type === 'string' && file.type.startsWith('image/')
+const IMAGE_NAME_PATTERN = /\.(png|jpe?g|gif|bmp|webp|svg|tiff?)$/i
+const isImageFile = (file) => {
+  if (typeof file?.type === 'string' && file.type.startsWith('image/')) return true
+  if (typeof file?.name === 'string' && IMAGE_NAME_PATTERN.test(file.name)) return true
+  return false
+}
 
 const getFilePreviewUrl = (file) => {
   if (!isImageFile(file)) return ''

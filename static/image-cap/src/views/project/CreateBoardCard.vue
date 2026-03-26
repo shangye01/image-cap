@@ -177,6 +177,14 @@ const triggerFolderUpload = () => {
   folderInputRef.value?.click()
 }
 
+const IMAGE_NAME_PATTERN = /\.(png|jpe?g|gif|bmp|webp|svg|tiff?)$/i
+const isImageLikeFile = (item) => {
+  const mimeType = String(item?.type || '').toLowerCase()
+  if (mimeType.startsWith('image/')) return true
+  const filename = String(item?.name || '')
+  return IMAGE_NAME_PATTERN.test(filename)
+}
+
 const normalizeFiles = (fileList) => {
   return Array.from(fileList).map((file) => ({
     uid: `${file.name}_${file.size}_${file.lastModified}_${Math.random().toString(36).slice(2)}`,
@@ -208,7 +216,7 @@ const handleImageUpload = (event) => {
   const files = event.target.files
   if (!files || !files.length) return
 
-  const imageFiles = normalizeFiles(files).filter((item) => item.type.startsWith('image/'))
+  const imageFiles = normalizeFiles(files).filter((item) => isImageLikeFile(item))
   mergeFiles(imageFiles)
   event.target.value = ''
 }

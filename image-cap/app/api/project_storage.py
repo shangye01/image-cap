@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import Response
@@ -169,11 +170,10 @@ def share_project(
         payload.share_mode = "single"
     if payload.share_mode == "collaborative" and len(payload.recipient_ids) < 3:
         raise HTTPException(status_code=400, detail="协作标注模式下至少需要 3 位标注成员")
-    if payload.share_mode == "single":
-        payload.reviewer_id = None
     if payload.share_mode == "collaborative":
         if not payload.reviewer_id:
             raise HTTPException(status_code=400, detail="协作标注模式下必须选择审核人")
+    if payload.reviewer_id:
         reviewer_membership = membership_map.get(payload.reviewer_id)
         if reviewer_membership is not None:
             raise HTTPException(status_code=400, detail="审核人不能与标注成员重复")
@@ -345,14 +345,14 @@ def download_project_file(file_id: uuid.UUID, db: Session = Depends(get_db)):
     except Exception as exc:
         raise HTTPException(status_code=404, detail=f"远端文件不存在或已被删除: {exc}") from exc
 
+    disposition_type = "inline" if (file_record.mime_type or "").startswith("image/") else "attachment"
+    quoted_filename = quote(file_record.filename)
     return Response(
         content=content,
         media_type=file_record.mime_type or "application/octet-stream",
         headers={
             "Content-Disposition": (
-                f'inline; filename="{file_record.filename}"'
-                if (file_record.mime_type or "").startswith("image/")
-                else f'attachment; filename="{file_record.filename}"'
+                f'{disposition_type}; filename="{file_record.filename}"; filename*=UTF-8\'\'{quoted_filename}'
             )
         },
     )

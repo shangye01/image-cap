@@ -124,13 +124,10 @@
                 已选择 1 位成员：默认单人标注，TA 标注完成后会自动同步到分享人的“已标注”。
               </div>
 
-              <div
-                v-if="shareForm.memberIds.length > 1 && shareForm.shareMode === 'collaborative'"
-                class="reviewer-wrap"
-              >
-                <div class="share-member-header">选择审核人（第 4 人）</div>
+              <div v-if="shareForm.memberIds.length" class="reviewer-wrap">
+                <div class="share-member-header">选择审批人（可选）</div>
                 <select v-model="shareForm.reviewerId" class="share-project-select">
-                  <option value="" disabled>请选择审核人</option>
+                  <option value="">不设置审批人</option>
                   <option v-for="member in reviewerCandidates" :key="member.id" :value="member.id">
                     {{ member.name }}（{{ member.role }}）
                   </option>
@@ -404,7 +401,7 @@ const confirmShare = async () => {
       organization_nickname: currentOrganization.value.organization_nickname,
       message: shareForm.message || undefined,
       share_mode: shareForm.shareMode,
-      reviewer_id: shareForm.shareMode === 'collaborative' ? shareForm.reviewerId : undefined,
+      reviewer_id: shareForm.reviewerId || undefined,
     })
     const sharedProjectName = selectedShareProject.value?.name || props.projectName || '当前项目'
     closeShareDialog()
