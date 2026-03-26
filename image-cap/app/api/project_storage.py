@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from pathlib import Path
+from unicodedata import normalize
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
@@ -81,6 +82,15 @@ def _ensure_storage_client():
     if supabase is None:
         raise HTTPException(status_code=500, detail="Supabase Storage 未配置，无法上传项目文件")
     return supabase.storage.from_(SUPABASE_PROJECT_FILES_BUCKET)
+
+
+def _build_content_disposition(filename: str, disposition_type: str) -> str:
+    ascii_fallback = normalize("NFKD", filename).encode("ascii", "ignore").decode("ascii").strip()
+    if not ascii_fallback:
+        ascii_fallback = "download"
+    ascii_fallback = ascii_fallback.replace("\\", "_").replace('"', "_")
+    encoded_filename = quote(filename, safe="")
+    return f'{disposition_type}; filename="{ascii_fallback}"; filename*=UTF-8\'\'{encoded_filename}'
 
 
 def _resolve_user_id_from_token(authorization: str | None) -> str | None:
@@ -346,14 +356,11 @@ def download_project_file(file_id: uuid.UUID, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail=f"远端文件不存在或已被删除: {exc}") from exc
 
     disposition_type = "inline" if (file_record.mime_type or "").startswith("image/") else "attachment"
-    quoted_filename = quote(file_record.filename)
     return Response(
         content=content,
         media_type=file_record.mime_type or "application/octet-stream",
         headers={
-            "Content-Disposition": (
-                f'{disposition_type}; filename="{file_record.filename}"; filename*=UTF-8\'\'{quoted_filename}'
-            )
+            "Content-Disposition": _build_content_disposition(file_record.filename, disposition_type)
         },
     )
 
