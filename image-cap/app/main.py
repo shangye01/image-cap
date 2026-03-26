@@ -25,7 +25,7 @@ import torch
 from typing import Optional
 from PIL import Image
 from ultralytics import YOLO
-from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Query, Form, Depends, Request
+from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Query, Form, Depends, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse
@@ -46,6 +46,10 @@ import uuid
 from datetime import datetime
 import logging
 from fastapi.concurrency import run_in_threadpool
+from app.models import User
+from app.db.session import SessionLocal
+from app.utils.jwt import ALGORITHM, SECRET_KEY
+from jose import jwt
 
 logger = logging.getLogger(__name__)
 print(f"SUPABASE_URL: {SUPABASE_URL}")  # 加上这行看输出
@@ -59,10 +63,93 @@ print("MAIN FILE:", __file__)
 print("PROJECT_STORAGE FILE:", project_storage.__file__)
 
 
+class ProgressConnectionManager:
+    """按用户名维度维护 websocket 连接，推送项目进度变化。"""
+
+    def __init__(self) -> None:
+        self._connections: dict[str, set[WebSocket]] = {}
+        self._lock = threading.Lock()
+
+    async def connect(self, username: str, websocket: WebSocket) -> None:
+        await websocket.accept()
+        with self._lock:
+            self._connections.setdefault(username, set()).add(websocket)
+
+    def disconnect(self, username: str, websocket: WebSocket) -> None:
+        with self._lock:
+            sockets = self._connections.get(username)
+            if not sockets:
+                return
+            sockets.discard(websocket)
+            if not sockets:
+                self._connections.pop(username, None)
+
+    async def emit_to_users(self, usernames: list[str], payload: dict[str, Any]) -> None:
+        targets: list[WebSocket] = []
+        with self._lock:
+            for username in set(usernames):
+                targets.extend(list(self._connections.get(username, set())))
+
+        dead_connections: list[tuple[str, WebSocket]] = []
+        for websocket in targets:
+            try:
+                await websocket.send_json(payload)
+            except Exception:
+                dead_connections.append((payload.get("owner"), websocket))
+
+        if dead_connections:
+            with self._lock:
+                for _, ws in dead_connections:
+                    for name, sockets in list(self._connections.items()):
+                        if ws in sockets:
+                            sockets.discard(ws)
+                            if not sockets:
+                                self._connections.pop(name, None)
+
+
+progress_ws_manager = ProgressConnectionManager()
+
+
+def _resolve_ws_username(token: str | None) -> str | None:
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("user_id")
+        if not user_id:
+            return None
+        db = SessionLocal()
+        try:
+            user = db.query(User).filter(User.id == user_id).first()
+            return user.username if user else None
+        finally:
+            db.close()
+    except Exception:
+        return None
+
+
 @app.on_event("startup")
 def _startup() -> None:
     init_db()
     auth.ensure_auth_resources()
+
+
+@app.websocket("/api/ws/progress")
+async def progress_websocket(websocket: WebSocket):
+    token = websocket.query_params.get("token")
+    username = _resolve_ws_username(token)
+    if not username:
+        await websocket.close(code=1008)
+        return
+
+    await progress_ws_manager.connect(username, websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        progress_ws_manager.disconnect(username, websocket)
+    except Exception:
+        progress_ws_manager.disconnect(username, websocket)
 
 
 # ========== 日志配置 ==========
@@ -1222,6 +1309,7 @@ async def move_to_done(project_id: str, payload: dict, db: Session = Depends(get
     storage_path = task_data.get("image_storage_path")
 
     updated_rows = 0
+    notify_usernames: set[str] = set()
     # ✅ 修复：更新文件状态为 done，并同步到同源分享项目
     if storage_path:
         project_uuid = uuid.UUID(project_id)
@@ -1230,11 +1318,12 @@ async def move_to_done(project_id: str, payload: dict, db: Session = Depends(get
         if current_project:
             root_project_id = current_project.source_project_id or current_project.id
             sibling_projects = (
-                db.query(Project.id)
+                db.query(Project.id, Project.owner_id)
                 .filter((Project.id == root_project_id) | (Project.source_project_id == root_project_id))
                 .all()
             )
             related_project_ids = [item[0] for item in sibling_projects] or [project_uuid]
+            notify_usernames = {item[1] for item in sibling_projects if item[1]}
 
         matched_files = (
             db.query(ProjectFile)
@@ -1253,6 +1342,18 @@ async def move_to_done(project_id: str, payload: dict, db: Session = Depends(get
         if matched_files:
             db.commit()
             logger.info(f"文件状态已同步为 done | storage_path={storage_path}, updated={updated_rows}")
+            await progress_ws_manager.emit_to_users(
+                list(notify_usernames),
+                {
+                    "type": "PROJECT_PROGRESS_UPDATED",
+                    "owner": current_project.owner_id if current_project else None,
+                    "project_id": str(root_project_id) if current_project else project_id,
+                    "task_id": task_id,
+                    "storage_path": storage_path,
+                    "updated_rows": updated_rows,
+                    "timestamp": datetime.now().isoformat(),
+                },
+            )
         else:
             logger.warning(f"未找到对应的文件记录: {storage_path}")
 

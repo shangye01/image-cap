@@ -663,6 +663,8 @@ const deletingProjectId = ref(null)
 const userStore = useUserStore()
 const router = useRouter()
 const previewUrlMap = new Map()
+const progressSocket = ref(null)
+const progressSocketStopped = ref(false)
 
 // ============ 大图标注预览相关 ============
 
@@ -1767,6 +1769,55 @@ const deleteProject = async (projectId) => {
   }
 }
 
+const closeProgressSocket = () => {
+  progressSocketStopped.value = true
+  if (progressSocket.value) {
+    progressSocket.value.close()
+    progressSocket.value = null
+  }
+}
+
+const connectProgressSocket = () => {
+  progressSocketStopped.value = false
+  closeProgressSocket()
+  progressSocketStopped.value = false
+  const token = userStore.token
+  if (!token) return
+
+  const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
+  const wsUrl = `${wsProtocol}://${window.location.host}/api/ws/progress?token=${encodeURIComponent(
+    token
+  )}`
+  const socket = new WebSocket(wsUrl)
+  progressSocket.value = socket
+
+  socket.onmessage = async (event) => {
+    try {
+      const message = JSON.parse(event.data || '{}')
+      if (message.type !== 'PROJECT_PROGRESS_UPDATED') return
+
+      const activeProjectId = currentProject.value?.id
+      await loadProjects()
+      if (activeProjectId) {
+        currentProjectId.value = activeProjectId
+        if (isLabelingFolder.value || isDoneFolder.value) {
+          await loadFolderTasks()
+        }
+      }
+    } catch (error) {
+      console.warn('解析实时进度消息失败:', error)
+    }
+  }
+
+  socket.onclose = () => {
+    if (progressSocketStopped.value) return
+    if (progressSocket.value === socket) {
+      progressSocket.value = null
+      window.setTimeout(() => connectProgressSocket(), 1500)
+    }
+  }
+}
+
 // ============ 菜单操作 ============
 
 const handleGlobalClick = () => closeProjectMenu()
@@ -1798,8 +1849,20 @@ watch(
   }
 )
 
+watch(
+  () => userStore.token,
+  (token) => {
+    if (!token) {
+      closeProgressSocket()
+      return
+    }
+    connectProgressSocket()
+  }
+)
+
 onMounted(() => {
   loadProjects()
+  connectProgressSocket()
   window.addEventListener('click', handleGlobalClick)
   window.addEventListener('resize', handleResize)
 
@@ -1823,6 +1886,7 @@ onBeforeUnmount(() => {
 
   window.removeEventListener('click', handleGlobalClick)
   window.removeEventListener('resize', handleResize)
+  closeProgressSocket()
 })
 </script>
 
