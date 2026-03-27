@@ -91,6 +91,11 @@
 
           <div class="folder-click-area" @click="enterProject(project)">
             <div class="folder-preview">
+              <div
+                v-if="showProjectReviewDot(project)"
+                class="project-review-dot"
+                :title="`待审核 ${getProjectPendingReviewCount(project)} 项`"
+              ></div>
               <transition name="mask-fade">
                 <div
                   v-if="hoveredProjectId === project.id && project.remark"
@@ -158,6 +163,17 @@
         <div class="project-detail-title-wrap">
           <div class="project-detail-title-row">
             <div class="project-detail-title">{{ currentProject.projectName }}</div>
+            <button
+              v-if="showPendingReviewButton"
+              type="button"
+              class="pending-review-btn"
+              @click="openPendingReviewDialog"
+            >
+              待审核
+              <span v-if="pendingReviewCount > 0" class="pending-review-badge">{{
+                pendingReviewCount
+              }}</span>
+            </button>
           </div>
 
           <div v-if="currentProject.remark" class="project-detail-remark">
@@ -614,6 +630,13 @@
       </div>
     </transition>
   </teleport>
+
+  <PendingReviewDialog
+    :visible="pendingReviewVisible"
+    :items="pendingReviewItems"
+    @close="closePendingReviewDialog"
+    @select="openPendingReviewItem"
+  />
 </template>
 
 <script setup>
@@ -621,6 +644,7 @@ import { computed, reactive, ref, onBeforeUnmount, onMounted, watch, nextTick } 
 import { useRouter } from 'vue-router'
 import CreateBoardCard from '@/views/project/CreateBoardCard.vue'
 import TeamCollaborationActions from '@/components/TeamCollaborationActions.vue'
+import PendingReviewDialog from '@/components/PendingReviewDialog.vue'
 import {
   createProject,
   listProjects,
@@ -689,6 +713,8 @@ const currentPreviewTask = ref(null)
 const currentPreviewIndex = ref(0)
 const previewableFiles = ref([])
 const annotationDataSource = ref('')
+const pendingReviewVisible = ref(false)
+const pendingReviewItems = ref([])
 
 const touchStartX = ref(0)
 const touchEndX = ref(0)
@@ -735,6 +761,7 @@ const scenes = ref([
 const currentProject = computed(
   () => projectList.value.find((item) => item.id === currentProjectId.value) || null
 )
+const currentUserId = computed(() => userStore.user?.id || '')
 
 const currentFolder = computed(() => {
   if (!currentProject.value || !currentFolderId.value) return null
@@ -851,6 +878,18 @@ const annotationLabels = computed(() => {
     .filter((label) => Boolean(label))
   return [...new Set(labels)]
 })
+const isCurrentProjectReviewer = computed(
+  () =>
+    Boolean(currentProject.value?.reviewerId) &&
+    currentProject.value?.reviewerId === currentUserId.value
+)
+const pendingReviewFiles = computed(() => {
+  if (!currentProject.value) return []
+  const doneFolder = currentProject.value.folders.find((folder) => folder.name === '已标注')
+  return Array.isArray(doneFolder?.files) ? doneFolder.files : []
+})
+const pendingReviewCount = computed(() => pendingReviewFiles.value.length)
+const showPendingReviewButton = computed(() => isCurrentProjectReviewer.value)
 
 const imageContainerStyle = computed(() => {
   if (!annotationImageLoaded.value) {
@@ -945,6 +984,12 @@ const mapBackendFile = (backendFile) => {
 
   return mapped
 }
+const getProjectPendingReviewCount = (project) => {
+  const doneFolder = project?.folders?.find((folder) => folder.name === '已标注')
+  return Array.isArray(doneFolder?.files) ? doneFolder.files.length : 0
+}
+const showProjectReviewDot = (project) =>
+  project?.reviewerId === currentUserId.value && getProjectPendingReviewCount(project) > 0
 
 // ============ 数据加载 ============
 
@@ -986,6 +1031,7 @@ const loadProjects = async () => {
           shareAcceptedAt: project.share_accepted_at
             ? new Date(project.share_accepted_at).getTime()
             : null,
+          reviewerId: project.reviewer_id || '',
           folders: [
             { id: `pending_${project.id}`, name: '待标注', files: pendingFiles },
             { id: `labeling_${project.id}`, name: '标注中', files: labelingFiles },
@@ -1110,6 +1156,7 @@ const backToProjectList = () => {
   selectedFileIds.value = []
   labelingTasks.value = []
   doneTasks.value = []
+  closePendingReviewDialog()
 }
 
 const enterFolder = async (folder) => {
@@ -1124,6 +1171,7 @@ const backToFolderList = () => {
   selectedFileIds.value = []
   labelingTasks.value = []
   doneTasks.value = []
+  closePendingReviewDialog()
 }
 
 // ============ 文件操作 ============
@@ -1486,6 +1534,56 @@ const reviewCompleted = () => {
 
   const firstTask = doneTasks.value[0]
   navigateToAnnotate(firstTask, doneTasks.value)
+}
+
+const openPendingReviewDialog = async () => {
+  if (!currentProject.value) return
+  pendingReviewVisible.value = true
+  pendingReviewItems.value = pendingReviewFiles.value.map((file) => ({
+    ...file,
+    previewUrl: getFilePreviewUrl(file) || file.downloadUrl || '',
+    annotationCount: 0,
+  }))
+
+  const reviewItems = await Promise.all(
+    pendingReviewFiles.value.map(async (file) => {
+      try {
+        const data = await getTaskByFileId(currentProject.value.id, file.id)
+        const task = data?.task
+        const annotations = task?.annotations || task?.pre_annotations || []
+        return {
+          ...file,
+          previewUrl: getFilePreviewUrl(file) || file.downloadUrl || task?.image_url || '',
+          annotationCount: Array.isArray(annotations) ? annotations.length : 0,
+        }
+      } catch (error) {
+        console.warn('加载待审核项失败:', error)
+        return {
+          ...file,
+          previewUrl: getFilePreviewUrl(file) || file.downloadUrl || '',
+          annotationCount: 0,
+        }
+      }
+    })
+  )
+
+  pendingReviewItems.value = reviewItems
+}
+
+const closePendingReviewDialog = () => {
+  pendingReviewVisible.value = false
+  pendingReviewItems.value = []
+}
+
+const openPendingReviewItem = async (file) => {
+  closePendingReviewDialog()
+  if (!currentProject.value) return
+  const doneFolder = currentProject.value.folders.find((folder) => folder.name === '已标注')
+  if (!doneFolder) return
+  currentFolderId.value = doneFolder.id
+  await nextTick()
+  const index = doneFolder.files.findIndex((item) => item.id === file.id)
+  await openAnnotationPreview(file, index >= 0 ? index : 0)
 }
 
 const viewCompletedAnnotation = async (file) => {
@@ -2032,6 +2130,18 @@ onBeforeUnmount(() => {
   transition: transform 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
 }
 
+.project-review-dot {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #ef4444;
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.95);
+  z-index: 3;
+}
+
 .project-folder-card:hover .folder-preview {
   background: #f3f4f6;
   transform: translateY(-1px);
@@ -2282,6 +2392,34 @@ onBeforeUnmount(() => {
   font-weight: 800;
   color: #111827;
   line-height: 1.3;
+}
+
+.pending-review-btn {
+  margin-left: auto;
+  border: 1px solid #fca5a5;
+  background: #fff1f2;
+  color: #be123c;
+  border-radius: 999px;
+  height: 34px;
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.pending-review-badge {
+  min-width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: #ef4444;
+  color: #fff;
+  font-size: 12px;
+  line-height: 20px;
+  padding: 0 6px;
+  text-align: center;
 }
 
 .project-detail-remark {
