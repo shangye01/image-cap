@@ -73,7 +73,7 @@ class ProgressConnectionManager:
         self._lock = threading.Lock()
 
     async def connect(self, username: str, websocket: WebSocket) -> None:
-        await websocket.accept()
+        # 不再 accept，假设外面已经 accept 过了
         with self._lock:
             self._connections.setdefault(username, set()).add(websocket)
 
@@ -97,6 +97,7 @@ class ProgressConnectionManager:
             try:
                 await websocket.send_json(payload)
             except Exception:
+                # 记录是哪个用户的连接死了
                 dead_connections.append((payload.get("owner"), websocket))
 
         if dead_connections:
@@ -130,19 +131,41 @@ def _load_task_annotations(task: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _resolve_ws_username(token: str | None) -> str | None:
     if not token:
+        print("[WS_AUTH] Token 为空")
         return None
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        print(f"[WS_AUTH] Token 解码成功: {payload}")
         user_id = payload.get("user_id")
         if not user_id:
+            print("[WS_AUTH] Token 缺少 user_id")
             return None
+
+        # 检查是否过期（jwt.decode 应该会自动检查，但手动确认一下）
+        exp = payload.get("exp")
+        if exp and exp < time.time():
+            print(f"[WS_AUTH] Token 已过期, exp={exp}, now={time.time()}")
+            return None
+
         db = SessionLocal()
         try:
             user = db.query(User).filter(User.id == user_id).first()
-            return user.username if user else None
+            if user:
+                print(f"[WS_AUTH] 找到用户: {user.username}")
+                return user.username
+            else:
+                print(f"[WS_AUTH] 用户不存在: user_id={user_id}")
+                return None
         finally:
             db.close()
-    except Exception:
+    except jwt.ExpiredSignatureError:
+        print("[WS_AUTH] JWT 过期异常")
+        return None
+    except jwt.JWTError as e:
+        print(f"[WS_AUTH] JWT 错误: {e}")
+        return None
+    except Exception as e:
+        print(f"[WS_AUTH] 未知错误: {e}")
         return None
 
 
@@ -154,20 +177,31 @@ def _startup() -> None:
 
 @app.websocket("/api/ws/progress")
 async def progress_websocket(websocket: WebSocket):
+    # 先验证
     token = websocket.query_params.get("token")
     username = _resolve_ws_username(token)
-    if not username:
-        await websocket.close(code=1008)
-        return
 
+    if not username:
+        # 不 accept，让 FastAPI 返回 403
+        from fastapi import WebSocketException, status
+        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
+
+    # 验证通过再 accept
+    await websocket.accept()
     await progress_ws_manager.connect(username, websocket)
+
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
         progress_ws_manager.disconnect(username, websocket)
-    except Exception:
-        progress_ws_manager.disconnect(username, websocket)
+    except Exception as e:
+        logger.error(f"WebSocket 异常: {e}")
+        try:
+            progress_ws_manager.disconnect(username, websocket)
+            await websocket.close()
+        except Exception:
+            pass
 
 
 # ========== 日志配置 ==========
