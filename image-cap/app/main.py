@@ -33,6 +33,7 @@ from sqlalchemy.orm import Session
 
 from .api import auth
 from .api import project_storage
+from .api import collaboration
 from .db.base import init_db
 
 from .config import supabase, SUPABASE_URL, TRAINING_CONFIG
@@ -58,6 +59,7 @@ app = FastAPI()
 # 注册路由
 app.include_router(auth.router)
 app.include_router(project_storage.router)
+app.include_router(collaboration.router)
 
 print("MAIN FILE:", __file__)
 print("PROJECT_STORAGE FILE:", project_storage.__file__)
