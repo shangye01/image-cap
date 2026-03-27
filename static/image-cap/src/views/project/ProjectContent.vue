@@ -1902,15 +1902,40 @@ const connectProgressSocket = () => {
   progressSocketStopped.value = false
   closeProgressSocket()
   progressSocketStopped.value = false
-  const token = userStore.token
-  if (!token) return
+  
+  // 强制从 localStorage 读取最新 token，并检查有效性
+  const rawToken = localStorage.getItem('token')
+  if (!rawToken) {
+    console.log('[WebSocket] 无可用 token，跳过连接')
+    return
+  }
 
+  // 简单检查 token 格式（不解析，避免性能开销）
+  try {
+    const payload = JSON.parse(atob(rawToken.split('.')[1]))
+    if (payload.exp && payload.exp * 1000 < Date.now()) {
+      console.warn('[WebSocket] Token 已过期，尝试重新登录')
+      // 可选：自动跳转到登录页
+      // router.push('/login')
+      return
+    }
+  } catch {
+    console.error('[WebSocket] Token 格式无效')
+    return
+  }
+
+  const token = rawToken
   const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-  const wsUrl = `${wsProtocol}://${window.location.host}/api/ws/progress?token=${encodeURIComponent(
-    token
-  )}`
+  const wsUrl = `${wsProtocol}://${window.location.host}/api/ws/progress?token=${encodeURIComponent(token)}`
+  
+  console.log('[WebSocket] 连接中...', wsUrl.replace(/token=.*/, 'token=***'))
+  
   const socket = new WebSocket(wsUrl)
   progressSocket.value = socket
+
+  socket.onopen = () => {
+    console.log('[WebSocket] 连接成功')
+  }
 
   socket.onmessage = async (event) => {
     try {
@@ -1926,15 +1951,28 @@ const connectProgressSocket = () => {
         }
       }
     } catch (error) {
-      console.warn('解析实时进度消息失败:', error)
+      console.warn('[WebSocket] 解析消息失败:', error)
     }
   }
 
-  socket.onclose = () => {
+  socket.onerror = (error) => {
+    console.error('[WebSocket] 连接错误:', error)
+  }
+
+  socket.onclose = (event) => {
+    console.log('[WebSocket] 连接关闭:', event.code, event.reason)
+    
     if (progressSocketStopped.value) return
+    
+    // 403 错误不重连（token 问题）
+    if (event.code === 1008) {
+      console.warn('[WebSocket] 认证失败，停止重连')
+      return
+    }
+    
     if (progressSocket.value === socket) {
       progressSocket.value = null
-      window.setTimeout(() => connectProgressSocket(), 1500)
+      window.setTimeout(() => connectProgressSocket(), 3000)  // 延长重连间隔
     }
   }
 }
