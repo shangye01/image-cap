@@ -277,6 +277,227 @@ def remove_duplicate_annotations(annotations: List[Dict[str, Any]], iou_threshol
     return keep
 
 
+def _normalize_annotation_box(annotation: Dict[str, Any]) -> Dict[str, Any]:
+    """标准化标注框字段，兼容 drafts/annotations 两种来源。"""
+    return {
+        "id": annotation.get("id", f"ann_{uuid.uuid4().hex[:8]}"),
+        "label": str(annotation.get("label", "object")),
+        "x": float(annotation.get("x", 0)),
+        "y": float(annotation.get("y", 0)),
+        "width": float(annotation.get("width", 0)),
+        "height": float(annotation.get("height", 0)),
+        "confidence": float(annotation.get("confidence", 1.0)),
+        "color": annotation.get("color", DEFAULT_COLOR),
+    }
+
+
+def _build_iou_matches(base_annotations: List[Dict[str, Any]],
+                       other_annotations: List[Dict[str, Any]],
+                       iou_threshold: float) -> List[Tuple[int, int, float]]:
+    """
+    基于 IOU 的一对一贪心匹配（替代 Hungarian，满足“选其一即可”）。
+    返回 (base_idx, other_idx, iou) 列表。
+    """
+    candidate_pairs: list[tuple[int, int, float]] = []
+    for i, base_ann in enumerate(base_annotations):
+        for j, other_ann in enumerate(other_annotations):
+            if base_ann.get("label") != other_ann.get("label"):
+                continue
+            iou = calculate_iou(base_ann, other_ann)
+            if iou >= iou_threshold:
+                candidate_pairs.append((i, j, iou))
+
+    candidate_pairs.sort(key=lambda item: item[2], reverse=True)
+    used_base: set[int] = set()
+    used_other: set[int] = set()
+    matches: list[tuple[int, int, float]] = []
+    for i, j, iou in candidate_pairs:
+        if i in used_base or j in used_other:
+            continue
+        used_base.add(i)
+        used_other.add(j)
+        matches.append((i, j, iou))
+    return matches
+
+
+def _fuse_matched_annotations(matched_annotations: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """对同一目标的多份标注进行融合（均值 + 最大置信度），后续再执行 NMS。"""
+    if not matched_annotations:
+        raise ValueError("matched_annotations 不能为空")
+
+    labels = [ann.get("label", "object") for ann in matched_annotations]
+    majority_label = max(set(labels), key=labels.count)
+    return {
+        "id": f"auto_{uuid.uuid4().hex[:10]}",
+        "label": majority_label,
+        "x": round(sum(ann.get("x", 0) for ann in matched_annotations) / len(matched_annotations), 2),
+        "y": round(sum(ann.get("y", 0) for ann in matched_annotations) / len(matched_annotations), 2),
+        "width": round(sum(ann.get("width", 0) for ann in matched_annotations) / len(matched_annotations), 2),
+        "height": round(sum(ann.get("height", 0) for ann in matched_annotations) / len(matched_annotations), 2),
+        "confidence": round(max(float(ann.get("confidence", 1.0)) for ann in matched_annotations), 3),
+        "color": get_label_color(majority_label),
+    }
+
+
+def _collaborative_auto_integrate(task: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    协作标注自动整合：
+    1) 汇总同图像的三份标注
+    2) 基于 IOU 一对一匹配对齐目标
+    3) 判断类别/位置/数量一致性
+    4) 一致则自动融合并生成最终结果；否则触发审核并返回差异高亮数据
+    """
+    image_storage_path = task.get("image_storage_path")
+    project_id = task.get("project_id")
+    if not image_storage_path or not project_id:
+        return {"ready": False, "reason": "任务缺少 image_storage_path 或 project_id"}
+
+    sibling_tasks_result = (
+        supabase
+        .table("tasks")
+        .select("*")
+        .eq("project_id", project_id)
+        .eq("image_storage_path", image_storage_path)
+        .execute()
+    )
+    sibling_tasks = sibling_tasks_result.data or []
+    if len(sibling_tasks) < 3:
+        return {"ready": False, "reason": "同图像任务不足 3 份"}
+
+    completed_siblings = [t for t in sibling_tasks if t.get("status") == "completed"]
+    if len(completed_siblings) < 3:
+        return {"ready": False, "reason": "尚未收齐 3 份已提交标注"}
+
+    completed_siblings.sort(key=lambda x: x.get("completed_at") or "")
+    selected_tasks = completed_siblings[:3]
+
+    annotation_sets: list[list[dict[str, Any]]] = []
+    source_task_ids: list[str] = []
+    for sibling in selected_tasks:
+        sibling_task_id = sibling.get("id")
+        source_task_ids.append(sibling_task_id)
+        sibling_anns_res = supabase.table("annotations").select("*").eq("task_id", sibling_task_id).execute()
+        sibling_anns = sibling_anns_res.data or []
+        annotation_sets.append([_normalize_annotation_box(ann) for ann in sibling_anns])
+
+    if any(len(anns) == 0 for anns in annotation_sets):
+        return {"ready": False, "reason": "存在空标注结果，无法自动整合"}
+
+    count_values = [len(anns) for anns in annotation_sets]
+    count_consistent = max(count_values) - min(count_values) <= 1
+
+    reference_annotations = annotation_sets[0]
+    pair_match_details = []
+    diffs = []
+    consistent_groups: list[list[dict[str, Any]]] = []
+    unmatched_reference_indexes = set(range(len(reference_annotations)))
+    overall_consistent = count_consistent
+
+    for set_index in range(1, len(annotation_sets)):
+        matches = _build_iou_matches(reference_annotations, annotation_sets[set_index], iou_threshold=0.55)
+        pair_match_details.append({
+            "against_task_id": source_task_ids[set_index],
+            "matched_count": len(matches),
+            "reference_count": len(reference_annotations),
+            "other_count": len(annotation_sets[set_index]),
+            "mean_iou": round(sum(m[2] for m in matches) / len(matches), 3) if matches else 0.0
+        })
+
+        matched_reference = set()
+        for ref_idx, other_idx, iou in matches:
+            matched_reference.add(ref_idx)
+            unmatched_reference_indexes.discard(ref_idx)
+            ref_ann = reference_annotations[ref_idx]
+            other_ann = annotation_sets[set_index][other_idx]
+            label_same = ref_ann["label"] == other_ann["label"]
+            if not label_same or iou < 0.6:
+                overall_consistent = False
+                diffs.append({
+                    "type": "box_or_label_mismatch",
+                    "reference_id": ref_ann["id"],
+                    "other_id": other_ann["id"],
+                    "reference_label": ref_ann["label"],
+                    "other_label": other_ann["label"],
+                    "iou": round(iou, 3)
+                })
+
+        # 匹配覆盖不足视为数量/位置不一致
+        if len(matches) < max(1, len(reference_annotations) - 1):
+            overall_consistent = False
+
+        for ref_idx in range(len(reference_annotations)):
+            if ref_idx not in matched_reference:
+                diffs.append({
+                    "type": "missing_target",
+                    "reference_id": reference_annotations[ref_idx]["id"],
+                    "reference_label": reference_annotations[ref_idx]["label"],
+                    "against_task_id": source_task_ids[set_index]
+                })
+
+    # 根据三份标注构建一致目标组
+    for ref_idx, ref_ann in enumerate(reference_annotations):
+        group = [ref_ann]
+        group_valid = True
+        for set_index in range(1, len(annotation_sets)):
+            local_matches = _build_iou_matches([ref_ann], annotation_sets[set_index], iou_threshold=0.55)
+            if not local_matches:
+                group_valid = False
+                break
+            _, other_idx, iou = local_matches[0]
+            candidate = annotation_sets[set_index][other_idx]
+            if candidate["label"] != ref_ann["label"] or iou < 0.6:
+                group_valid = False
+                break
+            group.append(candidate)
+        if group_valid and len(group) == 3:
+            consistent_groups.append(group)
+
+    auto_integrated = False
+    review_triggered = False
+    review_rules = []
+    fused_annotations: list[dict[str, Any]] = []
+
+    consistency_ratio = round(len(consistent_groups) / max(1, len(reference_annotations)), 3)
+    if consistency_ratio < 0.8:
+        overall_consistent = False
+        review_rules.append("一致目标比例低于 0.8")
+
+    if not count_consistent:
+        review_rules.append("三份标注数量差异较大")
+
+    if diffs:
+        review_rules.append("存在类别/位置差异高亮项")
+
+    # 审核触发规则：存在差异，或匹配平均 IOU 低于阈值
+    mean_pair_iou = 0.0
+    if pair_match_details:
+        mean_pair_iou = sum(item["mean_iou"] for item in pair_match_details) / len(pair_match_details)
+    if mean_pair_iou < 0.65:
+        review_rules.append("跨标注员平均 IOU 低于 0.65")
+
+    if overall_consistent and not review_rules:
+        for group in consistent_groups:
+            fused_annotations.append(_fuse_matched_annotations(group))
+        # NMS 融合去重
+        fused_annotations = remove_duplicate_annotations(fused_annotations, iou_threshold=0.7)
+        auto_integrated = True
+    else:
+        review_triggered = True
+
+    return {
+        "ready": True,
+        "source_task_ids": source_task_ids,
+        "count_consistent": count_consistent,
+        "consistency_ratio": consistency_ratio,
+        "pair_match_details": pair_match_details,
+        "diff_highlights": diffs,
+        "review_triggered": review_triggered,
+        "review_rules": review_rules,
+        "auto_integrated": auto_integrated,
+        "fused_annotations": fused_annotations,
+    }
+
+
 def build_local_upload_url(filename: str, request: Optional[Request] = None) -> str:
     """构建本地上传图片地址，优先使用当前请求域名。"""
     safe_filename = quote(filename)
@@ -2053,11 +2274,18 @@ async def save_annotations(task_id: str, payload: dict):
         logger.info(f"保存标注: task_id={task_id}, is_draft={is_draft}, count={len(anns)}")
 
         # 验证任务存在
-        task_check = supabase.table("tasks").select("id,project_name").eq("id", task_id).execute()
+        task_check = (
+            supabase
+            .table("tasks")
+            .select("id,project_name,project_id,image_storage_path")
+            .eq("id", task_id)
+            .execute()
+        )
         if not task_check.data:
             raise HTTPException(404, detail=f"任务不存在: {task_id}")
 
-        project_name = task_check.data[0].get("project_name", "unknown")
+        task_row = task_check.data[0]
+        project_name = task_row.get("project_name", "unknown")
 
         if is_draft:
             # 保存草稿
@@ -2071,6 +2299,8 @@ async def save_annotations(task_id: str, payload: dict):
         else:
             # 提交最终标注
             supabase.table("drafts").delete().eq("task_id", task_id).execute()
+            # 保证幂等：重复提交时清理旧结果
+            supabase.table("annotations").delete().eq("task_id", task_id).execute()
 
             # 保存标注到 annotations 表 - 使用批量插入
             if anns:
@@ -2100,12 +2330,38 @@ async def save_annotations(task_id: str, payload: dict):
                 "completed_at": datetime.now().isoformat()
             }).eq("id", task_id).execute()
 
+            # 协作标注自动整合流程（不新增字段，仅返回整合与审核结果）
+            integration_result = _collaborative_auto_integrate(task_row)
+            if integration_result.get("auto_integrated") and integration_result.get("fused_annotations"):
+                final_task_id = (integration_result.get("source_task_ids") or [task_id])[0]
+                supabase.table("annotations").delete().eq("task_id", final_task_id).eq("annotated_by",
+                                                                                       "auto_fusion").execute()
+                auto_rows = []
+                for ann in integration_result["fused_annotations"]:
+                    auto_rows.append({
+                        "id": ann.get("id", f"auto_{uuid.uuid4().hex[:8]}"),
+                        "task_id": final_task_id,
+                        "label": ann.get("label"),
+                        "x": ann.get("x"),
+                        "y": ann.get("y"),
+                        "width": ann.get("width"),
+                        "height": ann.get("height"),
+                        "confidence": ann.get("confidence", 1.0),
+                        "color": ann.get("color", DEFAULT_COLOR),
+                        "annotated_by": "auto_fusion",
+                        "created_at": datetime.now().isoformat()
+                    })
+                if auto_rows:
+                    supabase.table("annotations").insert(auto_rows).execute()
+                    integration_result["final_result_saved_to_task_id"] = final_task_id
+
             return {
                 "success": True,
                 "status": "submitted",
                 "count": len(anns),
                 "project_name": project_name,
-                "task_id": task_id
+                "task_id": task_id,
+                "collaboration_integration": integration_result
             }
 
     except HTTPException:
