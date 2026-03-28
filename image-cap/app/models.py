@@ -140,6 +140,63 @@ class ModelVersion(Base):
     dataset_info = Column(JSON, default=dict)
 
 
+# 修改 models.py 中的 User 模型，并新增组织和邀请模型
+class User(Base):
+    """用户表"""
+    __tablename__ = "users"
+    id = Column(String, primary_key=True)
+    username = Column(String, unique=True)
+    password_hash = Column(String, nullable=False)  # 新增
+    avatar_url = Column(String, nullable=True)  # 新增
+    is_active = Column(Boolean, default=True)  # 新增
+    role = Column(String, default="annotator")
+    created_at = Column(DateTime, default=datetime.utcnow)  # 新增
+    last_login_at = Column(DateTime, nullable=True)  # 新增
+
+    # 新增关联
+    organizations = relationship("UserOrganization", back_populates="user")
+
+
+# --- 以下为 models.py 需新增的模型 ---
+
+class Organization(Base):
+    """团队/组织表"""
+    __tablename__ = "organizations"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    nickname = Column(String, nullable=False)
+    org_type = Column(String, default="团队")  # 个人 或 团队
+    member_count = Column(Integer, default=1)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    members = relationship("UserOrganization", back_populates="organization")
+
+
+class UserOrganization(Base):
+    """用户与团队多对多关联表"""
+    __tablename__ = "user_organizations"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String, ForeignKey("users.id"))
+    organization_id = Column(String, ForeignKey("organizations.id"))
+    joined_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", back_populates="organizations")
+    organization = relationship("Organization", back_populates="members")
+
+
+class TeamInvitation(Base):
+    """团队邀请表"""
+    __tablename__ = "team_invitations"
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    token = Column(String, unique=True, nullable=False)
+    organization_id = Column(String, ForeignKey("organizations.id"))
+    inviter_id = Column(String, ForeignKey("users.id"))
+    accepted_by = Column(String, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)
+    accepted_at = Column(DateTime, nullable=True)
+
+    organization = relationship("Organization")
+    inviter = relationship("User", foreign_keys=[inviter_id])
 # 新增：训练任务队列表
 class TrainingJob(Base):
     """训练任务队列表"""

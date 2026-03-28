@@ -1,74 +1,75 @@
 <template>
   <div class="annotation-workspace">
     <aside class="toolbar-panel">
-      <section class="tool-section training-section">
-        <div class="section-header">
-          <h3 class="section-title">🚀 模型训练</h3>
-        </div>
-        <div class="section-content">
-          <div v-if="trainingStatus.dataset_ready" class="dataset-status ready">
-            ✅ 数据集就绪: {{ trainingStatus.dataset_stats?.train || 0 }} 张训练图
-          </div>
-          <div v-else class="dataset-status error">
-            ⚠️ {{ trainingStatus.dataset_message || '检查数据集...' }}
-          </div>
-
-          <div v-if="trainingStatus.cuda_available" class="gpu-info">
-            🎮 GPU: {{ trainingStatus.cuda_device }}
-          </div>
-          <div v-else class="gpu-info warning">⚠️ 使用CPU训练（较慢）</div>
-
-          <div class="form-group">
-            <label>训练轮数</label>
-            <input
-              type="number"
-              v-model="trainingConfig.epochs"
-              min="50"
-              max="300"
-              class="input-field"
-            />
-          </div>
-
-          <div class="form-group">
-            <label>模型大小</label>
-            <select v-model="trainingConfig.model_size" class="input-field">
-              <option value="auto">自动选择</option>
-              <option value="n">Nano (快)</option>
-              <option value="s">Small</option>
-              <option value="m">Medium</option>
-              <option value="l">Large (准)</option>
-              <option value="x">XLarge (最准)</option>
-            </select>
-          </div>
-
-          <button
-            @click="startTraining"
-            :disabled="!trainingStatus.dataset_ready || trainingLoading"
-            class="btn btn-primary"
-          >
-            {{ trainingLoading ? '训练中...' : '🚀 开始训练' }}
-          </button>
-
-          <div v-if="trainingMessage" :class="['message', trainingMessage.type]">
-            {{ trainingMessage.text }}
-          </div>
-
-          <div v-if="trainingStatus.local_models?.length" class="model-list">
-            <h4>可用模型</h4>
-            <div
-              v-for="model in trainingStatus.local_models"
-              :key="model.name"
-              :class="['model-item', { active: model.name === trainingStatus.current_model }]"
-              @click="switchModel(model)"
-            >
-              <span class="model-name">{{ model.name }}</span>
-              <span v-if="model.name === trainingStatus.current_model" class="current-badge">
-                当前
-              </span>
+     <section class="tool-section model-section" :class="{ collapsed: collapsedSections.model }">
+  <div class="section-header" @click="collapsedSections.model = !collapsedSections.model">
+    <div class="header-left">
+      <span class="section-icon">🤖</span>
+      <h3 class="section-title">AI 模型</h3>
+    </div>
+    <div class="header-right">
+      <span v-if="currentModel" class="current-model-badge">
+        {{ currentModel }}
+      </span>
+      <span class="collapse-btn">▼</span>
+    </div>
+  </div>
+  
+  <div class="section-content model-content">
+    <!-- 当前模型信息卡片 -->
+    <div v-if="currentModel" class="current-model-card">
+      <div class="model-status-indicator active"></div>
+      <div class="model-info">
+        <div class="model-name">{{ currentModel }}</div>
+        <div class="model-status">运行中</div>
+      </div>
+    </div>
+    
+    <!-- 模型列表 -->
+    <div class="model-list-container">
+      <div class="list-header">
+        <span class="list-title">可用模型</span>
+        <span class="model-count">{{ modelList.length }} 个</span>
+      </div>
+      
+      <div class="model-list">
+        <div
+          v-for="model in modelList"
+          :key="model.name"
+          :class="['model-item', { active: model.name === currentModel }]"
+          @click="switchModel(model)"
+        >
+          <div class="model-item-left">
+            <div class="model-icon">
+              {{ model.name.charAt(0).toUpperCase() }}
+            </div>
+            <div class="model-item-info">
+              <div class="model-item-name">{{ model.name }}</div>
+              <div v-if="model.description" class="model-item-desc">
+                {{ model.description }}
+              </div>
             </div>
           </div>
+          
+          <div class="model-item-right">
+            <span v-if="model.name === currentModel" class="active-badge">
+              <span class="check-icon">✓</span>
+              当前
+            </span>
+            <span v-else class="switch-hint">切换</span>
+          </div>
         </div>
-      </section>
+      </div>
+    </div>
+    
+    <!-- 空状态 -->
+    <div v-if="modelList.length === 0" class="empty-state">
+      <div class="empty-icon">📦</div>
+      <div class="empty-text">暂无可用模型</div>
+      <div class="empty-hint">请先训练或导入模型</div>
+    </div>
+  </div>
+</section>
 
       <section class="tool-section task-section">
         <div class="section-header">
@@ -665,6 +666,7 @@ const collapsedSections = reactive({
   stats: false,
   selected: false,
   zoom: false,
+  model: false,  // 添加模型折叠状态
 })
 
 const editingLabel = ref(null)
@@ -778,16 +780,32 @@ const fitToScreen = () => {
 }
 
 const actualSize = () => {
-  const oldScale = zoomScale.value
   const baseScale = baseContainerSize.value.scale
   zoomScale.value = 1 / baseScale
 
-  const base = baseContainerSize.value
-  const centerX = base.width / 2
-  const centerY = base.height / 2
-
-  stageX.value = centerX - (centerX - stageX.value) * (zoomScale.value / oldScale)
-  stageY.value = centerY - (centerY - stageY.value) * (zoomScale.value / oldScale)
+  // 获取画布容器尺寸（可视区域）
+  const container = canvasContainer.value
+  if (!container || !imageObj.value) return
+  
+  // 使用容器的实际尺寸（不是 baseContainerSize）
+  const containerWidth = container.clientWidth - 40  // 减去 padding
+  const containerHeight = container.clientHeight - 40
+  
+  // 图片原始尺寸
+  const imgWidth = imageObj.value.width
+  const imgHeight = imageObj.value.height
+  
+  // 计算画布中心
+  const canvasCenterX = containerWidth / 2
+  const canvasCenterY = containerHeight / 2
+  
+  // 计算 stageX/Y，使得图片居中
+  // 在基础坐标系中，图片宽度 = imgWidth * baseScale
+  // 要让图片中心对准画布中心：
+  // (stageX + imgWidth * baseScale / 2) * zoomScale = canvasCenterX
+  // stageX = canvasCenterX / zoomScale - imgWidth * baseScale / 2
+  stageX.value = canvasCenterX / zoomScale.value - (imgWidth * baseScale) / 2
+  stageY.value = canvasCenterY / zoomScale.value - (imgHeight * baseScale) / 2
 
   updateZoom()
 }
@@ -957,19 +975,12 @@ const executeSmartAnnotation = async () => {
     }
 
     if (data.annotations && data.annotations.length > 0) {
-      data.annotations.forEach((ann) => {
-        if (!labelColorMap.has(ann.label)) {
-          labelColorMap.set(ann.label, ann.color || '#ff0000')
-          saveLabelToBackend(ann.label, ann.color || '#ff0000')
-        } else {
-          ann.color = labelColorMap.get(ann.label)
-        }
-        ann.isNew = true
-      })
-      syncLabelsFromMap()
-
+      // ========== 使用新的统一处理方法 ==========
+      const processedNewAnnotations = await processAIAnnotations(data.annotations, 'smart-annotate')
+      
       const currentAnnotations = store.annotations || []
-      store.setAnnotations([...currentAnnotations, ...data.annotations])
+      store.setAnnotations([...currentAnnotations, ...processedNewAnnotations])
+      // ========== 结束修改 ==========
 
       const stats = data.stats || {}
       taskSuccess.value = `🤖 增量识别完成！新增 ${data.annotations.length} 个目标（AI检测到${
@@ -1375,6 +1386,115 @@ const getDrawingRectConfig = () => {
   }
 }
 
+
+// 防抖映射
+const pendingLabelSaves = new Map()
+
+const saveLabelToBackend = async (name, color) => {
+  const key = `${name}:${color}`
+  if (pendingLabelSaves.has(key)) {
+    return pendingLabelSaves.get(key)
+  }
+
+  const savePromise = (async () => {
+    try {
+      const response = await fetch('/api/labels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          color,
+          category: null,
+        }),
+      })
+
+      if (response.ok) {
+        console.log(`✅ 标签 ${name} (${color}) 已保存到后端`)
+        return { success: true }
+      }
+
+      const errorData = await response.json()
+      if (response.status === 409 || errorData.detail?.includes('已存在')) {
+        const updateRes = await fetch(`/api/labels/${encodeURIComponent(name)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ color }),
+        })
+
+        if (updateRes.ok) {
+          console.log(`✅ 标签 ${name} 颜色已更新为 ${color}`)
+          return { success: true }
+        }
+      }
+      
+      throw new Error(errorData.detail || '保存失败')
+    } catch (error) {
+      console.error('保存标签失败:', error)
+      throw error
+    } finally {
+      setTimeout(() => pendingLabelSaves.delete(key), 100)
+    }
+  })()
+
+  pendingLabelSaves.set(key, savePromise)
+  return savePromise
+}
+
+/** 统一处理 AI 识别出的新标签 */
+const processAIAnnotations = async (annotations, source = 'ai') => {
+  if (!annotations || annotations.length === 0) return []
+
+  const newLabelsToSave = []
+  const processedAnnotations = []
+
+  for (const ann of annotations) {
+    const labelName = ann.label
+    if (!labelName) continue
+
+    let labelColor = ann.color
+    if (!labelColor) {
+      labelColor = labelColorMap.get(labelName) || ensureLabelColor(labelName)
+    }
+
+    if (!labelColorMap.has(labelName)) {
+      labelColorMap.set(labelName, labelColor)
+      newLabelsToSave.push({ name: labelName, color: labelColor })
+      console.log(`🆕 发现新标签 [${source}]: ${labelName} -> ${labelColor}`)
+    } else if (labelColorMap.get(labelName) !== labelColor) {
+      labelColorMap.set(labelName, labelColor)
+      newLabelsToSave.push({ name: labelName, color: labelColor })
+      console.log(`🎨 更新标签颜色 [${source}]: ${labelName} -> ${labelColor}`)
+    }
+
+    processedAnnotations.push({
+      ...ann,
+      color: labelColor,
+      source: ann.source || source,
+      isNew: ann.isNew || source === 'ai'
+    })
+  }
+
+  if (newLabelsToSave.length > 0) {
+    console.log(`💾 批量保存 ${newLabelsToSave.length} 个标签到后端:`, newLabelsToSave)
+    syncLabelsFromMap()
+
+    const savePromises = newLabelsToSave.map(async (label) => {
+      try {
+        await saveLabelToBackend(label.name, label.color)
+        return { success: true, name: label.name }
+      } catch (e) {
+        console.error(`❌ 保存标签 ${label.name} 失败:`, e)
+        return { success: false, name: label.name, error: e }
+      }
+    })
+
+    const results = await Promise.allSettled(savePromises)
+    const successCount = results.filter(r => r.status === 'fulfilled' && r.value.success).length
+    console.log(`✅ 标签保存完成: ${successCount}/${newLabelsToSave.length} 成功`)
+  }
+
+  return processedAnnotations
+}
 const trainingStatus = ref({
   dataset_ready: false,
   dataset_stats: {},
@@ -1435,22 +1555,7 @@ const startTraining = async () => {
   }
 }
 
-const switchModel = async (model) => {
-  try {
-    const res = await fetch('/api/models/switch', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: model.path, name: model.name }),
-    })
-    const data = await res.json()
-    if (data.success) {
-      alert('模型已切换: ' + model.name)
-      checkTrainingStatus()
-    }
-  } catch (e) {
-    alert('切换失败: ' + e.message)
-  }
-}
+
 
 const getRectConfig = (ann) => {
   void dragTick.value
@@ -1659,44 +1764,12 @@ const handleFileUpload = async (event) => {
         })
       }, 100)
 
+      // ========== 使用新的统一处理方法 ==========
       if (data.annotations && data.annotations.length > 0) {
-        const newLabelsToSave = []
+        const processedAnnotations = await processAIAnnotations(data.annotations, 'upload-predict')
+        store.setAnnotations(processedAnnotations)
 
-        data.annotations.forEach((ann) => {
-          if (!ann.color) {
-            ann.color = labelColorMap.get(ann.label) || ensureLabelColor(ann.label)
-          }
-
-          if (!labelColorMap.has(ann.label)) {
-            labelColorMap.set(ann.label, ann.color)
-            newLabelsToSave.push({
-              name: ann.label,
-              color: ann.color,
-            })
-            console.log(`🆕 发现新标签: ${ann.label} -> ${ann.color}`)
-          } else {
-            const existingColor = labelColorMap.get(ann.label)
-            if (existingColor !== ann.color) {
-              console.log(`🎨 标签 ${ann.label} 颜色更新: ${existingColor} -> ${ann.color}`)
-              labelColorMap.set(ann.label, ann.color)
-              newLabelsToSave.push({ name: ann.label, color: ann.color })
-            }
-          }
-        })
-
-        if (newLabelsToSave.length > 0) {
-          console.log('💾 批量保存AI识别的新标签到后端:', newLabelsToSave)
-
-          for (const label of newLabelsToSave) {
-            try {
-              await saveLabelToBackend(label.name, label.color)
-            } catch (e) {
-              console.error(`❌ 保存标签 ${label.name} 失败:`, e)
-            }
-          }
-        }
-
-        const firstAnnotation = data.annotations[0]
+        const firstAnnotation = processedAnnotations[0]
         const firstLabel = firstAnnotation.label
 
         if (!labelColorMap.has(firstLabel)) {
@@ -1713,8 +1786,7 @@ const handleFileUpload = async (event) => {
 
         console.log('🎯 当前标签已自动切换为:', firstLabel, '颜色:', selectedColor.value)
       }
-
-      store.setAnnotations(data.annotations || [])
+      // ========== 结束修改 ==========
 
       const stats = data.stats || {}
       taskSuccess.value = `✅ 上传成功，检测到 ${
@@ -1736,41 +1808,7 @@ const handleFileUpload = async (event) => {
   }
 }
 
-const saveLabelToBackend = async (name, color) => {
-  try {
-    const response = await fetch('/api/labels', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name,
-        color,
-        category: null,
-      }),
-    })
 
-    if (response.ok) {
-      console.log(`✅ 标签 ${name} (${color}) 已保存到后端`)
-      return
-    }
-
-    const errorData = await response.json()
-    if (response.status === 409 || errorData.detail?.includes('已存在')) {
-      console.log(`📝 标签 ${name} 已存在，更新颜色为 ${color}`)
-
-      const updateRes = await fetch(`/api/labels/${encodeURIComponent(name)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ color }),
-      })
-
-      if (updateRes.ok) {
-        console.log(`✅ 标签 ${name} 颜色已更新为 ${color}`)
-      }
-    }
-  } catch (error) {
-    console.error('保存标签失败:', error)
-  }
-}
 
 const addLabel = async () => {
   if (!newLabel.value.trim()) {
@@ -2045,7 +2083,54 @@ const cancelLabelEdit = () => {
   editLabelName.value = ''
   editingOriginalColor.value = ''
 }
+// ============ 模型切换（简化版） ============
+const modelList = ref([])
+const currentModel = ref('')
 
+
+// 加载模型列表 - 使用现有的 training/status API
+const loadModelList = async () => {
+  try {
+    const res = await fetch('/api/training/status')
+    const data = await res.json()
+    console.log('训练状态 API 返回:', data)
+    
+    // 从 trainingStatus 中提取模型列表
+    if (data.local_models && Array.isArray(data.local_models)) {
+      modelList.value = data.local_models.map(model => ({
+        name: model.name,
+        path: model.path || model.name,  // 确保有 path 字段
+        ...model
+      }))
+      currentModel.value = data.current_model || ''
+      console.log(`✅ 加载了 ${modelList.value.length} 个模型`)
+    } else {
+      console.warn('API 返回的 local_models 为空或格式不正确:', data)
+      modelList.value = []
+    }
+  } catch (e) {
+    console.error('加载模型列表失败:', e)
+    modelList.value = []
+  }
+}
+
+// 切换模型
+const switchModel = async (model) => {
+  try {
+    const res = await fetch('/api/models/switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: model.path, name: model.name }),
+    })
+    const data = await res.json()
+    if (data.success) {
+      currentModel.value = model.name
+      alert('模型已切换: ' + model.name)
+    }
+  } catch (e) {
+    alert('切换失败: ' + e.message)
+  }
+}
 const removeLabel = async (labelName) => {
   const usedCount = store.annotations.filter((ann) => ann.label === labelName).length
 
@@ -2206,13 +2291,19 @@ const loadSavedLabels = async () => {
     const data = await response.json()
 
     if (data.labels && data.labels.length > 0) {
-      data.labels.forEach((label) => {
-        if (!labelColorMap.has(label.name)) {
-          const color = label.color || ensureLabelColor(label.name)
-          labelColorMap.set(label.name, color)
+      // 清空并重新加载，避免重复
+      labelColorMap.clear()
+      
+      for (const label of data.labels) {
+        const name = label.name || label.label_name
+        const color = label.color || label.label_color
+        if (name) {
+          labelColorMap.set(name, color || ensureLabelColor(name))
         }
-      })
+      }
+      
       syncLabelsFromMap()
+      console.log(`📋 从后端加载 ${labels.value.length} 个标签`)
     }
   } catch (error) {
     console.error('加载后端标签失败:', error)
@@ -2335,7 +2426,7 @@ onMounted(async () => {
   defaultLabels.forEach((label) => ensureLabelColor(label.name, label.color))
   await loadSavedLabels()
 
-  checkTrainingStatus()
+    await loadModelList()
 
   if (routeProjectId.value && routeTaskId.value) {
     console.log(`📥 加载项目任务: ${routeProjectId.value}, 任务ID: ${routeTaskId.value}`)
