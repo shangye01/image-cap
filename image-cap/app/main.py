@@ -14,6 +14,7 @@ import time
 import shutil
 import io
 import threading
+from collections import Counter
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
@@ -375,13 +376,129 @@ def _fuse_matched_annotations(matched_annotations: List[Dict[str, Any]]) -> Dict
     }
 
 
+def _cluster_annotations_globally(annotation_sets: List[List[Dict[str, Any]]],
+                                  iou_threshold: float = 0.5) -> List[Dict[str, Any]]:
+    """不依赖参考标注的全局聚类：按空间 IoU 将多标注结果聚成目标簇。"""
+    normalized_members: list[dict[str, Any]] = []
+    for annotator_idx, ann_list in enumerate(annotation_sets):
+        for ann in ann_list:
+            normalized_members.append({
+                "annotator_idx": annotator_idx,
+                "annotation": ann
+            })
+
+    clusters: list[dict[str, Any]] = []
+    for member in normalized_members:
+        ann = member["annotation"]
+        best_idx = -1
+        best_iou = 0.0
+        for idx, cluster in enumerate(clusters):
+            ious = [calculate_iou(ann, m["annotation"]) for m in cluster["members"]]
+            cluster_max_iou = max(ious) if ious else 0.0
+            if cluster_max_iou >= iou_threshold and cluster_max_iou > best_iou:
+                best_idx = idx
+                best_iou = cluster_max_iou
+        if best_idx >= 0:
+            clusters[best_idx]["members"].append(member)
+        else:
+            clusters.append({"members": [member]})
+    return clusters
+
+
+def _summarize_cluster(cluster: Dict[str, Any], total_annotators: int) -> Dict[str, Any]:
+    members = cluster.get("members", [])
+    labels = [m["annotation"].get("label", "object") for m in members]
+    label_counter = Counter(labels)
+    dominant_label, dominant_count = label_counter.most_common(1)[0]
+    label_vote_ratio = round(dominant_count / max(1, len(members)), 3)
+
+    x_values = [m["annotation"].get("x", 0) for m in members]
+    y_values = [m["annotation"].get("y", 0) for m in members]
+    w_values = [m["annotation"].get("width", 0) for m in members]
+    h_values = [m["annotation"].get("height", 0) for m in members]
+    center_box = {
+        "x": round(sum(x_values) / max(1, len(x_values)), 2),
+        "y": round(sum(y_values) / max(1, len(y_values)), 2),
+        "width": round(sum(w_values) / max(1, len(w_values)), 2),
+        "height": round(sum(h_values) / max(1, len(h_values)), 2),
+    }
+
+    pairwise_ious: list[float] = []
+    for i in range(len(members)):
+        for j in range(i + 1, len(members)):
+            pairwise_ious.append(calculate_iou(members[i]["annotation"], members[j]["annotation"]))
+    max_iou = round(max(pairwise_ious), 3) if pairwise_ious else 1.0
+    min_iou = round(min(pairwise_ious), 3) if pairwise_ious else 1.0
+    mean_iou = round(sum(pairwise_ious) / len(pairwise_ious), 3) if pairwise_ious else 1.0
+
+    annotator_indexes = [m["annotator_idx"] for m in members]
+    annotator_counter = Counter(annotator_indexes)
+    annotator_set = sorted({idx for idx in annotator_indexes})
+    full_participation = len(annotator_set) == total_annotators
+    two_vs_one_pattern = full_participation and dominant_count == 2
+    oversegmented = any(count > 1 for count in annotator_counter.values())
+
+    return {
+        "members": members,
+        "member_count": len(members),
+        "annotators": annotator_set,
+        "annotator_count": len(annotator_set),
+        "annotator_counter": {str(k): v for k, v in annotator_counter.items()},
+        "labels": dict(label_counter),
+        "dominant_label": dominant_label,
+        "label_vote_ratio": label_vote_ratio,
+        "center_box": center_box,
+        "box_deviations": [
+            {
+                "annotation_id": m["annotation"].get("id"),
+                "annotator_idx": m["annotator_idx"],
+                "dx": round(abs(m["annotation"].get("x", 0) - center_box["x"]), 2),
+                "dy": round(abs(m["annotation"].get("y", 0) - center_box["y"]), 2),
+                "dw": round(abs(m["annotation"].get("width", 0) - center_box["width"]), 2),
+                "dh": round(abs(m["annotation"].get("height", 0) - center_box["height"]), 2),
+            }
+            for m in members
+        ],
+        "iou_stats": {
+            "max_iou": max_iou,
+            "min_iou": min_iou,
+            "mean_iou": mean_iou
+        },
+        "full_participation": full_participation,
+        "two_vs_one_pattern": two_vs_one_pattern,
+        "oversegmented": oversegmented,
+    }
+
+
+def _classify_cluster_difference(cluster_summary: Dict[str, Any]) -> Tuple[str | None, str | None]:
+    """差异分级：类别冲突 / 边框轻微偏移 / 漏标 / 重标过分割。"""
+    full_participation = cluster_summary["full_participation"]
+    label_count = len(cluster_summary["labels"])
+    mean_iou = cluster_summary["iou_stats"]["mean_iou"]
+    min_iou = cluster_summary["iou_stats"]["min_iou"]
+
+    if cluster_summary["oversegmented"]:
+        return "over_segmentation", "建议合并框或删除冗余框"
+
+    if not full_participation:
+        return "missing_annotation", "建议确认是否保留该目标"
+
+    if label_count > 1 and mean_iou >= 0.45:
+        return "label_conflict", "建议单选裁决目标类别"
+
+    if label_count == 1 and 0.35 <= mean_iou < 0.75 and min_iou >= 0.2:
+        return "bbox_minor_offset", "建议一键采用均值框或指定标注员框"
+
+    return None, None
+
+
 def _collaborative_auto_integrate(task: Dict[str, Any]) -> Dict[str, Any]:
     """
     协作标注自动整合：
     1) 汇总同图像的三份标注
-    2) 基于 IOU 一对一匹配对齐目标
-    3) 判断类别/位置/数量一致性
-    4) 一致则自动融合并生成最终结果；否则触发审核并返回差异高亮数据
+    2) 基于全局 IoU 聚类对齐目标（不依赖参考标注）
+    3) 按差异类型分级并生成审核建议
+    4) 输出三段式整合判定：自动通过 / 半自动通过 / 人工全审
     """
     image_storage_path = task.get("image_storage_path")
     project_id = task.get("project_id")
@@ -420,115 +537,159 @@ def _collaborative_auto_integrate(task: Dict[str, Any]) -> Dict[str, Any]:
         return {"ready": False, "reason": "存在空标注结果，无法自动整合"}
 
     count_values = [len(anns) for anns in annotation_sets]
-    count_consistent = max(count_values) - min(count_values) <= 1
+    count_spread = max(count_values) - min(count_values)
+    count_consistent = count_spread <= 1
+    global_quantity_anomaly = count_spread >= 2
 
-    reference_annotations = annotation_sets[0]
-    pair_match_details = []
-    diffs = []
-    consistent_groups: list[list[dict[str, Any]]] = []
-    unmatched_reference_indexes = set(range(len(reference_annotations)))
-    overall_consistent = count_consistent
+    raw_clusters = _cluster_annotations_globally(annotation_sets, iou_threshold=0.5)
+    cluster_summaries = [_summarize_cluster(cluster, total_annotators=3) for cluster in raw_clusters]
+    cluster_summaries.sort(key=lambda item: item["member_count"], reverse=True)
 
-    for set_index in range(1, len(annotation_sets)):
-        matches = _build_iou_matches(reference_annotations, annotation_sets[set_index], iou_threshold=0.55)
-        pair_match_details.append({
-            "against_task_id": source_task_ids[set_index],
-            "matched_count": len(matches),
-            "reference_count": len(reference_annotations),
-            "other_count": len(annotation_sets[set_index]),
-            "mean_iou": round(sum(m[2] for m in matches) / len(matches), 3) if matches else 0.0
-        })
-
-        matched_reference = set()
-        for ref_idx, other_idx, iou in matches:
-            matched_reference.add(ref_idx)
-            unmatched_reference_indexes.discard(ref_idx)
-            ref_ann = reference_annotations[ref_idx]
-            other_ann = annotation_sets[set_index][other_idx]
-            label_same = ref_ann["label"] == other_ann["label"]
-            if not label_same or iou < 0.6:
-                overall_consistent = False
-                diffs.append({
-                    "type": "box_or_label_mismatch",
-                    "reference_id": ref_ann["id"],
-                    "other_id": other_ann["id"],
-                    "reference_label": ref_ann["label"],
-                    "other_label": other_ann["label"],
-                    "iou": round(iou, 3)
-                })
-
-        # 匹配覆盖不足视为数量/位置不一致
-        if len(matches) < max(1, len(reference_annotations) - 1):
-            overall_consistent = False
-
-        for ref_idx in range(len(reference_annotations)):
-            if ref_idx not in matched_reference:
-                diffs.append({
-                    "type": "missing_target",
-                    "reference_id": reference_annotations[ref_idx]["id"],
-                    "reference_label": reference_annotations[ref_idx]["label"],
-                    "against_task_id": source_task_ids[set_index]
-                })
-
-    # 根据三份标注构建一致目标组
-    for ref_idx, ref_ann in enumerate(reference_annotations):
-        group = [ref_ann]
-        group_valid = True
-        for set_index in range(1, len(annotation_sets)):
-            local_matches = _build_iou_matches([ref_ann], annotation_sets[set_index], iou_threshold=0.55)
-            if not local_matches:
-                group_valid = False
-                break
-            _, other_idx, iou = local_matches[0]
-            candidate = annotation_sets[set_index][other_idx]
-            if candidate["label"] != ref_ann["label"] or iou < 0.6:
-                group_valid = False
-                break
-            group.append(candidate)
-        if group_valid and len(group) == 3:
-            consistent_groups.append(group)
-
-    auto_integrated = False
-    review_triggered = False
-    review_rules = []
+    review_items: list[dict[str, Any]] = []
     fused_annotations: list[dict[str, Any]] = []
+    auto_pass_clusters = 0
 
-    consistency_ratio = round(len(consistent_groups) / max(1, len(reference_annotations)), 3)
-    if consistency_ratio < 0.8:
-        overall_consistent = False
-        review_rules.append("一致目标比例低于 0.8")
+    for idx, summary in enumerate(cluster_summaries):
+        diff_type, recommendation = _classify_cluster_difference(summary)
+        has_full_participation = summary["full_participation"]
+        is_high_consensus = (
+                has_full_participation
+                and len(summary["labels"]) == 1
+                and summary["iou_stats"]["mean_iou"] >= 0.75
+                and summary["iou_stats"]["min_iou"] >= 0.55
+                and not summary["oversegmented"]
+        )
 
-    if not count_consistent:
-        review_rules.append("三份标注数量差异较大")
+        if is_high_consensus:
+            auto_pass_clusters += 1
+            matched_annotations = [member["annotation"] for member in summary["members"]]
+            fused_annotations.append(_fuse_matched_annotations(matched_annotations))
+            continue
 
-    if diffs:
-        review_rules.append("存在类别/位置差异高亮项")
+            # 半自动可直接融合：2 人一致 + 空间接近，保留冲突供审核
+        is_semi_auto_mergeable = (
+                summary["label_vote_ratio"] >= 0.67
+                and summary["iou_stats"]["mean_iou"] >= 0.5
+                and not summary["oversegmented"]
+        )
+        if is_semi_auto_mergeable:
+            dominant_label = summary["dominant_label"]
+            dominant_members = [
+                member["annotation"] for member in summary["members"]
+                if member["annotation"].get("label") == dominant_label
+            ]
+            if dominant_members:
+                fused_annotations.append(_fuse_matched_annotations(dominant_members))
 
-    # 审核触发规则：存在差异，或匹配平均 IOU 低于阈值
-    mean_pair_iou = 0.0
-    if pair_match_details:
-        mean_pair_iou = sum(item["mean_iou"] for item in pair_match_details) / len(pair_match_details)
-    if mean_pair_iou < 0.65:
-        review_rules.append("跨标注员平均 IOU 低于 0.65")
+        if diff_type:
+            overlay_member_boxes = [
+                {
+                    "annotator_index": member["annotator_idx"],
+                    "annotation_id": member["annotation"].get("id"),
+                    "label": member["annotation"].get("label"),
+                    "x": member["annotation"].get("x"),
+                    "y": member["annotation"].get("y"),
+                    "width": member["annotation"].get("width"),
+                    "height": member["annotation"].get("height"),
+                    "confidence": member["annotation"].get("confidence", 1.0),
+                    "color": member["annotation"].get("color", DEFAULT_COLOR),
+                }
+                for member in summary["members"]
+            ]
+            review_items.append({
+                "cluster_index": idx,
+                "difference_type": diff_type,
+                "recommended_action": recommendation,
+                "quick_actions": [
+                    {"action": "adopt_annotator", "annotator_index": 0},
+                    {"action": "adopt_annotator", "annotator_index": 1},
+                    {"action": "adopt_annotator", "annotator_index": 2},
+                    {"action": "adopt_fused"},
+                ],
+                "overlay": {
+                    "member_boxes": overlay_member_boxes,
+                    "fused_preview": _fuse_matched_annotations(
+                        [member["annotation"] for member in summary["members"]]
+                    ),
+                },
+                "cluster_snapshot": {
+                    "member_count": summary["member_count"],
+                    "annotators": summary["annotators"],
+                    "label_votes": summary["labels"],
+                    "label_vote_ratio": summary["label_vote_ratio"],
+                    "center_box": summary["center_box"],
+                    "iou_stats": summary["iou_stats"],
+                    "oversegmented": summary["oversegmented"],
+                    "two_vs_one_pattern": summary["two_vs_one_pattern"],
+                    "annotator_counter": summary["annotator_counter"],
+                    "box_deviations": summary["box_deviations"],
+                }
+            })
 
-    if overall_consistent and not review_rules:
-        for group in consistent_groups:
-            fused_annotations.append(_fuse_matched_annotations(group))
-        # NMS 融合去重
-        fused_annotations = remove_duplicate_annotations(fused_annotations, iou_threshold=0.7)
-        auto_integrated = True
+    fused_annotations = remove_duplicate_annotations(fused_annotations, iou_threshold=0.7)
+
+    semi_auto_conflict_count = len(review_items)
+    total_clusters = len(cluster_summaries)
+    review_rules: list[str] = []
+    if global_quantity_anomaly:
+        review_rules.append("全局数量异常：三份标注目标数差距较大")
+    if semi_auto_conflict_count:
+        review_rules.append("存在需人工处理的差异簇")
+
+    if auto_pass_clusters == total_clusters and not global_quantity_anomaly:
+        integration_decision = "auto_pass"
+    elif not global_quantity_anomaly and semi_auto_conflict_count <= max(2, total_clusters // 2):
+        integration_decision = "semi_auto_pass"
     else:
-        review_triggered = True
+        integration_decision = "manual_full_review"
+
+        review_triggered = integration_decision != "auto_pass"
+        auto_integrated = integration_decision == "auto_pass"
+        consistency_ratio = round(auto_pass_clusters / max(1, total_clusters), 3)
 
     return {
         "ready": True,
         "source_task_ids": source_task_ids,
         "count_consistent": count_consistent,
+        "count_spread": count_spread,
+        "global_quantity_anomaly": global_quantity_anomaly,
         "consistency_ratio": consistency_ratio,
-        "pair_match_details": pair_match_details,
-        "diff_highlights": diffs,
+        "align_method": "global_iou_clustering",
+        "integration_decision": integration_decision,
+        "integration_decision_text": {
+            "auto_pass": "自动通过",
+            "semi_auto_pass": "半自动通过",
+            "manual_full_review": "人工全审"
+        }.get(integration_decision, "人工全审"),
+        "cluster_details": [
+            {
+                "member_count": summary["member_count"],
+                "annotators": summary["annotators"],
+                "labels": summary["labels"],
+                "label_vote_ratio": summary["label_vote_ratio"],
+                "center_box": summary["center_box"],
+                "iou_stats": summary["iou_stats"],
+                "full_participation": summary["full_participation"],
+                "two_vs_one_pattern": summary["two_vs_one_pattern"],
+                "oversegmented": summary["oversegmented"],
+                "annotator_counter": summary["annotator_counter"],
+                "box_deviations": summary["box_deviations"],
+            }
+            for summary in cluster_summaries
+        ],
+        "diff_highlights": review_items,
         "review_triggered": review_triggered,
         "review_rules": review_rules,
+        "review_queue": [item["cluster_index"] for item in review_items],
+        "review_workbench": {
+            "conflict_only_mode_default": True,
+            "batch_actions": [
+                {"action": "adopt_all_from_annotator", "annotator_index": 0},
+                {"action": "adopt_all_from_annotator", "annotator_index": 1},
+                {"action": "adopt_all_from_annotator", "annotator_index": 2},
+                {"action": "adopt_fused_as_default"},
+            ],
+        },
         "auto_integrated": auto_integrated,
         "fused_annotations": fused_annotations,
     }
@@ -1014,6 +1175,14 @@ async def get_file_task(
         "keywords": task.get("keywords", []),
         "annotations": annotations
     }
+
+    # 协作标注任务补充整合与审核工作台数据（供前端“裁决工作台”展示）
+    try:
+        integration = _collaborative_auto_integrate(task)
+        if integration.get("ready"):
+            task_obj["collaboration_integration"] = integration
+    except Exception as integration_error:
+        logger.warning(f"【FILE-TASK】协作整合计算失败 | task_id={task.get('id')} | err={integration_error}")
 
     return {"task": task_obj}
 
