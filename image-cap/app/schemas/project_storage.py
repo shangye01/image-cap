@@ -2,14 +2,17 @@ from __future__ import annotations
 
 from datetime import datetime
 from uuid import UUID
+
 from pydantic import BaseModel, Field
 from typing import List, Optional
-
 
 class AnnotationSessionCreate(BaseModel):
     file_ids: List[str]
     use_keywords: bool
-    keywords: Optional[List[str]] = []
+    keywords: List[str] = []
+    confidence_threshold: Optional[float] = Field(default=0.25, ge=0.0, le=1.0, description="置信度阈值，范围 0-1")
+
+
 
 
 class AnnotationSessionTask(BaseModel):

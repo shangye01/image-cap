@@ -102,7 +102,7 @@ export const acceptSharedProject = (projectId: string) =>
 // ✅ 路径已更改为 /sessions，与后端严格对齐
 export const createAnnotationSession = (
   projectId: string,
-  payload: { file_ids: string[]; use_keywords: boolean; keywords: string[] }
+  payload: { file_ids: string[]; use_keywords: boolean; keywords: string[]; confidence_threshold?: number }
 ) => request.post<AnnotationSessionResponse>(
   `/projects/${projectId}/sessions`, 
   payload,

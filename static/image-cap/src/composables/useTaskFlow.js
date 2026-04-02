@@ -53,35 +53,98 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
     }
   }
 
-  // 加载下一个任务
-  const loadNextTask = async () => {
+  // 加载下一个任务 - 从项目未标注完成任务中获取
+  const loadNextTask = async (projectId = null) => {
     if (taskLoading.value) return
 
     taskLoading.value = true
     taskError.value = ''
 
     try {
-      const { data, error } = await supabase
-        .from('tasks')
-        .select('*')
-        .eq('status', 'pending')
-        .limit(1)
-        .single()
+      // 优先使用传入的 projectId，其次使用当前任务的 projectId
+      const targetProjectId = projectId || store.currentProjectId
+      
+      if (!targetProjectId) {
+        // 如果没有项目ID，回退到原来的全局 pending 任务获取方式
+        const { data, error } = await supabase
+          .from('tasks')
+          .select('*')
+          .eq('status', 'pending')
+          .limit(1)
+          .single()
 
-      if (error || !data) {
-        throw new Error('没有可用的任务')
+        if (error || !data) {
+          throw new Error('没有可用的任务')
+        }
+
+        await loadTaskImage(data)
+        await loadAnnotations(data.id)
+
+        taskSuccess.value = `任务 ${data.id} 加载成功`
+        setTimeout(() => {
+          taskSuccess.value = ''
+        }, 2500)
+        return
       }
 
-      await loadTaskImage(data)
-      await loadAnnotations(data.id)
+      // 有项目ID时，从项目的 labeling 文件夹获取任务
+      console.log(`🔄 从项目 ${targetProjectId} 获取未标注完成任务...`)
+      
+      const response = await request.get(`/projects/${targetProjectId}/folder-tasks`, {
+        params: {
+          status: 'labeling'  // 获取标注中（未标注完成）的任务
+        }
+      })
 
-      taskSuccess.value = `任务 ${data.id} 加载成功`
+      if (!response.tasks || response.tasks.length === 0) {
+        throw new Error('该项目暂无未标注完成的任务')
+      }
+
+      // 获取第一个未标注完成的任务
+      const nextTask = response.tasks[0]
+      console.log(`✅ 获取到新任务: ${nextTask.task_id}`)
+
+      // 加载任务图片
+      await loadTaskImage({
+        task_id: nextTask.task_id,
+        file_id: nextTask.file_id,
+        image_url: nextTask.image_url,
+        storage_path: nextTask.storage_path,
+        project_id: targetProjectId,
+        project_name: nextTask.project_name,
+        use_keywords: nextTask.use_keywords,
+        keywords: nextTask.keywords,
+        status: nextTask.status
+      })
+
+      // 加载已有标注（草稿或已提交）
+      if (nextTask.annotations && nextTask.annotations.length > 0) {
+        nextTask.annotations.forEach((ann) => {
+          if (ann.color && ann.label && !labelColorMap.has(ann.label)) {
+            labelColorMap.set(ann.label, ann.color)
+          }
+        })
+        store.setAnnotations(nextTask.annotations)
+      } else {
+        store.setAnnotations([])
+      }
+
+      // 更新URL参数（可选）
+      if (typeof window !== 'undefined') {
+        const url = new URL(window.location.href)
+        url.searchParams.set('task', nextTask.task_id)
+        url.searchParams.set('projectId', targetProjectId)
+        window.history.replaceState({}, '', url.toString())
+      }
+
+      taskSuccess.value = `任务 ${nextTask.task_id} 加载成功 (${response.tasks.length} 个待标注)`
       setTimeout(() => {
         taskSuccess.value = ''
-      }, 2500)
+      }, 3000)
+
     } catch (e) {
-      taskError.value = '没有可用任务'
-      console.error(e)
+      taskError.value = e.message || '获取新任务失败'
+      console.error('获取新任务失败:', e)
     } finally {
       taskLoading.value = false
     }
