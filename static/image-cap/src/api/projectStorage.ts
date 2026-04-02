@@ -112,6 +112,8 @@ export const shareProject = (
 
 export const acceptSharedProject = (projectId: string) =>
   request.post<{ message: string; accepted_at?: string | null }>(`/projects/${projectId}/accept-share`)
+export const rejectSharedProject = (projectId: string) =>
+  request.post<{ message: string }>(`/projects/${projectId}/reject-share`)
 
 // ✅ 路径已更改为 /sessions，与后端严格对齐
 export const createAnnotationSession = (

@@ -356,6 +356,28 @@ def accept_shared_project(
     return {"message": "已确认接收分享项目", "accepted_at": project.share_accepted_at}
 
 
+@router.post("/{project_id}/reject-share")
+def reject_shared_project(
+    project_id: uuid.UUID,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    user = _require_current_user(db, authorization)
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    if not project.is_shared_copy:
+        raise HTTPException(status_code=400, detail="当前项目不是分享副本")
+    if project.owner_id != user.username:
+        raise HTTPException(status_code=403, detail="仅项目接收者可以拒绝分享")
+    if project.share_accepted_at:
+        raise HTTPException(status_code=400, detail="项目已接收，不能拒绝")
+
+    db.delete(project)
+    db.commit()
+    return {"message": "已拒绝该分享项目"}
+
+
 @router.post("/{project_id}/files", response_model=FileOut)
 def upload_project_file(
     project_id: uuid.UUID,

@@ -179,6 +179,28 @@
           <div v-if="currentProject.remark" class="project-detail-remark">
             {{ currentProject.remark }}
           </div>
+
+          <div v-if="showPendingShareActions" class="project-share-pending-actions">
+            <div class="project-share-pending-tip">你正在预览该分享项目，可选择接收或拒绝。</div>
+            <div class="project-share-pending-btns">
+              <button
+                type="button"
+                class="share-decision-btn accept"
+                :disabled="shareDecisionLoading"
+                @click="handleAcceptCurrentSharedProject"
+              >
+                {{ shareDecisionLoading ? '处理中...' : '接收项目' }}
+              </button>
+              <button
+                type="button"
+                class="share-decision-btn reject"
+                :disabled="shareDecisionLoading"
+                @click="handleRejectCurrentSharedProject"
+              >
+                {{ shareDecisionLoading ? '处理中...' : '拒绝项目' }}
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -924,6 +946,7 @@ import {
   getProjectFileDownloadUrl,
   deleteProjectApi,
   acceptSharedProject,
+  rejectSharedProject,
   createAnnotationSession,
   getFolderTasks,
   getTaskByFileId,
@@ -963,6 +986,7 @@ const workForm = reactive({
 const selectedFileIds = ref([])
 
 const deletingProjectId = ref(null)
+const shareDecisionLoading = ref(false)
 
 const userStore = useUserStore()
 const router = useRouter()
@@ -1444,6 +1468,9 @@ const generateVOCXml = (filename, width, height, annotations) => {
 const currentProject = computed(
   () => projectList.value.find((item) => item.id === currentProjectId.value) || null
 )
+const showPendingShareActions = computed(() =>
+  Boolean(currentProject.value?.isSharedCopy && !currentProject.value?.shareAcceptedAt)
+)
 const currentUserId = computed(() => userStore.user?.id || '')
 
 const currentFolder = computed(() => {
@@ -1842,21 +1869,40 @@ const handleCreateProject = async (projectData) => {
   }
 }
 
-const enterProject = async (project) => {
+const enterProject = (project) => {
   closeProjectMenu()
-  if (project.isSharedCopy && !project.shareAcceptedAt) {
-    try {
-      const resp = await acceptSharedProject(project.id)
-      project.shareAcceptedAt = resp?.accepted_at
-        ? new Date(resp.accepted_at).getTime()
-        : Date.now()
-    } catch (error) {
-      window.alert(error?.response?.data?.detail || error?.message || '接收分享项目失败')
-      return
-    }
-  }
   currentProjectId.value = project.id
   currentFolderId.value = null
+}
+
+const handleAcceptCurrentSharedProject = async () => {
+  if (!currentProject.value || !showPendingShareActions.value) return
+  shareDecisionLoading.value = true
+  try {
+    const resp = await acceptSharedProject(currentProject.value.id)
+    currentProject.value.shareAcceptedAt = resp?.accepted_at
+      ? new Date(resp.accepted_at).getTime()
+      : Date.now()
+  } catch (error) {
+    window.alert(error?.response?.data?.detail || error?.message || '接收分享项目失败')
+  } finally {
+    shareDecisionLoading.value = false
+  }
+}
+
+const handleRejectCurrentSharedProject = async () => {
+  if (!currentProject.value || !showPendingShareActions.value) return
+  shareDecisionLoading.value = true
+  try {
+    await rejectSharedProject(currentProject.value.id)
+    const rejectedProjectId = currentProject.value.id
+    projectList.value = projectList.value.filter((item) => item.id !== rejectedProjectId)
+    backToProjectList()
+  } catch (error) {
+    window.alert(error?.response?.data?.detail || error?.message || '拒绝分享项目失败')
+  } finally {
+    shareDecisionLoading.value = false
+  }
 }
 
 const backToProjectList = () => {
@@ -3636,6 +3682,50 @@ onBeforeUnmount(() => {
   color: #6b7280;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.project-share-pending-actions {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #fde68a;
+  border-radius: 12px;
+  background: #fffbeb;
+}
+
+.project-share-pending-tip {
+  font-size: 13px;
+  color: #92400e;
+}
+
+.project-share-pending-btns {
+  margin-top: 10px;
+  display: flex;
+  gap: 10px;
+}
+
+.share-decision-btn {
+  border: none;
+  border-radius: 10px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.share-decision-btn.accept {
+  background: #0ea5e9;
+  color: #fff;
+}
+
+.share-decision-btn.reject {
+  background: #fff;
+  color: #b45309;
+  border: 1px solid #f59e0b;
+}
+
+.share-decision-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
 }
 
 .image-grid {
