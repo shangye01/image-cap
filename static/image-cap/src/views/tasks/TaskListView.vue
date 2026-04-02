@@ -6,7 +6,7 @@
       <h1>📋 任务数据中心</h1>
       <p class="subtitle">实时监控标注任务进度与效率分析</p>
     </div>
-    
+
     <!-- 顶部统计卡片 -->
     <div class="stats-row">
       <div class="stat-card total">
@@ -19,7 +19,7 @@
           {{ trends.total >= 0 ? '↑' : '↓' }} {{ Math.abs(trends.total) }}%
         </div>
       </div>
-      
+
       <div class="stat-card pending">
         <div class="stat-icon">⏳</div>
         <div class="stat-content">
@@ -27,10 +27,13 @@
           <span class="stat-label">待标注</span>
         </div>
         <div class="stat-progress">
-          <div class="progress-bar" :style="{ width: (pendingTasks / totalTasks * 100) + '%' }"></div>
+          <div
+            class="progress-bar"
+            :style="{ width: (totalTasks ? (pendingTasks / totalTasks) * 100 : 0) + '%' }"
+          ></div>
         </div>
       </div>
-      
+
       <div class="stat-card annotating">
         <div class="stat-icon">✏️</div>
         <div class="stat-content">
@@ -38,7 +41,7 @@
           <span class="stat-label">标注中</span>
         </div>
       </div>
-      
+
       <div class="stat-card completed">
         <div class="stat-icon">✅</div>
         <div class="stat-content">
@@ -49,7 +52,7 @@
           {{ trends.completed >= 0 ? '↑' : '↓' }} {{ Math.abs(trends.completed) }}%
         </div>
       </div>
-      
+
       <div class="stat-card efficiency">
         <div class="stat-icon">🚀</div>
         <div class="stat-content">
@@ -58,8 +61,15 @@
         </div>
         <div class="efficiency-ring" :style="{ '--progress': efficiency + '%' }">
           <svg viewBox="0 0 36 36">
-            <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
-            <path class="circle" :stroke-dasharray="efficiency + ', 100'" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+            <path
+              class="circle-bg"
+              d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+            />
+            <path
+              class="circle"
+              :stroke-dasharray="efficiency + ', 100'"
+              d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+            />
           </svg>
         </div>
       </div>
@@ -72,8 +82,8 @@
         <div class="chart-header">
           <h3>📈 任务趋势分析</h3>
           <div class="chart-actions">
-            <button 
-              v-for="period in ['week', 'month', 'year']" 
+            <button
+              v-for="period in ['week', 'month', 'year']"
               :key="period"
               :class="['period-btn', { active: trendPeriod === period }]"
               @click="changeTrendPeriod(period)"
@@ -126,17 +136,17 @@
         <div class="spinner"></div>
         加载中...
       </div>
-      
+
       <div v-else-if="Object.keys(groupedTasks).length === 0" class="empty-state">
         <div class="empty-icon">📭</div>
         <p>暂无任务数据</p>
         <button class="btn-primary" @click="loadTasks">刷新数据</button>
       </div>
-      
+
       <div v-else class="projects-list">
-        <div 
-          v-for="(tasks, project) in groupedTasks" 
-          :key="project" 
+        <div
+          v-for="(tasks, project) in groupedTasks"
+          :key="project"
           class="project-card"
           :class="{ expanded: expandedProjects[project] }"
         >
@@ -150,8 +160,8 @@
             </div>
             <div class="project-stats">
               <div class="mini-bar">
-                <div 
-                  v-for="status in ['completed', 'annotating', 'pending']" 
+                <div
+                  v-for="status in ['completed', 'annotating', 'pending']"
                   :key="status"
                   class="bar-segment"
                   :class="status"
@@ -162,11 +172,11 @@
               <span class="toggle-icon">{{ expandedProjects[project] ? '▼' : '▶' }}</span>
             </div>
           </div>
-          
+
           <transition name="expand">
             <div v-show="expandedProjects[project]" class="task-list">
-              <div 
-                v-for="task in tasks" 
+              <div
+                v-for="task in tasks"
                 :key="task.id"
                 :class="['task-item', task.status]"
                 @click="openTask(task.id)"
@@ -198,16 +208,18 @@ import { useRouter } from 'vue-router'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { LineChart, PieChart, BarChart, RadarChart, HeatmapChart } from 'echarts/charts'
-import { 
-  GridComponent, 
-  TooltipComponent, 
-  LegendComponent, 
+import {
+  GridComponent,
+  TooltipComponent,
+  LegendComponent,
   TitleComponent,
   VisualMapComponent,
   CalendarComponent,
-  RadarComponent
+  RadarComponent,
 } from 'echarts/components'
 import VChart from 'vue-echarts'
+import { useUserStore } from '@/stores/user'
+import { getTaskCenterOverview } from '@/api/projectStorage'
 
 // 注册 ECharts 组件
 use([
@@ -223,11 +235,11 @@ use([
   TitleComponent,
   VisualMapComponent,
   CalendarComponent,
-  RadarComponent
+  RadarComponent,
 ])
 
 const router = useRouter()
-const API_BASE = 'http://localhost:8000/api'
+const userStore = useUserStore()
 
 // 数据状态
 const tasks = ref([])
@@ -235,17 +247,83 @@ const loading = ref(false)
 const expandedProjects = ref({})
 const trendPeriod = ref('week')
 
-// 模拟趋势数据（实际应从API获取）
-const trends = ref({
-  total: 12.5,
-  completed: 8.3
+const DAY_MS = 24 * 60 * 60 * 1000
+
+const normalizeStatus = (status) => {
+  if (status === 'labeling' || status === 'annotating') return 'annotating'
+  if (status === 'done' || status === 'completed') return 'completed'
+  if (status === 'reviewed') return 'reviewed'
+  return 'pending'
+}
+
+const toTime = (value) => {
+  if (!value) return null
+  const ts = new Date(value).getTime()
+  return Number.isFinite(ts) ? ts : null
+}
+
+const calcTrendPercent = (current, previous) => {
+  if (previous <= 0) return current > 0 ? 100 : 0
+  return Number((((current - previous) / previous) * 100).toFixed(1))
+}
+
+const buildPerformanceMetrics = (taskList) => {
+  const total = taskList.length || 1
+  const reviewedCount = taskList.filter((t) => t.status === 'reviewed').length
+  const completedOrReviewed = taskList.filter((t) =>
+    ['completed', 'reviewed'].includes(t.status)
+  ).length
+  const activeDays = new Set(
+    taskList.map((t) => (t.created_at || '').split('T')[0]).filter(Boolean)
+  ).size
+  const projectCount = new Set(taskList.map((t) => t.project_name).filter(Boolean)).size || 1
+  const avgAnnotations = taskList.reduce((sum, t) => sum + (t.annotations_count || 0), 0) / total
+
+  return [
+    Math.min(100, Math.round((completedOrReviewed / total) * 100)),
+    Math.min(100, Math.round((reviewedCount / Math.max(completedOrReviewed, 1)) * 100)),
+    Math.min(100, Math.round((activeDays / 30) * 100)),
+    Math.min(100, Math.round((projectCount / 8) * 100)),
+    Math.min(100, Math.round(Math.min(avgAnnotations * 2, 100))),
+  ]
+}
+
+const trends = computed(() => {
+  const now = Date.now()
+  const totalCurrent = tasks.value.filter((task) => {
+    const ts = toTime(task.created_at)
+    return ts && ts >= now - 30 * DAY_MS
+  }).length
+  const totalPrevious = tasks.value.filter((task) => {
+    const ts = toTime(task.created_at)
+    return ts && ts >= now - 60 * DAY_MS && ts < now - 30 * DAY_MS
+  }).length
+
+  const completedCurrent = tasks.value.filter((task) => {
+    const ts = toTime(task.created_at)
+    return ts && ts >= now - 30 * DAY_MS && ['completed', 'reviewed'].includes(task.status)
+  }).length
+  const completedPrevious = tasks.value.filter((task) => {
+    const ts = toTime(task.created_at)
+    return (
+      ts &&
+      ts >= now - 60 * DAY_MS &&
+      ts < now - 30 * DAY_MS &&
+      ['completed', 'reviewed'].includes(task.status)
+    )
+  }).length
+
+  return {
+    total: calcTrendPercent(totalCurrent, totalPrevious),
+    completed: calcTrendPercent(completedCurrent, completedPrevious),
+  }
 })
 
 // 计算属性
 const totalTasks = computed(() => tasks.value.length)
-const pendingTasks = computed(() => tasks.value.filter(t => t.status === 'pending').length)
-const annotatingTasks = computed(() => tasks.value.filter(t => t.status === 'annotating').length)
-const completedTasks = computed(() => tasks.value.filter(t => t.status === 'completed').length)
+const pendingTasks = computed(() => tasks.value.filter((t) => t.status === 'pending').length)
+const annotatingTasks = computed(() => tasks.value.filter((t) => t.status === 'annotating').length)
+const completedTasks = computed(() => tasks.value.filter((t) => t.status === 'completed').length)
 const efficiency = computed(() => {
   if (totalTasks.value === 0) return 0
   return Math.round((completedTasks.value / totalTasks.value) * 100)
@@ -253,12 +331,12 @@ const efficiency = computed(() => {
 
 const groupedTasks = computed(() => {
   const groups = {}
-  tasks.value.forEach(task => {
+  tasks.value.forEach((task) => {
     const project = task.project_name || '未分类项目'
     if (!groups[project]) groups[project] = []
     groups[project].push(task)
   })
-  Object.keys(groups).forEach(project => {
+  Object.keys(groups).forEach((project) => {
     groups[project].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
   })
   return groups
@@ -270,41 +348,56 @@ const trendChartOption = computed(() => {
   const dates = []
   const completed = []
   const created = []
-  
+
+  const formatDateKey = (date) => date.toISOString().split('T')[0]
+  const createdByDay = new Map()
+  const completedByDay = new Map()
+  tasks.value.forEach((task) => {
+    const createdTs = toTime(task.created_at)
+    if (!createdTs) return
+    const dayKey = formatDateKey(new Date(createdTs))
+    createdByDay.set(dayKey, (createdByDay.get(dayKey) || 0) + 1)
+    if (['completed', 'reviewed'].includes(task.status)) {
+      completedByDay.set(dayKey, (completedByDay.get(dayKey) || 0) + 1)
+    }
+  })
+
   for (let i = days - 1; i >= 0; i--) {
     const date = new Date()
+    date.setHours(0, 0, 0, 0)
     date.setDate(date.getDate() - i)
+    const dayKey = formatDateKey(date)
     dates.push(date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' }))
-    completed.push(Math.floor(Math.random() * 10) + 5)
-    created.push(Math.floor(Math.random() * 15) + 8)
+    created.push(createdByDay.get(dayKey) || 0)
+    completed.push(completedByDay.get(dayKey) || 0)
   }
 
   return {
     tooltip: {
       trigger: 'axis',
-      axisPointer: { type: 'cross' }
+      axisPointer: { type: 'cross' },
     },
     legend: {
       data: ['新建任务', '完成任务'],
-      bottom: 0
+      bottom: 0,
     },
     grid: {
       left: '3%',
       right: '4%',
       bottom: '15%',
       top: '10%',
-      containLabel: true
+      containLabel: true,
     },
     xAxis: {
       type: 'category',
       boundaryGap: false,
       data: dates,
-      axisLine: { lineStyle: { color: '#ccc' } }
+      axisLine: { lineStyle: { color: '#ccc' } },
     },
     yAxis: {
       type: 'value',
       axisLine: { lineStyle: { color: '#ccc' } },
-      splitLine: { lineStyle: { color: '#f0f0f0' } }
+      splitLine: { lineStyle: { color: '#f0f0f0' } },
     },
     series: [
       {
@@ -316,13 +409,16 @@ const trendChartOption = computed(() => {
         areaStyle: {
           color: {
             type: 'linear',
-            x: 0, y: 0, x2: 0, y2: 1,
+            x: 0,
+            y: 0,
+            x2: 0,
+            y2: 1,
             colorStops: [
               { offset: 0, color: 'rgba(24, 144, 255, 0.3)' },
-              { offset: 1, color: 'rgba(24, 144, 255, 0.05)' }
-            ]
-          }
-        }
+              { offset: 1, color: 'rgba(24, 144, 255, 0.05)' },
+            ],
+          },
+        },
       },
       {
         name: '完成任务',
@@ -333,27 +429,30 @@ const trendChartOption = computed(() => {
         areaStyle: {
           color: {
             type: 'linear',
-            x: 0, y: 0, x2: 0, y2: 1,
+            x: 0,
+            y: 0,
+            x2: 0,
+            y2: 1,
             colorStops: [
               { offset: 0, color: 'rgba(82, 196, 26, 0.3)' },
-              { offset: 1, color: 'rgba(82, 196, 26, 0.05)' }
-            ]
-          }
-        }
-      }
-    ]
+              { offset: 1, color: 'rgba(82, 196, 26, 0.05)' },
+            ],
+          },
+        },
+      },
+    ],
   }
 })
 
 const statusChartOption = computed(() => ({
   tooltip: {
     trigger: 'item',
-    formatter: '{b}: {c} ({d}%)'
+    formatter: '{b}: {c} ({d}%)',
   },
   legend: {
     orient: 'vertical',
     right: '5%',
-    top: 'center'
+    top: 'center',
   },
   series: [
     {
@@ -364,53 +463,57 @@ const statusChartOption = computed(() => ({
       itemStyle: {
         borderRadius: 10,
         borderColor: '#fff',
-        borderWidth: 2
+        borderWidth: 2,
       },
       label: {
         show: false,
-        position: 'center'
+        position: 'center',
       },
       emphasis: {
         label: {
           show: true,
           fontSize: 20,
-          fontWeight: 'bold'
-        }
+          fontWeight: 'bold',
+        },
       },
       labelLine: { show: false },
       data: [
         { value: pendingTasks.value, name: '待处理', itemStyle: { color: '#faad14' } },
         { value: annotatingTasks.value, name: '标注中', itemStyle: { color: '#1890ff' } },
         { value: completedTasks.value, name: '已完成', itemStyle: { color: '#52c41a' } },
-        { value: tasks.value.filter(t => t.status === 'reviewed').length, name: '已审核', itemStyle: { color: '#722ed1' } }
-      ]
-    }
-  ]
+        {
+          value: tasks.value.filter((t) => t.status === 'reviewed').length,
+          name: '已审核',
+          itemStyle: { color: '#722ed1' },
+        },
+      ],
+    },
+  ],
 }))
 
 const projectChartOption = computed(() => {
   const projects = Object.keys(groupedTasks.value).slice(0, 6)
-  const data = projects.map(p => groupedTasks.value[p].length)
-  
+  const data = projects.map((p) => groupedTasks.value[p].length)
+
   return {
     tooltip: {
       trigger: 'axis',
-      axisPointer: { type: 'shadow' }
+      axisPointer: { type: 'shadow' },
     },
     grid: {
       left: '3%',
       right: '4%',
       bottom: '3%',
       top: '10%',
-      containLabel: true
+      containLabel: true,
     },
     xAxis: {
       type: 'category',
-      data: projects.map(p => p.length > 6 ? p.slice(0, 6) + '...' : p),
-      axisLabel: { rotate: 30 }
+      data: projects.map((p) => (p.length > 6 ? p.slice(0, 6) + '...' : p)),
+      axisLabel: { rotate: 30 },
     },
     yAxis: {
-      type: 'value'
+      type: 'value',
     },
     series: [
       {
@@ -418,85 +521,90 @@ const projectChartOption = computed(() => {
         data: data.map((v, i) => ({
           value: v,
           itemStyle: {
-            color: ['#1890ff', '#52c41a', '#faad14', '#f5222d', '#722ed1', '#13c2c2'][i % 6]
-          }
+            color: ['#1890ff', '#52c41a', '#faad14', '#f5222d', '#722ed1', '#13c2c2'][i % 6],
+          },
         })),
         barWidth: '60%',
-        itemStyle: { borderRadius: [4, 4, 0, 0] }
-      }
-    ]
+        itemStyle: { borderRadius: [4, 4, 0, 0] },
+      },
+    ],
   }
 })
 
-const radarChartOption = computed(() => ({
-  tooltip: {},
-  radar: {
-    indicator: [
-      { name: '完成速度', max: 100 },
-      { name: '准确率', max: 100 },
-      { name: '活跃度', max: 100 },
-      { name: '协作效率', max: 100 },
-      { name: '质量评分', max: 100 }
+const radarChartOption = computed(() => {
+  const now = Date.now()
+  const currentTasks = tasks.value.filter((task) => {
+    const ts = toTime(task.created_at)
+    return ts && ts >= now - 30 * DAY_MS
+  })
+  const previousTasks = tasks.value.filter((task) => {
+    const ts = toTime(task.created_at)
+    return ts && ts >= now - 60 * DAY_MS && ts < now - 30 * DAY_MS
+  })
+
+  const currentPerformance = buildPerformanceMetrics(currentTasks)
+  const previousPerformance = buildPerformanceMetrics(previousTasks)
+
+  return {
+    tooltip: {},
+    radar: {
+      indicator: [
+        { name: '完成速度', max: 100 },
+        { name: '准确率', max: 100 },
+        { name: '活跃度', max: 100 },
+        { name: '协作效率', max: 100 },
+        { name: '质量评分', max: 100 },
+      ],
+      radius: '65%',
+      splitNumber: 4,
+      axisName: { color: '#666' },
+    },
+    series: [
+      {
+        type: 'radar',
+        data: [
+          {
+            value: currentPerformance,
+            name: '当前表现',
+            areaStyle: { color: 'rgba(24, 144, 255, 0.3)' },
+            lineStyle: { color: '#1890ff' },
+            itemStyle: { color: '#1890ff' },
+          },
+          {
+            value: previousPerformance,
+            name: '上期表现',
+            areaStyle: { color: 'rgba(82, 196, 26, 0.2)' },
+            lineStyle: { color: '#52c41a', type: 'dashed' },
+            itemStyle: { color: '#52c41a' },
+          },
+        ],
+      },
     ],
-    radius: '65%',
-    splitNumber: 4,
-    axisName: {
-      color: '#666'
-    }
-  },
-  series: [
-    {
-      type: 'radar',
-      data: [
-        {
-          value: [85, 90, 78, 88, 92],
-          name: '当前表现',
-          areaStyle: {
-            color: 'rgba(24, 144, 255, 0.3)'
-          },
-          lineStyle: {
-            color: '#1890ff'
-          },
-          itemStyle: {
-            color: '#1890ff'
-          }
-        },
-        {
-          value: [70, 85, 80, 75, 80],
-          name: '团队平均',
-          areaStyle: {
-            color: 'rgba(82, 196, 26, 0.2)'
-          },
-          lineStyle: {
-            color: '#52c41a',
-            type: 'dashed'
-          },
-          itemStyle: {
-            color: '#52c41a'
-          }
-        }
-      ]
-    }
-  ]
-}))
+  }
+})
 
 const heatmapOption = computed(() => {
-  // 生成模拟的每日数据
   const data = []
   const endDate = new Date()
   const startDate = new Date()
   startDate.setDate(startDate.getDate() - 365)
-  
+  const createdByDay = new Map()
+  tasks.value.forEach((task) => {
+    const ts = toTime(task.created_at)
+    if (!ts) return
+    const dayKey = new Date(ts).toISOString().split('T')[0]
+    createdByDay.set(dayKey, (createdByDay.get(dayKey) || 0) + 1)
+  })
+
   for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
     const dateStr = d.toISOString().split('T')[0]
-    const value = Math.floor(Math.random() * 10)
-    data.push([dateStr, value])
+    data.push([dateStr, createdByDay.get(dateStr) || 0])
   }
 
   return {
     tooltip: {
       position: 'top',
-      formatter: (p) => `${p.data[0]}: ${p.data[1]} 个任务`
+      formatter: (p) => `${p.data[0]}: ${p.data[1]} 个任务`,
     },
     visualMap: {
       min: 0,
@@ -506,8 +614,8 @@ const heatmapOption = computed(() => {
       left: 'center',
       bottom: '0%',
       inRange: {
-        color: ['#ebedf0', '#c6e48b', '#7bc96f', '#239a3b', '#196127']
-      }
+        color: ['#ebedf0', '#c6e48b', '#7bc96f', '#239a3b', '#196127'],
+      },
     },
     calendar: {
       top: '15%',
@@ -520,23 +628,23 @@ const heatmapOption = computed(() => {
       itemStyle: {
         borderWidth: 2,
         borderColor: '#fff',
-        borderRadius: 4
+        borderRadius: 4,
       },
       dayLabel: { show: false },
       monthLabel: {
         nameMap: 'cn',
         fontSize: 12,
-        color: '#666'
+        color: '#666',
       },
-      yearLabel: { show: false }
+      yearLabel: { show: false },
     },
     series: [
       {
         type: 'heatmap',
         coordinateSystem: 'calendar',
-        data: data
-      }
-    ]
+        data: data,
+      },
+    ],
   }
 })
 
@@ -548,28 +656,26 @@ const changeTrendPeriod = (period) => {
 const loadTasks = async () => {
   loading.value = true
   try {
-    // 模拟API调用
-    await new Promise(resolve => setTimeout(resolve, 800))
-    
-    // 生成模拟数据
-    const mockTasks = []
-    const projects = ['交通监控项目', '人脸识别数据集', '医学影像标注', '自动驾驶场景', '工业质检']
-    const statuses = ['pending', 'annotating', 'completed', 'reviewed']
-    
-    for (let i = 1; i <= 45; i++) {
-      mockTasks.push({
-        id: `TASK-${2024}-${String(i).padStart(4, '0')}`,
-        project_name: projects[Math.floor(Math.random() * projects.length)],
-        status: statuses[Math.floor(Math.random() * statuses.length)],
-        created_at: new Date(Date.now() - Math.random() * 30 * 24 * 60 * 60 * 1000).toISOString(),
-        annotations_count: Math.floor(Math.random() * 50),
-        priority: ['high', 'medium', 'low'][Math.floor(Math.random() * 3)]
-      })
+    const owner = userStore.user?.username
+    if (!owner) {
+      tasks.value = []
+      expandedProjects.value = {}
+      return
     }
-    
-    tasks.value = mockTasks
-    
+
+    const overview = await getTaskCenterOverview(owner)
+    tasks.value = (overview?.tasks || [])
+      .filter((task) => task?.id)
+      .map((task) => ({
+        id: task.id,
+        project_name: task.project_name || '未分类项目',
+        status: normalizeStatus(task.status),
+        created_at: task.created_at || new Date().toISOString(),
+        annotations_count: Number(task.annotations_count || 0),
+      }))
+
     // 默认展开第一个项目
+    expandedProjects.value = {}
     const firstProject = Object.keys(groupedTasks.value)[0]
     if (firstProject) {
       expandedProjects.value[firstProject] = true
@@ -595,7 +701,7 @@ const formatTime = (timeStr) => {
   const now = new Date()
   const diff = now - date
   const days = Math.floor(diff / (1000 * 60 * 60 * 24))
-  
+
   if (days === 0) return '今天'
   if (days === 1) return '昨天'
   if (days < 7) return `${days}天前`
@@ -604,16 +710,16 @@ const formatTime = (timeStr) => {
 
 const statusText = (status) => {
   const map = {
-    'pending': '待处理',
-    'annotating': '标注中',
-    'completed': '已完成',
-    'reviewed': '已审核'
+    pending: '待处理',
+    annotating: '标注中',
+    completed: '已完成',
+    reviewed: '已审核',
   }
   return map[status] || status
 }
 
 const getStatusCount = (tasks, status) => {
-  return tasks.filter(t => t.status === status).length
+  return tasks.filter((t) => t.status === status).length
 }
 
 const getStatusPercent = (tasks, status) => {
@@ -688,11 +794,21 @@ onMounted(() => {
   width: 4px;
 }
 
-.stat-card.total::before { background: #1890ff; }
-.stat-card.pending::before { background: #faad14; }
-.stat-card.annotating::before { background: #722ed1; }
-.stat-card.completed::before { background: #52c41a; }
-.stat-card.efficiency::before { background: #13c2c2; }
+.stat-card.total::before {
+  background: #1890ff;
+}
+.stat-card.pending::before {
+  background: #faad14;
+}
+.stat-card.annotating::before {
+  background: #722ed1;
+}
+.stat-card.completed::before {
+  background: #52c41a;
+}
+.stat-card.efficiency::before {
+  background: #13c2c2;
+}
 
 .stat-icon {
   width: 48px;
@@ -889,7 +1005,9 @@ onMounted(() => {
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .empty-state {
@@ -993,9 +1111,15 @@ onMounted(() => {
   transition: width 0.3s;
 }
 
-.bar-segment.pending { background: #faad14; }
-.bar-segment.annotating { background: #1890ff; }
-.bar-segment.completed { background: #52c41a; }
+.bar-segment.pending {
+  background: #faad14;
+}
+.bar-segment.annotating {
+  background: #1890ff;
+}
+.bar-segment.completed {
+  background: #52c41a;
+}
 
 .toggle-icon {
   color: #999;
@@ -1032,10 +1156,18 @@ onMounted(() => {
   background: #f5f5f5;
 }
 
-.task-item.pending { border-left: 3px solid #faad14; }
-.task-item.annotating { border-left: 3px solid #1890ff; }
-.task-item.completed { border-left: 3px solid #52c41a; }
-.task-item.reviewed { border-left: 3px solid #722ed1; }
+.task-item.pending {
+  border-left: 3px solid #faad14;
+}
+.task-item.annotating {
+  border-left: 3px solid #1890ff;
+}
+.task-item.completed {
+  border-left: 3px solid #52c41a;
+}
+.task-item.reviewed {
+  border-left: 3px solid #722ed1;
+}
 
 .task-main {
   display: flex;
@@ -1114,11 +1246,11 @@ onMounted(() => {
   .charts-grid {
     grid-template-columns: 1fr;
   }
-  
+
   .chart-card.large {
     grid-column: span 1;
   }
-  
+
   .stats-row {
     grid-template-columns: repeat(2, 1fr);
   }

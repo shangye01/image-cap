@@ -70,6 +70,20 @@ export const listProjects = (ownerId?: string) =>
     params: ownerId ? { owner_id: ownerId } : undefined,
   })
 
+export interface TaskCenterTaskItem {
+  id: string
+  project_id: string
+  project_name: string
+  status: 'pending' | 'labeling' | 'done' | string
+  created_at: string
+  annotations_count: number
+}
+
+export const getTaskCenterOverview = (ownerId: string) =>
+  request.get<{ tasks: TaskCenterTaskItem[]; total: number }>('/projects/task-center/overview', {
+    params: { owner_id: ownerId },
+  })
+
 export const uploadProjectFile = (projectId: string, file: File, uploadedBy: string) => {
   const formData = new FormData()
   formData.append('uploaded_by', uploadedBy)

@@ -142,6 +142,78 @@ def list_projects(owner_id: str | None = None, db: Session = Depends(get_db)):
     return [_serialize_project(project) for project in query.all()]
 
 
+@router.get("/task-center/overview")
+def get_task_center_overview(owner_id: str, db: Session = Depends(get_db)):
+    """
+    任务数据中心聚合接口：
+    - 按 owner_id 获取项目
+    - 基于项目文件状态关联 Supabase tasks
+    - 返回前端任务中心所需的统一任务结构
+    """
+    projects = (
+        db.query(Project)
+        .filter(Project.owner_id == owner_id)
+        .order_by(Project.created_at.desc())
+        .all()
+    )
+
+    all_tasks: list[dict] = []
+
+    for project in projects:
+        files = (
+            db.query(ProjectFile)
+            .filter(ProjectFile.project_id == project.id)
+            .order_by(ProjectFile.created_at.asc())
+            .all()
+        )
+        if not files:
+            continue
+
+        file_by_id = {str(file.id): file for file in files}
+        file_ids = list(file_by_id.keys())
+        task_by_file_id: dict[str, dict] = {}
+
+        # 避免 in_ 过长，按块查询
+        chunk_size = 200
+        for idx in range(0, len(file_ids), chunk_size):
+            batch_ids = file_ids[idx : idx + chunk_size]
+            result = supabase.table("tasks").select("*").in_("file_id", batch_ids).execute()
+            for task in (result.data or []):
+                task_file_id = task.get("file_id")
+                if not task_file_id:
+                    continue
+                existed = task_by_file_id.get(task_file_id)
+                if not existed:
+                    task_by_file_id[task_file_id] = task
+                    continue
+                # 同一 file_id 多条记录时，优先 updated_at 更新的任务
+                current_updated = task.get("updated_at") or ""
+                existed_updated = existed.get("updated_at") or ""
+                if current_updated > existed_updated:
+                    task_by_file_id[task_file_id] = task
+
+        for file_id, file_record in file_by_id.items():
+            task = task_by_file_id.get(file_id)
+            if not task:
+                continue
+
+            all_tasks.append(
+                {
+                    "id": task.get("id"),
+                    "project_id": str(project.id),
+                    "project_name": task.get("project_name") or project.name,
+                    "status": task.get("status") or file_record.status or "pending",
+                    "created_at": (
+                        task.get("created_at")
+                        or (file_record.created_at.isoformat() if file_record.created_at else datetime.utcnow().isoformat())
+                    ),
+                    "annotations_count": int(task.get("annotations_count") or 0),
+                }
+            )
+
+    return {"tasks": all_tasks, "total": len(all_tasks)}
+
+
 @router.post("/{project_id}/share")
 def share_project(
     project_id: uuid.UUID,
