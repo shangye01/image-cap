@@ -244,7 +244,19 @@
               </template>
 
               <!-- 已标注文件夹：查看 -->
-              <template v-else-if="isDoneFolder"> </template>
+              <template v-else-if="isDoneFolder">
+              <button type="button" class="file-action-btn batch" @click="selectAllFilesInFolder">
+                  批量选择
+                </button>
+               <button
+                  type="button"
+                  class="file-action-btn work export-btn"
+                  @click="openExportDialog"
+                  :disabled="currentFolder.files.length === 0"
+                >
+                  📥 数据导出
+                </button>
+                 </template>
             </div>
           </div>
 
@@ -425,7 +437,28 @@
                 </div>
               </div>
             </div>
-
+               <!-- 置信度阈值设置 -->
+            <div class="confidence-section">
+              <div class="confidence-header">
+                <span class="confidence-title">🎯 置信度阈值</span>
+                <span class="confidence-value">{{ Math.round(workForm.confidenceThreshold * 100) }}%</span>
+              </div>
+              <div class="confidence-desc">只保留置信度高于此值的目标检测结果</div>
+              <div class="slider-container">
+                <el-slider
+                  v-model="workForm.confidenceThreshold"
+                  :min="0.05"
+                  :max="0.95"
+                  :step="0.05"
+                  :show-tooltip="false"
+                  :marks="{0.25: '25%', 0.5: '50%', 0.75: '75%'}"
+                />
+              </div>
+              <div class="confidence-hint">
+                <span class="hint-low">低阈值 → 更多结果</span>
+                <span class="hint-high">高阈值 → 更精准</span>
+              </div>
+            </div>
             <div class="dialog-footer">
               <button class="dialog-btn secondary" type="button" @click="closeWorkDialog">
                 取消
@@ -627,6 +660,120 @@
       </div>
     </transition>
   </teleport>
+
+   <!-- 数据导出弹窗 -->
+    <teleport to="body">
+      <transition name="preview-fade">
+        <div v-if="exportVisible" class="dialog-mask" @click="closeExportDialog">
+          <div class="dialog-panel export-dialog-panel" @click.stop>
+            <div class="export-dialog-header">
+              <div class="dialog-title">📦 导出标注数据</div>
+              <button class="export-dialog-close" type="button" @click="closeExportDialog">×</button>
+            </div>
+
+            <div class="dialog-body export-dialog-body">
+              <div class="export-summary">
+                <span class="export-count">共 {{ selectedFilesForExport.length }} 个文件待导出</span>
+                <span v-if="selectedFilesForExport.length === 0" class="export-hint">将导出文件夹内所有已标注文件</span>
+              </div>
+
+              <!-- 导出格式选择 -->
+              <div class="export-format-section">
+                <div class="section-title">选择导出格式</div>
+                <div class="format-options">
+                  <label 
+                    v-for="format in exportFormats" 
+                    :key="format.id"
+                    class="format-option"
+                    :class="{ active: selectedExportFormat === format.id }"
+                    @click="selectedExportFormat = format.id"
+                  >
+                    <div class="format-icon">{{ format.icon }}</div>
+                    <div class="format-info">
+                      <div class="format-name">{{ format.name }}</div>
+                      <div class="format-desc">{{ format.description }}</div>
+                    </div>
+                    <div class="format-check">
+                      <span class="check-circle" :class="{ checked: selectedExportFormat === format.id }"></span>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              <!-- 导出选项 -->
+              <div class="export-options-section">
+                <div class="section-title">导出选项</div>
+                
+                <label class="option-item">
+                  <input type="checkbox" v-model="exportOptions.includeImages" />
+                  <span class="option-text">包含原始图片文件</span>
+                </label>
+
+                <label class="option-item">
+                  <input type="checkbox" v-model="exportOptions.includeYaml" />
+                  <span class="option-text">生成数据集配置文件 (data.yaml)</span>
+                </label>
+
+                <label class="option-item" v-if="selectedExportFormat === 'yolo'">
+                  <input type="checkbox" v-model="exportOptions.normalizeCoordinates" />
+                  <span class="option-text">归一化坐标 (YOLO标准格式)</span>
+                </label>
+
+                <label class="option-item">
+                  <input type="checkbox" v-model="exportOptions.splitDataset" />
+                  <span class="option-text">自动划分训练/验证/测试集</span>
+                </label>
+
+                <div v-if="exportOptions.splitDataset" class="split-ratio-inputs">
+                  <div class="ratio-item">
+                    <label>训练集</label>
+                    <input type="number" v-model.number="exportOptions.trainRatio" min="0" max="1" step="0.1" />
+                    <span>%</span>
+                  </div>
+                  <div class="ratio-item">
+                    <label>验证集</label>
+                    <input type="number" v-model.number="exportOptions.valRatio" min="0" max="1" step="0.1" />
+                    <span>%</span>
+                  </div>
+                  <div class="ratio-item">
+                    <label>测试集</label>
+                    <input type="number" v-model.number="exportOptions.testRatio" min="0" max="1" step="0.1" />
+                    <span>%</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 类别映射 -->
+              <div class="class-mapping-section">
+                <div class="section-title">类别映射</div>
+                <div class="class-mapping-hint">系统将自动检测标注中的类别并生成映射表</div>
+                <div v-if="detectedClasses.length > 0" class="detected-classes">
+                  <div v-for="(cls, idx) in detectedClasses" :key="cls" class="class-item">
+                    <span class="class-id">{{ idx }}</span>
+                    <span class="class-name">{{ cls }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="dialog-footer export-footer">
+              <button class="dialog-btn secondary" type="button" @click="closeExportDialog">
+                取消
+              </button>
+              <button 
+                class="dialog-btn primary export-btn" 
+                type="button" 
+                @click="confirmExport"
+                :disabled="isExporting"
+              >
+                <span v-if="isExporting">⏳ 正在打包...</span>
+                <span v-else>📥 确认导出</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </transition>
+    </teleport>
 </template>
 
 <script setup>
@@ -634,7 +781,6 @@ import { computed, reactive, ref, onBeforeUnmount, onMounted, watch, nextTick } 
 import { useRouter } from 'vue-router'
 import { useIntersectionObserver } from '@vueuse/core'
 import CreateBoardCard from '@/views/project/CreateBoardCard.vue'
-
 import TeamCollaborationActions from '@/components/TeamCollaborationActions.vue'
 import {
   createProject,
@@ -649,6 +795,9 @@ import {
   getTaskByFileId,
 } from '@/api/projectStorage'
 import { useUserStore } from '@/stores/user'
+import JSZip from 'jszip' // 需要安装: npm install jszip
+import { saveAs } from 'file-saver' // 需要安装: npm install file-saver
+
 
 // ============ 基础状态 ============
 
@@ -676,6 +825,7 @@ const currentWorkFileId = ref(null)
 const workForm = reactive({
   mode: 'keyword',
   selectedTagIds: [],
+   confidenceThreshold: 0.25, 
 })
 const selectedFileIds = ref([])
 
@@ -744,6 +894,383 @@ const scenes = ref([
     ],
   },
 ])
+
+
+// ============ 数据导出相关状态 ============
+const exportVisible = ref(false)
+const selectedExportFormat = ref('yolo')
+const isExporting = ref(false)
+const detectedClasses = ref([])
+
+// 导出格式配置
+const exportFormats = [
+  {
+    id: 'yolo',
+    name: 'YOLO 格式',
+    icon: '📄',
+    description: 'TXT文件，每行: <class_id> <x_center> <y_center> <width> <height>',
+    extension: 'txt'
+  },
+  {
+    id: 'coco',
+    name: 'COCO JSON',
+    icon: '📋',
+    description: '单个JSON文件，包含所有图像和标注信息',
+    extension: 'json'
+  },
+  {
+    id: 'voc',
+    name: 'PASCAL VOC',
+    icon: '📑',
+    description: 'XML文件，每图一个标注文件',
+    extension: 'xml'
+  }
+]
+
+// 导出选项
+const exportOptions = reactive({
+  includeImages: true,
+  includeYaml: true,
+  normalizeCoordinates: true,
+  splitDataset: false,
+  trainRatio: 0.7,
+  valRatio: 0.2,
+  testRatio: 0.1
+})
+
+// 待导出的文件列表（优先使用选中的，否则使用全部）
+const selectedFilesForExport = computed(() => {
+  if (selectedFileIds.value.length > 0) {
+    return currentFolder.value?.files.filter(f => selectedFileIds.value.includes(f.id)) || []
+  }
+  return currentFolder.value?.files || []
+})
+
+// ============ 数据导出方法 ============
+
+const openExportDialog = async () => {
+  exportVisible.value = true
+  selectedExportFormat.value = 'yolo'
+  isExporting.value = false
+  
+  // 自动检测类别
+  await detectClasses()
+}
+
+const closeExportDialog = () => {
+  exportVisible.value = false
+  isExporting.value = false
+}
+
+// 检测所有标注中的类别
+const detectClasses = async () => {
+  const classes = new Set()
+  const files = selectedFilesForExport.value
+  
+  for (const file of files) {
+    try {
+      const task = await getTaskByFileId(currentProject.value.id, file.id)
+      if (task?.task?.annotations) {
+        task.task.annotations.forEach(anno => {
+          const label = anno.label || anno.category || 'unknown'
+          classes.add(label)
+        })
+      }
+    } catch (e) {
+      console.log('获取任务失败:', file.id)
+    }
+  }
+  
+  detectedClasses.value = Array.from(classes).sort()
+}
+
+// 确认导出
+const confirmExport = async () => {
+  if (selectedFilesForExport.value.length === 0) {
+    window.alert('没有可导出的文件')
+    return
+  }
+
+  isExporting.value = true
+  
+  try {
+    const zip = new JSZip()
+    const format = selectedExportFormat.value
+    const files = selectedFilesForExport.value
+    
+    // 根据格式导出
+    switch (format) {
+      case 'yolo':
+        await exportYOLOFormat(zip, files)
+        break
+      case 'coco':
+        await exportCOCOFormat(zip, files)
+        break
+      case 'voc':
+        await exportVOCFormat(zip, files)
+        break
+    }
+    
+    // 生成并下载zip文件
+    const content = await zip.generateAsync({ type: 'blob' })
+    const projectName = currentProject.value?.projectName || 'project'
+    const timestamp = new Date().toISOString().slice(0, 10)
+    saveAs(content, `${projectName}_annotations_${format}_${timestamp}.zip`)
+    
+    closeExportDialog()
+  } catch (error) {
+    console.error('导出失败:', error)
+    window.alert('导出失败: ' + error.message)
+  } finally {
+    isExporting.value = false
+  }
+}
+
+// YOLO格式导出
+const exportYOLOFormat = async (zip, files) => {
+  const labelsFolder = zip.folder('labels')
+  const imagesFolder = zip.folder('images')
+  const classMap = {}
+  
+  // 构建类别映射
+  detectedClasses.value.forEach((cls, idx) => {
+    classMap[cls] = idx
+  })
+  
+  // 处理每个文件
+  for (const file of files) {
+    try {
+      const taskData = await getTaskByFileId(currentProject.value.id, file.id)
+      if (!taskData?.task?.annotations) continue
+      
+      const annotations = taskData.task.annotations
+      const baseName = file.name.replace(/\.[^/.]+$/, '')
+      
+      // 生成YOLO格式标注
+      const yoloLines = annotations.map(anno => {
+        const label = anno.label || anno.category || 'unknown'
+        const classId = classMap[label] || 0
+        
+        let x, y, w, h
+        
+        if (exportOptions.normalizeCoordinates) {
+          // 归一化坐标 (YOLO标准)
+          const imgWidth = anno.image_width || 1920
+          const imgHeight = anno.image_height || 1080
+          x = (anno.x + anno.width / 2) / imgWidth
+          y = (anno.y + anno.height / 2) / imgHeight
+          w = anno.width / imgWidth
+          h = anno.height / imgHeight
+        } else {
+          // 绝对坐标
+          x = anno.x + anno.width / 2
+          y = anno.y + anno.height / 2
+          w = anno.width
+          h = anno.height
+        }
+        
+        return `${classId} ${x.toFixed(6)} ${y.toFixed(6)} ${w.toFixed(6)} ${h.toFixed(6)}`
+      })
+      
+      // 保存标注文件
+      labelsFolder.file(`${baseName}.txt`, yoloLines.join('\n'))
+      
+      // 下载并保存图片
+      if (exportOptions.includeImages) {
+        try {
+          const imageBlob = await fetchImageBlob(file.downloadUrl || file.previewUrl)
+          const ext = file.name.split('.').pop()
+          imagesFolder.file(`${baseName}.${ext}`, imageBlob)
+        } catch (e) {
+          console.log('下载图片失败:', file.name)
+        }
+      }
+    } catch (e) {
+      console.log('处理文件失败:', file.name, e)
+    }
+  }
+  
+  // 生成data.yaml
+  if (exportOptions.includeYaml) {
+    const yamlContent = generateDataYaml(detectedClasses.value)
+    zip.file('data.yaml', yamlContent)
+  }
+  
+  // 生成类别映射文件
+  const classNamesContent = detectedClasses.value.map((cls, idx) => `${idx}: ${cls}`).join('\n')
+  zip.file('classes.txt', classNamesContent)
+}
+
+// COCO格式导出
+const exportCOCOFormat = async (zip, files) => {
+  const cocoData = {
+    info: {
+      description: `${currentProject.value?.projectName || 'Project'} Annotations`,
+      version: '1.0',
+      year: new Date().getFullYear(),
+      contributor: 'Annotation Platform',
+      date_created: new Date().toISOString()
+    },
+    licenses: [{ id: 1, name: 'Unknown', url: '' }],
+    images: [],
+    annotations: [],
+    categories: detectedClasses.value.map((cls, idx) => ({
+      id: idx,
+      name: cls,
+      supercategory: 'object'
+    }))
+  }
+  
+  let annotationId = 1
+  const classMap = {}
+  detectedClasses.value.forEach((cls, idx) => {
+    classMap[cls] = idx
+  })
+  
+  const imagesFolder = zip.folder('images')
+  
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i]
+    try {
+      const taskData = await getTaskByFileId(currentProject.value.id, file.id)
+      if (!taskData?.task?.annotations) continue
+      
+      const annotations = taskData.task.annotations
+      const imageId = i + 1
+      
+      // 添加图像信息
+      cocoData.images.push({
+        id: imageId,
+        file_name: file.name,
+        height: annotations[0]?.image_height || 1080,
+        width: annotations[0]?.image_width || 1920,
+        date_captured: new Date().toISOString()
+      })
+      
+      // 添加标注信息
+      annotations.forEach(anno => {
+        const label = anno.label || anno.category || 'unknown'
+        const categoryId = classMap[label] || 0
+        
+        cocoData.annotations.push({
+          id: annotationId++,
+          image_id: imageId,
+          category_id: categoryId,
+          bbox: [anno.x, anno.y, anno.width, anno.height],
+          area: anno.width * anno.height,
+          segmentation: [],
+          iscrowd: 0
+        })
+      })
+      
+      // 下载图片
+      if (exportOptions.includeImages) {
+        try {
+          const imageBlob = await fetchImageBlob(file.downloadUrl || file.previewUrl)
+          const ext = file.name.split('.').pop()
+          imagesFolder.file(file.name, imageBlob)
+        } catch (e) {
+          console.log('下载图片失败:', file.name)
+        }
+      }
+    } catch (e) {
+      console.log('处理文件失败:', file.name)
+    }
+  }
+  
+  // 保存COCO JSON
+  zip.file('annotations.json', JSON.stringify(cocoData, null, 2))
+}
+
+// PASCAL VOC格式导出
+const exportVOCFormat = async (zip, files) => {
+  const annotationsFolder = zip.folder('Annotations')
+  const imagesFolder = zip.folder('JPEGImages')
+  
+  for (const file of files) {
+    try {
+      const taskData = await getTaskByFileId(currentProject.value.id, file.id)
+      if (!taskData?.task?.annotations) continue
+      
+      const annotations = taskData.task.annotations
+      const baseName = file.name.replace(/\.[^/.]+$/, '')
+      const imgWidth = annotations[0]?.image_width || 1920
+      const imgHeight = annotations[0]?.image_height || 1080
+      
+      // 生成VOC XML
+      const xmlContent = generateVOCXml(baseName, imgWidth, imgHeight, annotations)
+      annotationsFolder.file(`${baseName}.xml`, xmlContent)
+      
+      // 下载图片
+      if (exportOptions.includeImages) {
+        try {
+          const imageBlob = await fetchImageBlob(file.downloadUrl || file.previewUrl)
+          const ext = file.name.split('.').pop()
+          imagesFolder.file(`${baseName}.${ext}`, imageBlob)
+        } catch (e) {
+          console.log('下载图片失败:', file.name)
+        }
+      }
+    } catch (e) {
+      console.log('处理文件失败:', file.name)
+    }
+  }
+}
+
+// 辅助函数：获取图片Blob
+const fetchImageBlob = async (url) => {
+  const response = await fetch(url)
+  if (!response.ok) throw new Error('Failed to fetch image')
+  return await response.blob()
+}
+
+// 生成YOLO data.yaml
+const generateDataYaml = (classes) => {
+  return `path: ./dataset
+train: images/train
+val: images/val
+test: images/test
+
+nc: ${classes.length}
+names: [${classes.map(c => `'${c}'`).join(', ')}]
+`
+}
+
+// 生成VOC XML
+const generateVOCXml = (filename, width, height, annotations) => {
+  const objects = annotations.map(anno => {
+    const label = anno.label || anno.category || 'unknown'
+    return `
+  <object>
+    <name>${label}</name>
+    <pose>Unspecified</pose>
+    <truncated>0</truncated>
+    <difficult>0</difficult>
+    <bndbox>
+      <xmin>${Math.round(anno.x)}</xmin>
+      <ymin>${Math.round(anno.y)}</ymin>
+      <xmax>${Math.round(anno.x + anno.width)}</xmax>
+      <ymax>${Math.round(anno.y + anno.height)}</ymax>
+    </bndbox>
+  </object>`
+  }).join('')
+  
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<annotation>
+  <folder>VOC2007</folder>
+  <filename>${filename}</filename>
+  <source>
+    <database>The VOC2007 Database</database>
+    <annotation>PASCAL VOC2007</annotation>
+  </source>
+  <size>
+    <width>${width}</width>
+    <height>${height}</height>
+    <depth>3</depth>
+  </size>
+  <segmented>0</segmented>${objects}
+</annotation>`
+}
 
 // ============ 计算属性 ============
 
@@ -1431,7 +1958,7 @@ currentAnnotations.value = annotations.map((anno) => ({
   width: anno.width || anno.bbox?.[2] || 0,
   height: anno.height || anno.bbox?.[3] || 0,
   label: anno.label || anno.category || anno.name || '未命名',
-  color: anno.color || getLabelColor(anno.label), // 优先使用标注自带的颜色
+ color: getLabelColor(anno.label || anno.category || anno.name), // 优先使用标注自带的颜色
 }))
 
 
@@ -1950,6 +2477,7 @@ const closeWorkDialog = () => {
   currentWorkFileId.value = null
   workForm.mode = 'keyword'
   workForm.selectedTagIds = []
+  workForm.confidenceThreshold = 0.25  // 重置为默认值
 }
 
 const confirmWorkDialog = async () => {
@@ -1976,12 +2504,15 @@ const confirmWorkDialog = async () => {
 
     const keywords =
       workForm.mode === 'keyword' ? workSelectedTags.value.map((tag) => tag.name) : []
+    
+    const confidenceThreshold = workForm.confidenceThreshold
 
     console.log('[VUE-103] 🚀 调用createAnnotationSession')
-    const data = await createAnnotationSession(currentProject.value.id, {
+   const data = await createAnnotationSession(currentProject.value.id, {
       file_ids: targetFiles.map((file) => file.id),
       use_keywords: workForm.mode === 'keyword',
       keywords,
+      confidence_threshold: confidenceThreshold,
     })
     console.log(`[VUE-104] ✅ API调用成功 | tasks=${data.tasks?.length || 0}`)
 
@@ -3629,5 +4160,393 @@ onBeforeUnmount(() => {
 .image-card {
   contain: layout style paint;
   content-visibility: auto;
+}
+
+/* 置信度阈值设置样式 */
+.confidence-section {
+  margin-top: 20px;
+  padding: 16px;
+  background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+  border-radius: 12px;
+  border: 1px solid #bae6fd;
+}
+
+.confidence-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.confidence-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #0369a1;
+}
+
+.confidence-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: #0284c7;
+  background: #ffffff;
+  padding: 4px 12px;
+  border-radius: 20px;
+  box-shadow: 0 2px 8px rgba(2, 132, 199, 0.15);
+}
+
+.confidence-desc {
+  font-size: 13px;
+  color: #64748b;
+  margin-bottom: 16px;
+}
+
+.slider-container {
+  padding: 0 8px;
+}
+
+.slider-container :deep(.el-slider__runway) {
+  height: 8px;
+  border-radius: 4px;
+  background-color: #e0f2fe;
+}
+
+.slider-container :deep(.el-slider__bar) {
+  height: 8px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #38bdf8 0%, #0284c7 100%);
+}
+
+.slider-container :deep(.el-slider__button) {
+  width: 20px;
+  height: 20px;
+  border: 3px solid #0284c7;
+  background-color: #ffffff;
+  box-shadow: 0 2px 8px rgba(2, 132, 199, 0.3);
+}
+
+.slider-container :deep(.el-slider__marks-text) {
+  font-size: 12px;
+  color: #64748b;
+  margin-top: 8px;
+}
+
+.confidence-hint {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 12px;
+  font-size: 12px;
+}
+
+.hint-low {
+  color: #059669;
+  font-weight: 500;
+}
+
+.hint-high {
+  color: #dc2626;
+  font-weight: 500;
+}
+
+
+/* 数据导出按钮样式 */
+.file-action-btn.export-btn {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  font-weight: 600;
+}
+
+.file-action-btn.export-btn:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+
+.file-action-btn.export-btn:disabled {
+  background: #9ca3af;
+  cursor: not-allowed;
+  transform: none;
+  filter: none;
+}
+
+/* 导出弹窗样式 */
+.export-dialog-panel {
+  width: min(600px, 96vw);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.export-dialog-header {
+  padding: 24px 24px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.export-dialog-close {
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  font-size: 28px;
+  line-height: 1;
+  color: #9ca3af;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.export-dialog-close:hover {
+  background: #f3f4f6;
+  color: #374151;
+}
+
+.export-dialog-body {
+  padding: 20px 24px;
+  overflow-y: auto;
+}
+
+.export-summary {
+  margin-bottom: 20px;
+  padding: 12px 16px;
+  background: #f0f9ff;
+  border-radius: 10px;
+  border-left: 4px solid #0ea5e9;
+}
+
+.export-count {
+  font-size: 15px;
+  font-weight: 600;
+  color: #0369a1;
+}
+
+.export-hint {
+  font-size: 13px;
+  color: #64748b;
+  margin-left: 8px;
+}
+
+.section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* 格式选项样式 */
+.export-format-section {
+  margin-bottom: 24px;
+}
+
+.format-options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.format-option {
+  display: flex;
+  align-items: center;
+  padding: 16px;
+  border: 2px solid #e5e7eb;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  background: #ffffff;
+}
+
+.format-option:hover {
+  border-color: #c7d2fe;
+  background: #f8fafc;
+}
+
+.format-option.active {
+  border-color: #667eea;
+  background: #eef2ff;
+}
+
+.format-icon {
+  font-size: 28px;
+  margin-right: 16px;
+  flex-shrink: 0;
+}
+
+.format-info {
+  flex: 1;
+}
+
+.format-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: #111827;
+  margin-bottom: 4px;
+}
+
+.format-desc {
+  font-size: 13px;
+  color: #6b7280;
+  line-height: 1.4;
+}
+
+.format-check {
+  margin-left: 12px;
+}
+
+.check-circle {
+  width: 24px;
+  height: 24px;
+  border: 2px solid #d1d5db;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.check-circle.checked {
+  background: #667eea;
+  border-color: #667eea;
+}
+
+.check-circle.checked::after {
+  content: '✓';
+  color: white;
+  font-size: 14px;
+  font-weight: bold;
+}
+
+/* 导出选项样式 */
+.export-options-section {
+  margin-bottom: 24px;
+  padding: 16px;
+  background: #f9fafb;
+  border-radius: 12px;
+}
+
+.option-item {
+  display: flex;
+  align-items: center;
+  padding: 10px 0;
+  cursor: pointer;
+  font-size: 14px;
+  color: #374151;
+}
+
+.option-item input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin-right: 10px;
+  accent-color: #667eea;
+  cursor: pointer;
+}
+
+.option-text {
+  user-select: none;
+}
+
+.split-ratio-inputs {
+  display: flex;
+  gap: 16px;
+  margin-top: 12px;
+  margin-left: 28px;
+  padding: 12px;
+  background: #ffffff;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+}
+
+.ratio-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ratio-item label {
+  font-size: 13px;
+  color: #6b7280;
+  font-weight: 500;
+}
+
+.ratio-item input {
+  width: 60px;
+  height: 32px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  text-align: center;
+  font-size: 14px;
+}
+
+.ratio-item span {
+  font-size: 13px;
+  color: #6b7280;
+}
+
+/* 类别映射样式 */
+.class-mapping-section {
+  margin-bottom: 20px;
+}
+
+.class-mapping-hint {
+  font-size: 13px;
+  color: #6b7280;
+  margin-bottom: 12px;
+}
+
+.detected-classes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.class-item {
+  display: flex;
+  align-items: center;
+  padding: 6px 12px;
+  background: #f3f4f6;
+  border-radius: 20px;
+  font-size: 13px;
+}
+
+.class-id {
+  width: 20px;
+  height: 20px;
+  background: #667eea;
+  color: white;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  margin-right: 8px;
+}
+
+.class-name {
+  color: #374151;
+  font-weight: 500;
+}
+
+.export-footer {
+  margin-top: 0;
+  padding: 20px 24px 24px;
+  border-top: 1px solid #e5e7eb;
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.dialog-btn.export-btn {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  font-weight: 600;
+  padding: 10px 24px;
+}
+
+.dialog-btn.export-btn:disabled {
+  background: #9ca3af;
+  cursor: not-allowed;
 }
 </style>

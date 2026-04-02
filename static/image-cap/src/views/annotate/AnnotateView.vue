@@ -1,81 +1,92 @@
 <template>
   <div class="annotation-workspace">
+  
     <aside class="toolbar-panel">
-     <section class="tool-section model-section" :class="{ collapsed: collapsedSections.model }">
-  <div class="section-header" @click="collapsedSections.model = !collapsedSections.model">
-    <div class="header-left">
-      <span class="section-icon">🤖</span>
-      <h3 class="section-title">AI 模型</h3>
+   <section class="tool-section model-section-v2" :class="{ collapsed: collapsedSections.model }">
+  <div class="section-header-v2" @click="collapsedSections.model = !collapsedSections.model">
+    <div class="header-main">
+      <span class="header-icon">🤖</span>
+      <h3 class="header-title">
+        AI 模型
+        <span v-if="currentModel" class="status-badge active">
+          运行中
+        </span>
+        <span v-else class="status-badge inactive">
+          未加载
+        </span>
+      </h3>
     </div>
-    <div class="header-right">
-      <span v-if="currentModel" class="current-model-badge">
-        {{ currentModel }}
-      </span>
-      <span class="collapse-btn">▼</span>
-    </div>
+    <span class="collapse-arrow" :class="{ collapsed: collapsedSections.model }">▼</span>
   </div>
   
-  <div class="section-content model-content">
-    <!-- 当前模型信息卡片 -->
-    <div v-if="currentModel" class="current-model-card">
-      <div class="model-status-indicator active"></div>
-      <div class="model-info">
-        <div class="model-name">{{ currentModel }}</div>
-        <div class="model-status">运行中</div>
+  <div class="model-content-v2" v-show="!collapsedSections.model">
+    <!-- 当前模型卡片 -->
+    <div v-if="currentModel" class="current-model-card-v2">
+      <div class="model-badge" :style="getModelBadgeStyle(currentModel)">
+        {{ currentModel.charAt(0).toUpperCase() }}
+      </div>
+      <div class="model-details">
+        <div class="model-name-row">
+          <span class="model-name-text">{{ currentModel }}</span>
+          <span class="model-tag">{{ getModelType(currentModel) }}</span>
+        </div>
+      </div>
+    </div>
+    <div v-else class="current-model-card-v2 empty">
+      <div class="model-badge" style="background: linear-gradient(135deg, #999 0%, #666 100%)">?</div>
+      <div class="model-details">
+        <span class="model-name-text">未选择模型</span>
       </div>
     </div>
     
-    <!-- 模型列表 -->
-    <div class="model-list-container">
-      <div class="list-header">
-        <span class="list-title">可用模型</span>
-        <span class="model-count">{{ modelList.length }} 个</span>
+    <!-- 模型选择器 - 使用 modelList -->
+    <div v-if="modelList?.length" class="model-selector">
+      <div class="selector-header">
+        <span class="selector-label">切换模型</span>
+        <span class="model-count">{{ modelList.length }} 个可用</span>
       </div>
-      
-      <div class="model-list">
-        <div
-          v-for="model in modelList"
+      <div class="model-options">
+        <div 
+          v-for="model in modelList" 
           :key="model.name"
-          :class="['model-item', { active: model.name === currentModel }]"
+          class="model-option"
+          :class="{ active: currentModel === model.name }"
           @click="switchModel(model)"
         >
-          <div class="model-item-left">
-            <div class="model-icon">
-              {{ model.name.charAt(0).toUpperCase() }}
-            </div>
-            <div class="model-item-info">
-              <div class="model-item-name">{{ model.name }}</div>
-              <div v-if="model.description" class="model-item-desc">
-                {{ model.description }}
-              </div>
+          <div class="option-indicator">
+            <div class="radio-circle" :class="{ checked: currentModel === model.name }">
+              <div v-if="currentModel === model.name" class="radio-inner"></div>
             </div>
           </div>
-          
-          <div class="model-item-right">
-            <span v-if="model.name === currentModel" class="active-badge">
-              <span class="check-icon">✓</span>
-              当前
-            </span>
-            <span v-else class="switch-hint">切换</span>
+          <div class="option-content">
+            <div class="option-name">{{ model.name }}</div>
+            <div class="option-meta">
+              <span class="meta-badge">{{ model.source || '本地' }}</span>
+              <span v-if="currentModel === model.name" class="current-mark">当前使用</span>
+            </div>
+          </div>
+          <div v-if="currentModel !== model.name" class="option-action">
+            <span class="switch-hint">点击切换</span>
           </div>
         </div>
       </div>
     </div>
     
     <!-- 空状态 -->
-    <div v-if="modelList.length === 0" class="empty-state">
-      <div class="empty-icon">📦</div>
-      <div class="empty-text">暂无可用模型</div>
-      <div class="empty-hint">请先训练或导入模型</div>
+    <div v-else class="empty-model-v2">
+      <div class="empty-icon">📭</div>
+      <div class="empty-title">暂无可用模型</div>
+      <div class="empty-desc">请添加模型文件</div>
     </div>
   </div>
 </section>
 
-      <section class="tool-section task-section">
-        <div class="section-header">
+            <section class="tool-section task-section" :class="{ collapsed: collapsedSections.task }">
+        <div class="section-header" @click="collapsedSections.task = !collapsedSections.task">
           <h3 class="section-title">🎯 任务管理</h3>
+          <span class="collapse-btn" :class="{ collapsed: collapsedSections.task }">▼</span>
         </div>
-        <div class="section-content">
+        <div class="section-content" v-show="!collapsedSections.task">
           <div v-if="totalTasks > 0" class="task-navigator">
             <div class="navigator-header">
               <span class="task-counter">任务进度: {{ taskNavigatorText }}</span>
@@ -146,14 +157,15 @@
           <div v-if="taskError" class="message error">⚠️ {{ taskError }}</div>
           <div v-if="taskSuccess" class="message success">✅ {{ taskSuccess }}</div>
 
-          <button
-            v-if="totalTasks === 0"
-            @click="loadNextTask()"
-            class="btn btn-primary"
-            :disabled="taskLoading || submitLoading"
-          >
-            {{ taskLoading ? '⏳ 获取中...' : '🎯 获取新任务' }}
-          </button>
+       
+<button
+  v-if="totalTasks === 0"
+  @click="loadNextTask(routeProjectId.value)"  
+  class="btn btn-primary"
+  :disabled="taskLoading || submitLoading"
+>
+  {{ taskLoading ? '⏳ 获取中...' : '🎯 获取新任务' }}
+</button>
 
           <button
             @click="handleCustomSubmit()"
@@ -666,7 +678,8 @@ const collapsedSections = reactive({
   stats: false,
   selected: false,
   zoom: false,
-  model: false,  // 添加模型折叠状态
+  model: false, 
+  task:false // 添加模型折叠状态
 })
 
 const editingLabel = ref(null)
@@ -1519,6 +1532,8 @@ const checkTrainingStatus = async () => {
   }
 }
 
+
+
 const startTraining = async () => {
   trainingLoading.value = true
   trainingMessage.value = null
@@ -1624,6 +1639,39 @@ const scaledImageConfig = computed(() => {
     height: imageObj.value.height * baseScale * zoomScale.value,
   }
 })
+// 获取模型颜色
+const getModelColor = (modelName) => {
+  const name = modelName.toLowerCase()
+  let gradient = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
+  
+  if (name.includes('yolo')) {
+    gradient = 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)'
+  } else if (name.includes('rcnn')) {
+    gradient = 'linear-gradient(135deg, #ec4899 0%, #db2777 100%)'
+  } else if (name.includes('ssd')) {
+    gradient = 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)'
+  } else if (name.includes('detr')) {
+    gradient = 'linear-gradient(135deg, #06b6d4 0%, #0891b2 100%)'
+  } else if (name.includes('vit')) {
+    gradient = 'linear-gradient(135deg, #10b981 0%, #059669 100%)'
+  }
+  
+  return { background: gradient }
+}
+
+// 获取模型类型标签
+const getModelType = (modelName) => {
+  const name = modelName.toLowerCase()
+  if (name.includes('yolo')) return 'YOLO'
+  if (name.includes('rcnn')) return 'RCNN'
+  if (name.includes('ssd')) return 'SSD'
+  if (name.includes('detr')) return 'DETR'
+  if (name.includes('vit')) return 'ViT'
+  return '本地'
+}
+
+
+
 
 const transformerConfig = computed(() => {
   if (!selectedId.value) {
@@ -2083,31 +2131,98 @@ const cancelLabelEdit = () => {
   editLabelName.value = ''
   editingOriginalColor.value = ''
 }
-// ============ 模型切换（简化版） ============
+// ============ 模型切换（支持本地+云端） ============
 const modelList = ref([])
 const currentModel = ref('')
 
+// 获取模型徽章样式
+const getModelBadgeStyle = (modelName) => {
+  const gradient = getModelColor(modelName)
+  return { background: gradient.background }
+}
 
-// 加载模型列表 - 使用现有的 training/status API
+// 加载模型列表 - 从本地API和Supabase数据库获取
 const loadModelList = async () => {
   try {
-    const res = await fetch('/api/training/status')
-    const data = await res.json()
-    console.log('训练状态 API 返回:', data)
+    console.log('🔄 开始加载模型列表...')
     
-    // 从 trainingStatus 中提取模型列表
-    if (data.local_models && Array.isArray(data.local_models)) {
-      modelList.value = data.local_models.map(model => ({
-        name: model.name,
-        path: model.path || model.name,  // 确保有 path 字段
-        ...model
-      }))
-      currentModel.value = data.current_model || ''
-      console.log(`✅ 加载了 ${modelList.value.length} 个模型`)
-    } else {
-      console.warn('API 返回的 local_models 为空或格式不正确:', data)
-      modelList.value = []
+    const models = []
+    
+    // 1. 从 training/status 获取本地模型
+    try {
+      const res = await fetch('/api/training/status')
+      const data = await res.json()
+      console.log('本地训练状态 API 返回:', data)
+      
+      if (data.local_models && Array.isArray(data.local_models)) {
+        data.local_models.forEach(model => {
+          models.push({
+            id: `local_${model.name}`,
+            name: model.name,
+            path: model.path || model.name,
+            source: '本地',
+            type: getModelType(model.name),
+            created_at: null,
+            isCloud: false
+          })
+        })
+      }
+      
+      // 设置当前使用的模型
+      if (data.current_model) {
+        currentModel.value = data.current_model
+      }
+    } catch (e) {
+      console.warn('获取本地模型失败:', e)
     }
+    
+    // 2. 从 Supabase 数据库获取云端模型
+    try {
+      console.log('☁️ 从 Supabase 获取云端模型...')
+      const { data: cloudModels, error } = await supabase
+        .from('model_versions')
+        .select('*')
+        .order('created_at', { ascending: false })
+      
+      if (error) {
+        console.error('Supabase 查询失败:', error)
+      } else if (cloudModels && cloudModels.length > 0) {
+        console.log(`✅ 从数据库获取 ${cloudModels.length} 个云端模型:`, cloudModels)
+        
+        cloudModels.forEach(model => {
+          // 避免重复添加（如果本地和云端有同名模型，优先显示云端版本）
+          const existingIndex = models.findIndex(m => m.name === model.version_name)
+          
+          const cloudModel = {
+            id: model.id,
+            name: model.version_name,
+            path: model.version_name, // 云端模型通过ID或名称引用
+            source: '云端',
+            type: getModelType(model.version_name),
+            training_data_count: model.training_data_count,
+            created_at: model.created_at,
+            updated_at: model.updated_at,
+            isCloud: true
+          }
+          
+          if (existingIndex >= 0) {
+            // 替换本地模型为云端模型（云端优先）
+            models[existingIndex] = cloudModel
+            console.log(`🔄 模型 ${model.version_name} 已存在本地版本，替换为云端版本`)
+          } else {
+            models.push(cloudModel)
+          }
+        })
+      } else {
+        console.log('ℹ️ 数据库中没有云端模型')
+      }
+    } catch (e) {
+      console.error('获取云端模型失败:', e)
+    }
+    
+    modelList.value = models
+    console.log(`✅ 共加载了 ${modelList.value.length} 个模型（本地+云端）:`, modelList.value)
+    
   } catch (e) {
     console.error('加载模型列表失败:', e)
     modelList.value = []
@@ -2117,20 +2232,36 @@ const loadModelList = async () => {
 // 切换模型
 const switchModel = async (model) => {
   try {
-    const res = await fetch('/api/models/switch', {
+    // 根据模型来源使用不同的API
+    const endpoint = model.isCloud ? '/api/models/switch-cloud' : '/api/models/switch'
+    
+    const res = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: model.path, name: model.name }),
+      body: JSON.stringify({ 
+        path: model.path, 
+        name: model.name,
+        id: model.id,
+        isCloud: model.isCloud 
+      }),
     })
+    
     const data = await res.json()
+    
     if (data.success) {
       currentModel.value = model.name
-      alert('模型已切换: ' + model.name)
+      taskSuccess.value = `✅ 已切换到${model.source}模型: ${model.name}`
+      setTimeout(() => (taskSuccess.value = ''), 2000)
+    } else {
+      throw new Error(data.message || '切换失败')
     }
   } catch (e) {
-    alert('切换失败: ' + e.message)
+    console.error('切换模型失败:', e)
+    taskError.value = `❌ 切换失败: ${e.message}`
+    setTimeout(() => (taskError.value = ''), 3000)
   }
 }
+
 const removeLabel = async (labelName) => {
   const usedCount = store.annotations.filter((ann) => ann.label === labelName).length
 
