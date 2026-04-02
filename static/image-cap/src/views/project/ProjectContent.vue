@@ -669,6 +669,68 @@
                 🏷️ {{ label }}
               </span>
             </div>
+
+            <div
+              v-if="collaborationIntegration && displayedReviewItems.length > 0"
+              class="review-workbench"
+            >
+              <div class="review-workbench-header">
+                <div class="workbench-title">🧑‍⚖️ 裁决工作台</div>
+                <div class="workbench-decision">{{ integrationDecisionText }}</div>
+                <label class="conflict-switch">
+                  <input v-model="reviewConflictOnly" type="checkbox" />
+                  只看冲突框
+                </label>
+              </div>
+
+              <div class="workbench-body">
+                <div class="cluster-list">
+                  <button
+                    v-for="item in displayedReviewItems"
+                    :key="item.clusterKey"
+                    type="button"
+                    class="cluster-btn"
+                    :class="{ active: selectedReviewCluster?.clusterKey === item.clusterKey }"
+                    @click="pickReviewCluster(item)"
+                  >
+                    #{{ item.clusterKey }} · {{ item.differenceType }}
+                  </button>
+                </div>
+
+                <div v-if="selectedReviewCluster" class="cluster-detail">
+                  <div class="detail-line">建议：{{ selectedReviewCluster.recommendedAction }}</div>
+                  <div class="detail-line">
+                    IoU:
+                    {{ selectedReviewCluster.overlay?.fused_preview?.agreement?.mean_pairwise_iou ?? '-' }}
+                    · Vote:
+                    {{ selectedReviewCluster.overlay?.fused_preview?.agreement?.label_vote ?? '-' }}
+                  </div>
+                  <div class="overlay-boxes">
+                    <div
+                      v-for="member in selectedReviewCluster.overlay?.member_boxes || []"
+                      :key="`${selectedReviewCluster.clusterKey}-${member.annotation_id}`"
+                      class="overlay-box-item"
+                    >
+                      <span>{{ getAnnotatorBadge(member.annotator_index) }}</span>
+                      <span>{{ member.label }}</span>
+                    </div>
+                  </div>
+                  <div class="decision-actions">
+                    <button type="button" class="mini-btn" @click="applyClusterDecision('adopt_annotator', { annotatorIndex: 0 })">采用A</button>
+                    <button type="button" class="mini-btn" @click="applyClusterDecision('adopt_annotator', { annotatorIndex: 1 })">采用B</button>
+                    <button type="button" class="mini-btn" @click="applyClusterDecision('adopt_annotator', { annotatorIndex: 2 })">采用C</button>
+                    <button type="button" class="mini-btn primary" @click="applyClusterDecision('adopt_fused')">采用融合框</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="batch-actions">
+                <span>批量裁决：</span>
+                <button type="button" class="mini-btn" @click="applyBatchBase(0)">全图采用A为基础</button>
+                <button type="button" class="mini-btn" @click="applyBatchBase(1)">全图采用B为基础</button>
+                <button type="button" class="mini-btn" @click="applyBatchBase(2)">全图采用C为基础</button>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -878,6 +940,9 @@ const currentPreviewTask = ref(null)
 const currentPreviewIndex = ref(0)
 const previewableFiles = ref([])
 const annotationDataSource = ref('')
+const reviewConflictOnly = ref(true)
+const selectedReviewCluster = ref(null)
+const reviewDecisionLog = ref([])
 const pendingReviewVisible = ref(false)
 const pendingReviewItems = ref([])
 
@@ -891,6 +956,34 @@ const imageRenderRect = ref({
   top: 0,
 })
 
+const collaborationIntegration = computed(
+  () => currentPreviewTask.value?.collaboration_integration || null
+)
+
+const integrationDecisionText = computed(
+  () => collaborationIntegration.value?.integration_decision_text || '未判定'
+)
+
+const normalizedReviewItems = computed(() => {
+  const integration = collaborationIntegration.value
+  if (!integration) return []
+  const items = integration.diff_highlights || integration.review_items || []
+  return items.map((item, idx) => ({
+    clusterKey: item.cluster_index ?? item.cluster_id ?? idx,
+    differenceType: item.difference_type || 'cluster_conflict',
+    recommendedAction: item.recommended_action || item.review_suggestion || '请人工裁决',
+    overlay: item.overlay || {},
+    quickActions: item.quick_actions || [],
+    clusterSnapshot: item.cluster_snapshot || {},
+  }))
+})
+
+const displayedReviewItems = computed(() => {
+  if (!reviewConflictOnly.value) return normalizedReviewItems.value
+  const queue = new Set(collaborationIntegration.value?.review_queue || [])
+  if (!queue.size) return normalizedReviewItems.value
+  return normalizedReviewItems.value.filter((item) => queue.has(item.clusterKey))
+})
 // ============ 任务列表状态 ============
 
 const labelingTasks = ref([])
@@ -1923,6 +2016,9 @@ const loadPreviewData = async (file) => {
   annotationDataSource.value = ''
   
   currentPreviewTask.value = null
+  selectedReviewCluster.value = null
+  reviewDecisionLog.value = []
+
 
   let annotations = []
   let taskData = null
@@ -2011,6 +2107,11 @@ currentAnnotations.value = annotations.map((anno) => ({
 
 
   currentPreviewTask.value = taskData
+  if (taskData?.collaboration_integration) {
+    reviewConflictOnly.value =
+      taskData.collaboration_integration.review_workbench?.conflict_only_mode_default ?? true
+    selectedReviewCluster.value = displayedReviewItems.value[0] || null
+  }
 
   if (currentAnnotations.value.length === 0) {
     console.log(`[PREVIEW] 未找到标注数据 | file_id=${file.id}`)
@@ -2019,6 +2120,61 @@ currentAnnotations.value = annotations.map((anno) => ({
   if (!taskData && isLabelingFolder.value) {
     console.warn(`[PREVIEW] 警告：标注中文件夹的文件没有对应的 task | file_id=${file.id}`)
   }
+}
+
+const pickReviewCluster = (item) => {
+  selectedReviewCluster.value = item
+}
+
+const getAnnotatorBadge = (index) => `标注员 ${['A', 'B', 'C'][index] || index + 1}`
+
+const applyClusterDecision = (action, payload = {}) => {
+  const cluster = selectedReviewCluster.value
+  if (!cluster) return
+
+  let adoptedBox = null
+  if (action === 'adopt_fused') {
+    adoptedBox = cluster.overlay?.fused_preview
+  } else if (action === 'adopt_annotator') {
+    const memberBoxes = cluster.overlay?.member_boxes || []
+    adoptedBox = memberBoxes.find((box) => box.annotator_index === payload.annotatorIndex)
+  }
+  if (!adoptedBox) return
+
+  currentAnnotations.value = [
+    ...currentAnnotations.value,
+    {
+      x: adoptedBox.x || 0,
+      y: adoptedBox.y || 0,
+      width: adoptedBox.width || 0,
+      height: adoptedBox.height || 0,
+      label: adoptedBox.label || '未命名',
+      color: adoptedBox.color || getLabelColor(adoptedBox.label),
+    },
+  ]
+
+  reviewDecisionLog.value.push({
+    clusterKey: cluster.clusterKey,
+    action,
+    annotatorIndex: payload.annotatorIndex ?? null,
+    at: Date.now(),
+  })
+}
+
+const applyBatchBase = (annotatorIndex) => {
+  const items = displayedReviewItems.value
+  items.forEach((item) => {
+    const member = (item.overlay?.member_boxes || []).find((box) => box.annotator_index === annotatorIndex)
+    if (!member) return
+    currentAnnotations.value.push({
+      x: member.x || 0,
+      y: member.y || 0,
+      width: member.width || 0,
+      height: member.height || 0,
+      label: member.label || '未命名',
+      color: member.color || getLabelColor(member.label),
+    })
+  })
 }
 const getLabelColor = (label) => {
   if (!label) return '#ff0000'
@@ -4150,6 +4306,130 @@ onBeforeUnmount(() => {
   color: #4338ca;
   font-size: 12px;
   line-height: 1.2;
+}
+
+.review-workbench {
+  width: 100%;
+  max-width: 920px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 12px;
+  background: #f8fafc;
+}
+
+.review-workbench-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.workbench-title {
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.workbench-decision {
+  font-size: 12px;
+  background: #e0f2fe;
+  color: #0c4a6e;
+  border-radius: 999px;
+  padding: 4px 10px;
+}
+
+.conflict-switch {
+  margin-left: auto;
+  font-size: 12px;
+  color: #475569;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.workbench-body {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 10px;
+}
+
+.cluster-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 160px;
+  overflow: auto;
+}
+
+.cluster-btn {
+  border: 1px solid #dbeafe;
+  background: #fff;
+  color: #1e3a8a;
+  border-radius: 8px;
+  padding: 6px 8px;
+  text-align: left;
+  font-size: 12px;
+}
+
+.cluster-btn.active {
+  background: #dbeafe;
+}
+
+.cluster-detail {
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  padding: 8px;
+  background: #fff;
+}
+
+.detail-line {
+  font-size: 12px;
+  color: #334155;
+  margin-bottom: 6px;
+}
+
+.overlay-boxes {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.overlay-box-item {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 12px;
+  background: #eef2ff;
+  color: #312e81;
+}
+
+.decision-actions,
+.batch-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.batch-actions {
+  margin-top: 8px;
+}
+
+.mini-btn {
+  border: 1px solid #cbd5e1;
+  background: white;
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.mini-btn.primary {
+  background: #2563eb;
+  color: white;
+  border-color: #2563eb;
 }
 
 /* 左右切换箭头 */
