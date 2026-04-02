@@ -346,12 +346,12 @@ def login(data: LoginRequest, db: Session = Depends(get_db)):
             user = _get_user_by_username(db, data.username.strip())
             user_id = user.id if user else None
 
-    if user_id:
-        user = _get_user_by_id(db, user_id)
-        if user:
-            user.is_active = False
-            db.commit()
-    return {"message": "退出成功"}
+        if user_id:
+            user = _get_user_by_id(db, user_id)
+            if user:
+                user.is_active = False
+                db.commit()
+        return {"message": "退出成功"}
 
 @router.get("/me")
 def get_me(authorization: str | None = Header(default=None), db: Session = Depends(get_db)):

@@ -269,18 +269,29 @@
       </div>
 
       <div v-if="currentFolder.files.length" class="image-grid">
-        <div v-for="file in currentFolder.files" :key="file.id" class="image-card">
+        <div 
+  v-for="file in currentFolder.files" 
+  :key="file.id"
+  v-memo="[file.id, file.status, selectedFileIdSet.has(file.id)]"
+  class="image-card"
+>
           <label class="file-select-checkbox" @click.stop>
             <input
-              type="checkbox"
-              :checked="isFileSelected(file.id)"
-              @change="toggleFileSelection(file.id)"
-            />
+  type="checkbox"
+  :checked="selectedFileIdSet.has(file.id)"
+  @change="toggleFileSelection(file.id)"
+/>
           </label>
           <div class="image-card-preview" @click.stop="handleImagePreview(file)">
-            <template v-if="isImageFile(file) && getFilePreviewUrl(file)">
-              <img :src="getFilePreviewUrl(file)" :alt="file.name" class="image-thumb" />
-            </template>
+          <template v-if="isImageFile(file)">
+  <img
+    v-lazy="getFilePreviewUrl(file)"
+    :data-file-id="file.id"
+    :alt="file.name"
+    class="image-thumb"
+    loading="lazy"
+  />
+</template>
 
             <template v-else-if="isImageFile(file)">
               <div class="image-placeholder">图片不可预览</div>
@@ -562,44 +573,46 @@
                   ref="previewImageRef"
                   draggable="false"
                 />
-
+                  
                 <!-- SVG 标注层 - 与容器完全重叠 -->
-                <svg
-                  v-if="annotationImageLoaded && currentAnnotations.length > 0"
-                  class="annotation-overlay"
-                  :viewBox="`0 0 ${annotationImageNaturalWidth} ${annotationImageNaturalHeight}`"
-                  preserveAspectRatio="none"
-                >
-                  <g v-for="(anno, index) in currentAnnotations" :key="index">
-                    <rect
-                      :x="anno.x"
-                      :y="anno.y"
-                      :width="anno.width"
-                      :height="anno.height"
-                      fill="none"
-                      stroke="#ff4444"
-                      stroke-width="3"
-                      rx="2"
-                    />
-                    <rect
-                      :x="anno.x"
-                      :y="anno.y - 26"
-                      :width="getLabelWidth(anno.label)"
-                      height="26"
-                      fill="#ff4444"
-                      rx="4"
-                    />
-                    <text
-                      :x="anno.x + 8"
-                      :y="anno.y - 7"
-                      fill="white"
-                      font-size="14"
-                      font-weight="600"
-                    >
-                      {{ anno.label || '未命名' }}
-                    </text>
-                  </g>
-                </svg>
+               <!-- 优化后的 SVG 标签渲染 -->
+               <svg
+    v-if="annotationImageLoaded && currentAnnotations.length > 0"
+    class="annotation-overlay"
+    :viewBox="`0 0 ${annotationImageNaturalWidth} ${annotationImageNaturalHeight}`"
+    preserveAspectRatio="none"
+  >
+    <g v-for="(anno, index) in currentAnnotations" :key="`box-${index}`">
+      <rect
+  v-for="(anno, index) in currentAnnotations"
+  :key="`box-${index}`"
+  :x="anno.x"
+  :y="anno.y"
+  :width="anno.width"
+  :height="anno.height"
+  fill="none"
+  :stroke="anno.color || '#ff4444'" 
+  stroke-width="2"
+  rx="2"
+/>
+    </g>
+  </svg>
+   <div
+    v-if="annotationImageLoaded && currentAnnotations.length > 0"
+    class="annotation-labels-layer"
+  >
+    <div
+  v-for="(anno, index) in currentAnnotations"
+  :key="`label-${index}`"
+  class="annotation-label"
+  :class="{ 'label-below': isLabelBelow(anno) }"
+  :style="getLabelStyle(anno)"
+>
+  <span class="label-text">{{ anno.label || '未命名' }}</span>
+</div>
+ 
+</div>
+
               </div>
             </div>
           </div>
@@ -642,7 +655,9 @@
 <script setup>
 import { computed, reactive, ref, onBeforeUnmount, onMounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
+import { useIntersectionObserver } from '@vueuse/core'
 import CreateBoardCard from '@/views/project/CreateBoardCard.vue'
+
 import TeamCollaborationActions from '@/components/TeamCollaborationActions.vue'
 import PendingReviewDialog from '@/components/PendingReviewDialog.vue'
 import {
@@ -836,7 +851,21 @@ const filteredProjectList = computed(() => {
 
   return list
 })
+// ============ 优化：缓存选择状态检查 ============
 
+// 使用 Set 优化查找性能 O(n) -> O(1)
+const selectedFileIdSet = computed(() => new Set(selectedFileIds.value))
+
+const isFileSelected = (fileId) => selectedFileIdSet.value.has(fileId)
+
+// 优化：文件状态映射缓存
+const fileStatusMap = computed(() => {
+  const map = new Map()
+  currentFolder.value?.files.forEach(file => {
+    map.set(file.id, file.status)
+  })
+  return map
+})
 const renameError = computed(() => {
   if (!renameVisible.value) return ''
 
@@ -960,9 +989,20 @@ const getStatusText = (status) => {
 }
 
 const getLabelWidth = (label) => {
-  const charWidth = 14
-  const padding = 16
-  return (label?.length || 4) * charWidth + padding
+  const text = String(label || '未命名')
+  
+  // 创建临时 canvas 测量文字宽度
+  const canvas = document.createElement('canvas')
+  const ctx = canvas.getContext('2d')
+  // 匹配 SVG 中的字体设置
+  ctx.font = '600 13px system-ui, -apple-system, sans-serif'
+  
+  const metrics = ctx.measureText(text)
+  // 实际宽度 + 左右内边距(12px) + 小图标空间(4px)
+  const width = Math.ceil(metrics.width) + 16
+  
+  // 限制最小和最大宽度
+  return Math.max(50, Math.min(200, width))
 }
 
 const mapBackendFile = (backendFile) => {
@@ -1061,13 +1101,14 @@ const loadFolderTasks = async () => {
       const data = await getFolderTasks(currentProject.value.id, 'labeling')
 
       if (data?.tasks) {
-        labelingTasks.value = data.tasks
-        console.log(`[LOAD] 加载到 ${data.tasks.length} 个标注中任务`)
+        // ⚠️ 关键修复：过滤掉 null/undefined 元素
+        labelingTasks.value = data.tasks.filter(t => t && t.task_id && t.file_id)
+        console.log(`[LOAD] 加载到 ${labelingTasks.value.length} 个有效标注中任务`)
 
         const labelingFolder = currentProject.value.folders.find((f) => f.name === '标注中')
         if (labelingFolder) {
           labelingFolder.files.forEach((file) => {
-            const task = data.tasks.find((t) => t.file_id === file.id)
+            const task = labelingTasks.value.find((t) => t.file_id === file.id)
             if (task) {
               file.taskId = task.task_id
               file.taskStatus = task.status
@@ -1080,13 +1121,14 @@ const loadFolderTasks = async () => {
       const data = await getFolderTasks(currentProject.value.id, 'done')
 
       if (data?.tasks) {
-        doneTasks.value = data.tasks
-        console.log(`[LOAD] 加载到 ${data.tasks.length} 个已完成任务`)
+        // ⚠️ 同样过滤 null 元素
+        doneTasks.value = data.tasks.filter(t => t && t.task_id && t.file_id)
+        console.log(`[LOAD] 加载到 ${doneTasks.value.length} 个有效已完成任务`)
 
         const doneFolder = currentProject.value.folders.find((f) => f.name === '已标注')
         if (doneFolder) {
           doneFolder.files.forEach((file) => {
-            const task = data.tasks.find((t) => t.file_id === file.id)
+            const task = doneTasks.value.find((t) => t.file_id === file.id)
             if (task) {
               file.taskId = task.task_id
             }
@@ -1191,19 +1233,6 @@ const isImageFile = (file) => {
   return false
 }
 
-const getFilePreviewUrl = (file) => {
-  if (!isImageFile(file)) return ''
-
-  if (file.file) {
-    if (previewUrlMap.has(file.id)) return previewUrlMap.get(file.id)
-
-    const url = URL.createObjectURL(file.file)
-    previewUrlMap.set(file.id, url)
-    return url
-  }
-
-  return file.previewUrl || file.downloadUrl || ''
-}
 
 const previewFile = (file) => {
   previewFileName.value = file.name || ''
@@ -1246,6 +1275,107 @@ const closePreview = () => {
   previewImageUrl.value = ''
 }
 
+// ============ 性能优化：懒加载与缓存 ============
+
+
+
+// 缓存系统
+const urlCache = new Map()           // URL 缓存
+const imageLoadCache = new Set()     // 已加载图片记录
+const preloadQueue = new Set()       // 预加载队列
+
+// 自定义懒加载指令
+const vLazy = {
+  mounted(el, binding) {
+    const src = binding.value
+    if (!src) return
+    
+    // 设置占位符
+    el.style.opacity = '0'
+    el.style.transition = 'opacity 0.3s'
+    
+    const { stop } = useIntersectionObserver(
+      el,
+      ([{ isIntersecting }]) => {
+        if (isIntersecting) {
+          // 开始加载
+          el.src = src
+          el.onload = () => {
+            el.style.opacity = '1'
+            imageLoadCache.add(el.dataset.fileId)
+          }
+          el.onerror = () => {
+            el.style.opacity = '1'
+            el.src = '' // 显示错误占位
+          }
+          stop()
+        }
+      },
+      { 
+        rootMargin: '100px',  // 提前 100px 开始加载
+        threshold: 0.01 
+      }
+    )
+    
+    el._stopObserver = stop
+  },
+  unmounted(el) {
+    el._stopObserver?.()
+  }
+}
+
+// 优化后的获取预览 URL（带缓存）
+const getFilePreviewUrl = (file) => {
+  if (!isImageFile(file)) return ''
+  
+  const cacheKey = file.id
+  if (urlCache.has(cacheKey)) {
+    return urlCache.get(cacheKey)
+  }
+  
+  let url = ''
+  if (file.file) {
+    if (!previewUrlMap.has(file.id)) {
+      const objectUrl = URL.createObjectURL(file.file)
+      previewUrlMap.set(file.id, objectUrl)
+    }
+    url = previewUrlMap.get(file.id)
+  } else {
+    url = file.previewUrl || file.downloadUrl || ''
+  }
+  
+  // 只缓存非 blob URL（blob URL 需要手动管理生命周期）
+  if (!url.startsWith('blob:')) {
+    urlCache.set(cacheKey, url)
+  }
+  
+  return url
+}
+
+// 预加载下一张图片（用于预览弹窗）
+const preloadNextImage = (currentIndex) => {
+  const nextIndex = currentIndex + 1
+  if (nextIndex >= previewableFiles.value.length) return
+  
+  const nextFile = previewableFiles.value[nextIndex]
+  if (!nextFile || preloadQueue.has(nextFile.id)) return
+  
+  preloadQueue.add(nextFile.id)
+  const img = new Image()
+  img.onload = () => imageLoadCache.add(nextFile.id)
+  img.src = getFilePreviewUrl(nextFile)
+}
+
+// 批量预加载（当前视口附近的图片）
+const batchPreload = (centerIndex, range = 3) => {
+  const files = previewableFiles.value
+  for (let i = centerIndex - range; i <= centerIndex + range; i++) {
+    if (i >= 0 && i < files.length && i !== centerIndex) {
+      preloadNextImage(i - 1)
+    }
+  }
+}
+
 // ============ 标注预览 ============
 
 const getPreviewableFiles = () => {
@@ -1264,6 +1394,8 @@ const loadPreviewData = async (file) => {
   annotationPreviewImageUrl.value = getFilePreviewUrl(file) || file.downloadUrl || ''
   annotationImageLoaded.value = false
   annotationDataSource.value = ''
+  
+  currentPreviewTask.value = null
 
   let annotations = []
   let taskData = null
@@ -1278,21 +1410,27 @@ const loadPreviewData = async (file) => {
     console.log('草稿表查询失败:', e)
   }
 
-  if (annotations.length === 0) {
-    if (isLabelingFolder.value) {
-      taskData = labelingTasks.value.find((t) => t.file_id === file.id)
-    } else if (isDoneFolder.value) {
-      taskData = doneTasks.value.find((t) => t.file_id === file.id)
+  // 标注中文件夹：优先从 labelingTasks 中查找（使用过滤后的列表）
+  if (isLabelingFolder.value) {
+    const validTasks = labelingTasks.value.filter(t => t && t.file_id)
+    taskData = validTasks.find((t) => t.file_id === file.id)
+    if (taskData?.annotations?.length > 0) {
+      annotations = taskData.annotations
+      annotationDataSource.value = '任务'
     }
-
+  } else if (isDoneFolder.value) {
+    const validTasks = doneTasks.value.filter(t => t && t.file_id)
+    taskData = validTasks.find((t) => t.file_id === file.id)
     if (taskData?.annotations?.length > 0) {
       annotations = taskData.annotations
       annotationDataSource.value = '任务'
     }
   }
 
-  if (annotations.length === 0) {
+  // 如果没有找到 taskData，主动从后端获取
+  if (!taskData) {
     try {
+      console.log(`[PREVIEW] 从后端加载任务 | file_id=${file.id}`)
       const data = await getTaskByFileId(currentProject.value.id, file.id)
       if (data?.task) {
         taskData = data.task
@@ -1309,6 +1447,7 @@ const loadPreviewData = async (file) => {
     }
   }
 
+  // 其他本地缓存查找逻辑...
   if (annotations.length === 0) {
     const keys = [
       `annotation_draft_${currentProject.value?.id}_${file.id}`,
@@ -1333,18 +1472,134 @@ const loadPreviewData = async (file) => {
     }
   }
 
-  currentAnnotations.value = annotations.map((anno) => ({
-    x: anno.x || anno.bbox?.[0] || 0,
-    y: anno.y || anno.bbox?.[1] || 0,
-    width: anno.width || anno.bbox?.[2] || 0,
-    height: anno.height || anno.bbox?.[3] || 0,
-    label: anno.label || anno.category || anno.name || '未命名',
-  }))
+  // ========== 关键修复：保留颜色信息 ==========
+currentAnnotations.value = annotations.map((anno) => ({
+  x: anno.x || anno.bbox?.[0] || 0,
+  y: anno.y || anno.bbox?.[1] || 0,
+  width: anno.width || anno.bbox?.[2] || 0,
+  height: anno.height || anno.bbox?.[3] || 0,
+  label: anno.label || anno.category || anno.name || '未命名',
+  color: anno.color || getLabelColor(anno.label), // 优先使用标注自带的颜色
+}))
+
 
   currentPreviewTask.value = taskData
 
   if (currentAnnotations.value.length === 0) {
     console.log(`[PREVIEW] 未找到标注数据 | file_id=${file.id}`)
+  }
+  
+  if (!taskData && isLabelingFolder.value) {
+    console.warn(`[PREVIEW] 警告：标注中文件夹的文件没有对应的 task | file_id=${file.id}`)
+  }
+}
+const getLabelColor = (label) => {
+  if (!label) return '#ff0000'
+  
+  // 与标注页面 useColorManager 保持一致的颜色映射
+  const CATEGORY_COLORS = {
+    // 人物 - 红色系
+    'person': '#ff0000', 'people': '#ff0000', 'man': '#ff0000',
+    'woman': '#ff0000', 'child': '#ff4444', 'pedestrian': '#ff0000',
+    
+    // 交通工具 - 蓝色系  
+    'vehicle': '#0000ff', 'car': '#0000ff', 'truck': '#0000ff',
+    'bus': '#0000ff', 'motorcycle': '#0000ff', 'bicycle': '#0000ff',
+    'van': '#0000ff', 'suv': '#0000ff', 'trailer': '#0000ff',
+    
+    // 动物 - 绿色系
+    'animal': '#00ff00', 'dog': '#00ff00', 'cat': '#00ff00',
+    'bird': '#00ff00', 'horse': '#00ff00', 'sheep': '#00ff00',
+    'cow': '#00ff00', 'zebra': '#ffeb3b', 'giraffe': '#ff9800',
+    'elephant': '#8b4513', 'bear': '#8b4513', 'panda': '#ff69b4',
+    
+    // 其他常见标签（与 useColorManager 一致）
+    'traffic light': '#ffff00', 'stop sign': '#ff8800',
+    'boat': '#00ffff', 'ship': '#00ffff', 'airplane': '#8800ff',
+    'helicopter': '#8800ff', 'train': '#ff00ff',
+    'chair': '#ffaa00', 'sofa': '#ffaa00', 'bed': '#ffaa00',
+    'dining table': '#ffaa00', 'toilet': '#ffaa00', 'tv': '#ffaa00',
+    'laptop': '#ffaa00', 'mouse': '#ffaa00', 'remote': '#ffaa00',
+    'keyboard': '#ffaa00', 'cell phone': '#ffaa00', 'microwave': '#ffaa00',
+    'oven': '#ffaa00', 'toaster': '#ffaa00', 'sink': '#ffaa00',
+    'refrigerator': '#ffaa00', 'book': '#ffaa00', 'clock': '#ffaa00',
+    'vase': '#ffaa00', 'scissors': '#ffaa00', 'teddy bear': '#ffaa00',
+    'hair drier': '#ffaa00', 'toothbrush': '#ffaa00', 'bottle': '#ffaa00',
+    'wine glass': '#ffaa00', 'cup': '#ffaa00', 'fork': '#ffaa00',
+    'knife': '#ffaa00', 'spoon': '#ffaa00', 'bowl': '#ffaa00',
+    'banana': '#ffe135', 'apple': '#ff0000', 'sandwich': '#f5deb3',
+    'orange': '#ffa500', 'broccoli': '#228b22', 'carrot': '#ffa500',
+    'hot dog': '#ff69b4', 'pizza': '#ffd700', 'donut': '#ff69b4',
+    'cake': '#ffb6c1',
+  }
+
+  const lowerLabel = label.toLowerCase()
+  
+  // 精确匹配
+  if (CATEGORY_COLORS[lowerLabel]) {
+    return CATEGORY_COLORS[lowerLabel]
+  }
+  
+  // 包含匹配（如 "red car" 包含 "car"）
+  for (const [keyword, color] of Object.entries(CATEGORY_COLORS)) {
+    if (lowerLabel.includes(keyword)) {
+      return color
+    }
+  }
+  
+  // 回退：使用与 useColorManager 一致的哈希生成
+  const usedColors = Object.values(CATEGORY_COLORS)
+  const COLOR_POOL = [
+    '#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff',
+    '#00ffff', '#ff8800', '#8800ff', '#88ff00', '#ff0088',
+    '#0088ff', '#888888', '#ffaa00', '#aa00ff', '#aaff00',
+    '#ff6600', '#6600ff', '#00ff66', '#ff0066', '#66ff00'
+  ]
+  
+  const availableColors = COLOR_POOL.filter(c => !usedColors.includes(c))
+  
+  if (availableColors.length > 0) {
+    const hash = label.split('').reduce((a, b) => {
+      a = ((a << 5) - a) + b.charCodeAt(0)
+      return a & a
+    }, 0)
+    return availableColors[Math.abs(hash) % availableColors.length]
+  }
+  
+  return '#' + Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0')
+}
+
+// 判断标签是否应该显示在框下方（避免顶部溢出）
+const isLabelBelow = (anno) => {
+  // 如果标注框在图片顶部 30px 以内，标签显示在下方
+  return anno.y < 30
+}
+
+// 获取标签样式（智能定位，避免溢出）
+const getLabelStyle = (anno) => {
+  const isBelow = isLabelBelow(anno)
+  
+  // 计算水平位置，避免左右溢出
+  let leftPercent = (anno.x / annotationImageNaturalWidth.value) * 100
+  
+  // 限制在 2-98% 范围内，避免贴边
+  leftPercent = Math.max(2, Math.min(98, leftPercent))
+  
+  // 计算垂直位置
+  let topPercent
+  if (isBelow) {
+    // 显示在框下方：框底部 + 4px 偏移
+    topPercent = ((anno.y + anno.height + 4) / annotationImageNaturalHeight.value) * 100
+  } else {
+    // 显示在框上方（原逻辑）：框顶部 - 4px
+    topPercent = (Math.max(0, anno.y - 4) / annotationImageNaturalHeight.value) * 100
+  }
+  
+  return {
+    left: `${leftPercent}%`,
+    top: `${topPercent}%`,
+    backgroundColor: anno.color || '#ff0000',
+    transform: isBelow ? 'translateY(0)' : 'translateY(-100%)'
   }
 }
 
@@ -1357,11 +1612,15 @@ const openAnnotationPreview = async (file, index = null) => {
     if (currentPreviewIndex.value === -1) currentPreviewIndex.value = 0
 
     updateContainerSize()
+    
+    // 先加载当前图片
     await loadPreviewData(previewableFiles.value[currentPreviewIndex.value])
-
+    
     annotationPreviewVisible.value = true
 
+    // 预加载相邻图片（关键优化）
     nextTick(() => {
+      batchPreload(currentPreviewIndex.value, 2)
       previewMaskRef.value?.focus()
     })
   } catch (error) {
@@ -1369,7 +1628,6 @@ const openAnnotationPreview = async (file, index = null) => {
     window.alert('加载标注预览失败')
   }
 }
-
 const closeAnnotationPreview = () => {
   annotationPreviewVisible.value = false
   annotationPreviewImageUrl.value = ''
@@ -1457,9 +1715,31 @@ const handleTouchEnd = (e) => {
 }
 
 const continueFromPreview = () => {
-  if (!currentPreviewTask.value) return
+  // 立即捕获当前值，避免竞态条件
+  const task = currentPreviewTask.value
+  
+  if (!task?.task_id) {
+    console.error('[CONTINUE] 无法继续标注：task 为空或缺少 task_id', task)
+    window.alert('无法继续标注：任务信息加载中或不存在，请稍后再试')
+    return
+  }
+  
+  // 使用捕获的 task 继续后续逻辑...
+  const validLabelingTasks = labelingTasks.value.filter(t => t && t.task_id)
+  
+  if (validLabelingTasks.length === 0) {
+    console.error('[CONTINUE] 无法继续标注：没有有效的标注任务')
+    window.alert('无法继续标注：标注任务列表为空，请刷新页面重试')
+    return
+  }
+  
+  const taskExists = validLabelingTasks.some(t => t.task_id === task.task_id)
+  if (!taskExists) {
+    validLabelingTasks.push(task)
+  }
+  
   closeAnnotationPreview()
-  navigateToAnnotate(currentPreviewTask.value, labelingTasks.value)
+  navigateToAnnotate(task, validLabelingTasks)  // 使用捕获的 task
 }
 
 const handleResize = () => {
@@ -1491,17 +1771,20 @@ const loadSingleFileTask = async (file) => {
   try {
     console.log(`[WORK] 加载单个文件任务 | file_id=${file.id}`)
 
-    const cachedTask = labelingTasks.value.find((t) => t.file_id === file.id)
+    // 使用过滤后的列表
+    const validLabelingTasks = labelingTasks.value.filter(t => t && t.file_id)
+    const cachedTask = validLabelingTasks.find((t) => t.file_id === file.id)
+    
     if (cachedTask) {
       console.log(`[WORK] 从缓存找到任务 | task_id=${cachedTask.task_id}`)
-      navigateToAnnotate(cachedTask, labelingTasks.value)
+      navigateToAnnotate(cachedTask, validLabelingTasks)
       return
     }
 
     const data = await getTaskByFileId(currentProject.value.id, file.id)
     if (data?.task) {
       console.log(`[WORK] 从后端获取任务 | task_id=${data.task.task_id}`)
-      navigateToAnnotate(data.task, [data.task])
+      navigateToAnnotate(data.task, [data.task].filter(t => t && t.task_id))
     } else {
       window.alert('该文件暂无标注任务，请先开始标注')
     }
@@ -1512,28 +1795,32 @@ const loadSingleFileTask = async (file) => {
 }
 
 const continueLabeling = () => {
-  if (labelingTasks.value.length === 0) {
+  // 过滤 null 元素
+  const validTasks = labelingTasks.value.filter(t => t && t.task_id)
+  
+  if (validTasks.length === 0) {
     window.alert('暂无标注中的任务')
     return
   }
 
-  const firstTask =
-    labelingTasks.value.find((t) => t.status === 'labeling') || labelingTasks.value[0]
+  const firstTask = validTasks.find((t) => t.status === 'labeling') || validTasks[0]
   console.log(
-    `[CONTINUE] 继续标注 | task_id=${firstTask.task_id}, total=${labelingTasks.value.length}`
+    `[CONTINUE] 继续标注 | task_id=${firstTask.task_id}, total=${validTasks.length}`
   )
 
-  navigateToAnnotate(firstTask, labelingTasks.value)
+  navigateToAnnotate(firstTask, validTasks)
 }
-
 const reviewCompleted = () => {
-  if (doneTasks.value.length === 0) {
+  // 过滤 null 元素
+  const validTasks = doneTasks.value.filter(t => t && t.task_id)
+  
+  if (validTasks.length === 0) {
     window.alert('暂无已标注的文件')
     return
   }
 
-  const firstTask = doneTasks.value[0]
-  navigateToAnnotate(firstTask, doneTasks.value)
+  const firstTask = validTasks[0]
+  navigateToAnnotate(firstTask, validTasks)
 }
 
 const openPendingReviewDialog = async () => {
@@ -1590,17 +1877,22 @@ const viewCompletedAnnotation = async (file) => {
   try {
     console.log(`[VIEW] 查看已完成标注 | file_id=${file.id}`)
 
-    const cachedTask = doneTasks.value.find((t) => t.file_id === file.id)
+    // 使用过滤后的列表
+    const validDoneTasks = doneTasks.value.filter(t => t && t.file_id)
+    const cachedTask = validDoneTasks.find((t) => t.file_id === file.id)
+    
     if (cachedTask) {
       console.log(`[VIEW] 从缓存找到已完成任务 | task_id=${cachedTask.task_id}`)
-      navigateToAnnotate(cachedTask, doneTasks.value)
+      navigateToAnnotate(cachedTask, validDoneTasks.length > 0 ? validDoneTasks : [cachedTask])
       return
     }
 
     const data = await getTaskByFileId(currentProject.value.id, file.id)
     if (data?.task) {
       console.log(`[VIEW] 从后端获取已完成任务 | task_id=${data.task.task_id}`)
-      navigateToAnnotate(data.task, doneTasks.value.length > 0 ? doneTasks.value : [data.task])
+      // 确保传入的数组也经过过滤
+      const taskList = validDoneTasks.length > 0 ? validDoneTasks : [data.task].filter(t => t && t.task_id)
+      navigateToAnnotate(data.task, taskList)
     } else {
       window.alert('该文件暂无标注结果')
     }
@@ -1611,53 +1903,103 @@ const viewCompletedAnnotation = async (file) => {
 }
 
 const navigateToAnnotate = (task, taskList) => {
-  localStorage.setItem(
-    `task_list_${currentProject.value.id}`,
-    JSON.stringify({
-      tasks: taskList,
-      currentIndex: taskList.findIndex((t) => t.task_id === task.task_id),
-      projectId: currentProject.value.id,
-      projectName: currentProject.value.projectName,
-      folderType: currentFolder.value?.name,
-    })
-  )
-
-  if (task.annotations && task.annotations.length > 0) {
-    localStorage.setItem(
-      `pre_annotations_${task.task_id}`,
-      JSON.stringify({
-        annotations: task.annotations,
-        source: 'existing',
-        timestamp: Date.now(),
-      })
-    )
-    console.log(
-      `[NAVIGATE] 保存已有标注到缓存 | task_id=${task.task_id}, 标注数=${task.annotations.length}`
-    )
-  } else if (task.pre_annotations && task.pre_annotations.length > 0) {
-    localStorage.setItem(
-      `pre_annotations_${task.task_id}`,
-      JSON.stringify({
-        annotations: task.pre_annotations,
-        source: 'pre_existing',
-        timestamp: Date.now(),
-      })
-    )
+  // ⚠️ 参数校验 - 确保 task 有效
+  if (!task?.task_id) {
+    console.error('[NAVIGATE] 错误：task 或 task_id 为空', task)
+    window.alert('跳转失败：任务信息不完整')
+    return
+  }
+  
+  if (!currentProject.value?.id) {
+    console.error('[NAVIGATE] 错误：currentProject 为空')
+    window.alert('跳转失败：项目信息丢失，请返回项目列表重试')
+    return
   }
 
-  router.push({
-    path: '/app/annotate',
-    query: {
-      projectId: currentProject.value.id,
-      task: task.task_id,
-      sourceMode: task.use_keywords ? 'keyword' : 'nonKeyword',
-      batchSize: String(taskList.length),
-      projectName: currentProject.value.projectName,
-      taskIndex: String(taskList.findIndex((t) => t.task_id === task.task_id)),
-      totalTasks: String(taskList.length),
-      fromFolder: currentFolder.value?.name || 'unknown',
-    },
-  })
+  // ⚠️ 关键修复：过滤 taskList 中的 null 元素
+  const validTaskList = (taskList || []).filter(t => t && t.task_id)
+  
+  if (validTaskList.length === 0) {
+    console.error('[NAVIGATE] 错误：没有有效的任务列表')
+    window.alert('跳转失败：任务列表为空')
+    return
+  }
+
+  console.log(`[NAVIGATE] 开始跳转 | task_id=${task.task_id}, 有效任务数=${validTaskList.length}`)
+
+  try {
+    // 使用过滤后的列表计算索引
+    const currentIndex = validTaskList.findIndex((t) => t.task_id === task.task_id)
+    
+    if (currentIndex === -1) {
+      console.error('[NAVIGATE] 错误：在当前任务列表中找不到指定任务', task.task_id)
+      window.alert('跳转失败：任务不在当前列表中，请刷新页面重试')
+      return
+    }
+
+    // 保存任务列表（使用过滤后的）
+    localStorage.setItem(
+      `task_list_${currentProject.value.id}`,
+      JSON.stringify({
+        tasks: validTaskList,
+        currentIndex: currentIndex,
+        projectId: currentProject.value.id,
+        projectName: currentProject.value.projectName,
+        folderType: currentFolder.value?.name,
+      })
+    )
+
+    // 保存标注数据
+    if (task.annotations && task.annotations.length > 0) {
+      localStorage.setItem(
+        `pre_annotations_${task.task_id}`,
+        JSON.stringify({
+          annotations: task.annotations,
+          source: 'existing',
+          timestamp: Date.now(),
+        })
+      )
+      console.log(
+        `[NAVIGATE] 保存已有标注到缓存 | task_id=${task.task_id}, 标注数=${task.annotations.length}`
+      )
+    } else if (task.pre_annotations && task.pre_annotations.length > 0) {
+      localStorage.setItem(
+        `pre_annotations_${task.task_id}`,
+        JSON.stringify({
+          annotations: task.pre_annotations,
+          source: 'pre_existing',
+          timestamp: Date.now(),
+        })
+      )
+    }
+
+    // 执行跳转
+    const routeData = {
+      path: '/app/annotate',
+      query: {
+        projectId: currentProject.value.id,
+        task: task.task_id,
+        sourceMode: task.use_keywords ? 'keyword' : 'nonKeyword',
+        batchSize: String(validTaskList.length),
+        projectName: currentProject.value.projectName,
+        taskIndex: String(currentIndex),
+        totalTasks: String(validTaskList.length),
+        fromFolder: currentFolder.value?.name || 'unknown',
+      },
+    }
+    
+    console.log('[NAVIGATE] 路由数据:', routeData)
+    
+    router.push(routeData).catch(err => {
+      console.error('[NAVIGATE] 路由跳转失败:', err)
+      window.alert('页面跳转失败，请检查网络连接或刷新页面重试')
+    })
+    
+    console.log('[NAVIGATE] ========== 流程结束 ==========')
+  } catch (error) {
+    console.error('[NAVIGATE] 跳转过程出错:', error)
+    window.alert('跳转失败：' + (error.message || '未知错误'))
+  }
 }
 
 // ============ 工作弹窗相关 ============
@@ -1675,7 +2017,7 @@ const removeWorkTag = (id) => {
   if (index > -1) workForm.selectedTagIds.splice(index, 1)
 }
 
-const isFileSelected = (fileId) => selectedFileIds.value.includes(fileId)
+
 
 const toggleFileSelection = (fileId) => {
   const index = selectedFileIds.value.indexOf(fileId)
@@ -1739,12 +2081,22 @@ const confirmWorkDialog = async () => {
       use_keywords: workForm.mode === 'keyword',
       keywords,
     })
-    console.log(`[VUE-104] ✅ API调用成功 | tasks=${data.tasks.length}`)
+    console.log(`[VUE-104] ✅ API调用成功 | tasks=${data.tasks?.length || 0}`)
 
-    if (data.tasks && data.tasks.length > 0) {
-      localStorage.setItem(`batch_tasks_${data.project_id}`, JSON.stringify(data.tasks))
+    // ⚠️ 关键修复：过滤 null 元素
+    const rawTasks = data.tasks || []
+    const validTasks = rawTasks.filter(t => t && t.task_id && t.file_id)
+    
+    if (validTasks.length === 0) {
+      console.error('[VUE-104b] ❌ 没有有效的任务返回')
+      window.alert('创建任务失败：后端返回的任务数据无效')
+      return
+    }
 
-      data.tasks.forEach((task) => {
+    if (validTasks.length > 0) {
+      localStorage.setItem(`batch_tasks_${data.project_id}`, JSON.stringify(validTasks))
+
+      validTasks.forEach((task) => {
         if (task.annotations && task.annotations.length > 0) {
           localStorage.setItem(
             `pre_annotations_${task.task_id}`,
@@ -1814,8 +2166,8 @@ const confirmWorkDialog = async () => {
 
     console.log('[VUE-118] 跳转到标注页面')
 
-    const firstTask = data.tasks[0]
-    const taskList = data.tasks.map((t) => ({
+    const firstTask = validTasks[0]
+    const taskList = validTasks.map((t) => ({
       task_id: t.task_id,
       file_id: t.file_id,
       filename: t.filename,
@@ -1827,15 +2179,17 @@ const confirmWorkDialog = async () => {
       keywords: t.keywords,
       annotations: t.annotations || [],
     }))
+    
+    // ⚠️ 再次过滤确保没有 null
+    const finalTaskList = taskList.filter(t => t && t.task_id)
 
-    navigateToAnnotate(firstTask, taskList)
+    navigateToAnnotate(firstTask, finalTaskList)
     console.log('[VUE-119] ========== 流程结束 ==========')
   } catch (error) {
     console.error('[VUE-120] ❌ 创建标注任务失败:', error)
     window.alert(error?.response?.data?.detail || error.message || '创建标注任务失败')
   }
 }
-
 // ============ 项目操作 ============
 
 const openRenameDialog = (project) => {
@@ -2041,6 +2395,18 @@ onBeforeUnmount(() => {
   }
 
   previewUrlMap.forEach((url) => URL.revokeObjectURL(url))
+  previewUrlMap.clear()
+ // 清理 URL 缓存
+  urlCache.clear()
+  imageLoadCache.clear()
+  preloadQueue.clear()
+  
+  // 清理 blob URL
+  previewUrlMap.forEach((url) => {
+    if (url.startsWith('blob:')) {
+      URL.revokeObjectURL(url)
+    }
+  })
   previewUrlMap.clear()
 
   window.removeEventListener('click', handleGlobalClick)
@@ -3334,5 +3700,72 @@ onBeforeUnmount(() => {
   .page-top-actions {
     margin-bottom: 16px;
   }
+}
+/* 添加样式优化 */
+.annotation-overlay text {
+  user-select: none;
+  pointer-events: none;
+}
+.annotation-labels-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* 修改 .annotation-label 移除固定红色背景 */
+.annotation-label {
+  position: absolute;
+  color: white;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: system-ui, -apple-system, sans-serif;
+  white-space: nowrap;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+  transform: translateY(-100%); /* 默认向上 */
+  margin-top: -4px;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.label-text {
+  display: inline-block;
+  line-height: 1.2;
+}
+
+.annotation-label.label-below {
+  transform: translateY(0);
+  margin-top: 4px;
+}
+
+/* 图片加载优化样式 */
+.image-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+  background-size: 200% 100%;
+  animation: loading-shimmer 1.5s infinite;
+}
+
+.image-thumb[src] {
+  animation: none;
+  background: #f8fafc;
+}
+
+@keyframes loading-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* 减少重绘优化 */
+.image-card {
+  contain: layout style paint;
+  content-visibility: auto;
 }
 </style>
