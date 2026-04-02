@@ -294,6 +294,7 @@
               @change="toggleFileSelection(file.id)"
             />
           </label>
+
           <div class="image-card-preview" @click.stop="handleImagePreview(file)">
             <template v-if="isImageFile(file)">
               <img
@@ -304,19 +305,9 @@
                 loading="lazy"
               />
             </template>
-          </div>
-        </div></div
-    ></template>
-  </div>
-</template>
-
-            <template v-else-if="isImageFile(file)">
-  <div class="image-placeholder">图片不可预览</div>
-</template>
-
             <template v-else>
-  <div class="file-placeholder">📄</div>
-</template>
+              <div class="file-placeholder">📄</div>
+            </template>
           </div>
 
           <div class="image-card-info">
@@ -327,51 +318,52 @@
           </div>
 
           <div class="image-card-actions">
-            <!-- 已标注文件夹：只显示查看标注 -->
             <template v-if="isDoneFolder">
-  <button
-    type="button"
-    class="file-action-btn work review-btn"
-    @click.stop="
-      openAnnotationPreview(
-        file,
-        currentFolder.files.findIndex((f) => f.id === file.id)
-      )
-    "
-    style="width: 100%"
-  >
-    🔍 查看标注
-  </button>
-</template>
+              <button
+                type="button"
+                class="file-action-btn work review-btn"
+                @click.stop="
+                  openAnnotationPreview(
+                    file,
+                    currentFolder.files.findIndex((f) => f.id === file.id)
+                  )
+                "
+                style="width: 100%"
+              >
+                🔍 查看标注
+              </button>
+            </template>
 
-            <!-- 标注中文件夹：预览打开大图标注弹窗，工作按钮继续标注 -->
             <template v-else-if="isLabelingFolder">
-  <button
-    type="button"
-    class="file-action-btn preview"
-    @click.stop="
-      openAnnotationPreview(
-        file,
-        currentFolder.files.findIndex((f) => f.id === file.id)
-      )
-    "
-  >
-    🔍 预览标注
-  </button>
-  <button type="button" class="file-action-btn work continue-btn" @click.stop="handleWork(file)">
-    {{ getWorkButtonText }}
-  </button>
-</template>
+              <button
+                type="button"
+                class="file-action-btn preview"
+                @click.stop="
+                  openAnnotationPreview(
+                    file,
+                    currentFolder.files.findIndex((f) => f.id === file.id)
+                  )
+                "
+              >
+                🔍 预览标注
+              </button>
+              <button
+                type="button"
+                class="file-action-btn work continue-btn"
+                @click.stop="handleWork(file)"
+              >
+                {{ getWorkButtonText }}
+              </button>
+            </template>
 
-            <!-- 待标注文件夹：原有逻辑 -->
             <template v-else>
-  <button type="button" class="file-action-btn preview" @click.stop="previewFile(file)">
-    预览
-  </button>
-  <button type="button" class="file-action-btn work" @click.stop="handleWork(file)">
-    {{ getWorkButtonText }}
-  </button>
-</template>
+              <button type="button" class="file-action-btn preview" @click.stop="previewFile(file)">
+                预览
+              </button>
+              <button type="button" class="file-action-btn work" @click.stop="handleWork(file)">
+                {{ getWorkButtonText }}
+              </button>
+            </template>
           </div>
         </div>
       </div>
@@ -454,11 +446,13 @@
                 </div>
               </div>
             </div>
-               <!-- 置信度阈值设置 -->
+            <!-- 置信度阈值设置 -->
             <div class="confidence-section">
               <div class="confidence-header">
                 <span class="confidence-title">🎯 置信度阈值</span>
-                <span class="confidence-value">{{ Math.round(workForm.confidenceThreshold * 100) }}%</span>
+                <span class="confidence-value"
+                  >{{ Math.round(workForm.confidenceThreshold * 100) }}%</span
+                >
               </div>
               <div class="confidence-desc">只保留置信度高于此值的目标检测结果</div>
               <div class="slider-container">
@@ -468,7 +462,7 @@
                   :max="0.95"
                   :step="0.05"
                   :show-tooltip="false"
-                  :marks="{0.25: '25%', 0.5: '50%', 0.75: '75%'}"
+                  :marks="{ 0.25: '25%', 0.5: '50%', 0.75: '75%' }"
                 />
               </div>
               <div class="confidence-hint">
@@ -607,46 +601,44 @@
                   ref="previewImageRef"
                   draggable="false"
                 />
-                  
-                <!-- SVG 标注层 - 与容器完全重叠 -->
-               <!-- 优化后的 SVG 标签渲染 -->
-               <svg
-    v-if="annotationImageLoaded && currentAnnotations.length > 0"
-    class="annotation-overlay"
-    :viewBox="`0 0 ${annotationImageNaturalWidth} ${annotationImageNaturalHeight}`"
-    preserveAspectRatio="none"
-  >
-    <g v-for="(anno, index) in currentAnnotations" :key="`box-${index}`">
-      <rect
-  v-for="(anno, index) in currentAnnotations"
-  :key="`box-${index}`"
-  :x="anno.x"
-  :y="anno.y"
-  :width="anno.width"
-  :height="anno.height"
-  fill="none"
-  :stroke="anno.color || '#ff4444'" 
-  stroke-width="2"
-  rx="2"
-/>
-    </g>
-  </svg>
-   <div
-    v-if="annotationImageLoaded && currentAnnotations.length > 0"
-    class="annotation-labels-layer"
-  >
-    <div
-  v-for="(anno, index) in currentAnnotations"
-  :key="`label-${index}`"
-  class="annotation-label"
-  :class="{ 'label-below': isLabelBelow(anno) }"
-  :style="getLabelStyle(anno)"
->
-  <span class="label-text">{{ anno.label || '未命名' }}</span>
-</div>
- 
-</div>
 
+                <!-- SVG 标注层 - 与容器完全重叠 -->
+                <!-- 优化后的 SVG 标签渲染 -->
+                <svg
+                  v-if="annotationImageLoaded && currentAnnotations.length > 0"
+                  class="annotation-overlay"
+                  :viewBox="`0 0 ${annotationImageNaturalWidth} ${annotationImageNaturalHeight}`"
+                  preserveAspectRatio="none"
+                >
+                  <g v-for="(anno, index) in currentAnnotations" :key="`box-${index}`">
+                    <rect
+                      v-for="(anno, index) in currentAnnotations"
+                      :key="`box-${index}`"
+                      :x="anno.x"
+                      :y="anno.y"
+                      :width="anno.width"
+                      :height="anno.height"
+                      fill="none"
+                      :stroke="anno.color || '#ff4444'"
+                      stroke-width="2"
+                      rx="2"
+                    />
+                  </g>
+                </svg>
+                <div
+                  v-if="annotationImageLoaded && currentAnnotations.length > 0"
+                  class="annotation-labels-layer"
+                >
+                  <div
+                    v-for="(anno, index) in currentAnnotations"
+                    :key="`label-${index}`"
+                    class="annotation-label"
+                    :class="{ 'label-below': isLabelBelow(anno) }"
+                    :style="getLabelStyle(anno)"
+                  >
+                    <span class="label-text">{{ anno.label || '未命名' }}</span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -701,7 +693,10 @@
                   <div class="detail-line">建议：{{ selectedReviewCluster.recommendedAction }}</div>
                   <div class="detail-line">
                     IoU:
-                    {{ selectedReviewCluster.overlay?.fused_preview?.agreement?.mean_pairwise_iou ?? '-' }}
+                    {{
+                      selectedReviewCluster.overlay?.fused_preview?.agreement?.mean_pairwise_iou ??
+                      '-'
+                    }}
                     · Vote:
                     {{ selectedReviewCluster.overlay?.fused_preview?.agreement?.label_vote ?? '-' }}
                   </div>
@@ -716,19 +711,49 @@
                     </div>
                   </div>
                   <div class="decision-actions">
-                    <button type="button" class="mini-btn" @click="applyClusterDecision('adopt_annotator', { annotatorIndex: 0 })">采用A</button>
-                    <button type="button" class="mini-btn" @click="applyClusterDecision('adopt_annotator', { annotatorIndex: 1 })">采用B</button>
-                    <button type="button" class="mini-btn" @click="applyClusterDecision('adopt_annotator', { annotatorIndex: 2 })">采用C</button>
-                    <button type="button" class="mini-btn primary" @click="applyClusterDecision('adopt_fused')">采用融合框</button>
+                    <button
+                      type="button"
+                      class="mini-btn"
+                      @click="applyClusterDecision('adopt_annotator', { annotatorIndex: 0 })"
+                    >
+                      采用A
+                    </button>
+                    <button
+                      type="button"
+                      class="mini-btn"
+                      @click="applyClusterDecision('adopt_annotator', { annotatorIndex: 1 })"
+                    >
+                      采用B
+                    </button>
+                    <button
+                      type="button"
+                      class="mini-btn"
+                      @click="applyClusterDecision('adopt_annotator', { annotatorIndex: 2 })"
+                    >
+                      采用C
+                    </button>
+                    <button
+                      type="button"
+                      class="mini-btn primary"
+                      @click="applyClusterDecision('adopt_fused')"
+                    >
+                      采用融合框
+                    </button>
                   </div>
                 </div>
               </div>
 
               <div class="batch-actions">
                 <span>批量裁决：</span>
-                <button type="button" class="mini-btn" @click="applyBatchBase(0)">全图采用A为基础</button>
-                <button type="button" class="mini-btn" @click="applyBatchBase(1)">全图采用B为基础</button>
-                <button type="button" class="mini-btn" @click="applyBatchBase(2)">全图采用C为基础</button>
+                <button type="button" class="mini-btn" @click="applyBatchBase(0)">
+                  全图采用A为基础
+                </button>
+                <button type="button" class="mini-btn" @click="applyBatchBase(1)">
+                  全图采用B为基础
+                </button>
+                <button type="button" class="mini-btn" @click="applyBatchBase(2)">
+                  全图采用C为基础
+                </button>
               </div>
             </div>
           </div>
@@ -746,119 +771,142 @@
     @close="closePendingReviewDialog"
     @select="openPendingReviewItem"
   />
-   <!-- 数据导出弹窗 -->
-    <teleport to="body">
-      <transition name="preview-fade">
-        <div v-if="exportVisible" class="dialog-mask" @click="closeExportDialog">
-          <div class="dialog-panel export-dialog-panel" @click.stop>
-            <div class="export-dialog-header">
-              <div class="dialog-title">📦 导出标注数据</div>
-              <button class="export-dialog-close" type="button" @click="closeExportDialog">×</button>
-            </div>
+  <!-- 数据导出弹窗 -->
+  <teleport to="body">
+    <transition name="preview-fade">
+      <div v-if="exportVisible" class="dialog-mask" @click="closeExportDialog">
+        <div class="dialog-panel export-dialog-panel" @click.stop>
+          <div class="export-dialog-header">
+            <div class="dialog-title">📦 导出标注数据</div>
+            <button class="export-dialog-close" type="button" @click="closeExportDialog">×</button>
+          </div>
 
-            <div class="dialog-body export-dialog-body">
-              <div class="export-summary">
-                <span class="export-count">共 {{ selectedFilesForExport.length }} 个文件待导出</span>
-                <span v-if="selectedFilesForExport.length === 0" class="export-hint">将导出文件夹内所有已标注文件</span>
-              </div>
-
-              <!-- 导出格式选择 -->
-              <div class="export-format-section">
-                <div class="section-title">选择导出格式</div>
-                <div class="format-options">
-                  <label 
-                    v-for="format in exportFormats" 
-                    :key="format.id"
-                    class="format-option"
-                    :class="{ active: selectedExportFormat === format.id }"
-                    @click="selectedExportFormat = format.id"
-                  >
-                    <div class="format-icon">{{ format.icon }}</div>
-                    <div class="format-info">
-                      <div class="format-name">{{ format.name }}</div>
-                      <div class="format-desc">{{ format.description }}</div>
-                    </div>
-                    <div class="format-check">
-                      <span class="check-circle" :class="{ checked: selectedExportFormat === format.id }"></span>
-                    </div>
-                  </label>
-                </div>
-              </div>
-
-              <!-- 导出选项 -->
-              <div class="export-options-section">
-                <div class="section-title">导出选项</div>
-                
-                <label class="option-item">
-                  <input type="checkbox" v-model="exportOptions.includeImages" />
-                  <span class="option-text">包含原始图片文件</span>
-                </label>
-
-                <label class="option-item">
-                  <input type="checkbox" v-model="exportOptions.includeYaml" />
-                  <span class="option-text">生成数据集配置文件 (data.yaml)</span>
-                </label>
-
-                <label class="option-item" v-if="selectedExportFormat === 'yolo'">
-                  <input type="checkbox" v-model="exportOptions.normalizeCoordinates" />
-                  <span class="option-text">归一化坐标 (YOLO标准格式)</span>
-                </label>
-
-                <label class="option-item">
-                  <input type="checkbox" v-model="exportOptions.splitDataset" />
-                  <span class="option-text">自动划分训练/验证/测试集</span>
-                </label>
-
-                <div v-if="exportOptions.splitDataset" class="split-ratio-inputs">
-                  <div class="ratio-item">
-                    <label>训练集</label>
-                    <input type="number" v-model.number="exportOptions.trainRatio" min="0" max="1" step="0.1" />
-                    <span>%</span>
-                  </div>
-                  <div class="ratio-item">
-                    <label>验证集</label>
-                    <input type="number" v-model.number="exportOptions.valRatio" min="0" max="1" step="0.1" />
-                    <span>%</span>
-                  </div>
-                  <div class="ratio-item">
-                    <label>测试集</label>
-                    <input type="number" v-model.number="exportOptions.testRatio" min="0" max="1" step="0.1" />
-                    <span>%</span>
-                  </div>
-                </div>
-              </div>
-
-              <!-- 类别映射 -->
-              <div class="class-mapping-section">
-                <div class="section-title">类别映射</div>
-                <div class="class-mapping-hint">系统将自动检测标注中的类别并生成映射表</div>
-                <div v-if="detectedClasses.length > 0" class="detected-classes">
-                  <div v-for="(cls, idx) in detectedClasses" :key="cls" class="class-item">
-                    <span class="class-id">{{ idx }}</span>
-                    <span class="class-name">{{ cls }}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div class="dialog-footer export-footer">
-              <button class="dialog-btn secondary" type="button" @click="closeExportDialog">
-                取消
-              </button>
-              <button 
-                class="dialog-btn primary export-btn" 
-                type="button" 
-                @click="confirmExport"
-                :disabled="isExporting"
+          <div class="dialog-body export-dialog-body">
+            <div class="export-summary">
+              <span class="export-count">共 {{ selectedFilesForExport.length }} 个文件待导出</span>
+              <span v-if="selectedFilesForExport.length === 0" class="export-hint"
+                >将导出文件夹内所有已标注文件</span
               >
-                <span v-if="isExporting">⏳ 正在打包...</span>
-                <span v-else>📥 确认导出</span>
-              </button>
+            </div>
+
+            <!-- 导出格式选择 -->
+            <div class="export-format-section">
+              <div class="section-title">选择导出格式</div>
+              <div class="format-options">
+                <label
+                  v-for="format in exportFormats"
+                  :key="format.id"
+                  class="format-option"
+                  :class="{ active: selectedExportFormat === format.id }"
+                  @click="selectedExportFormat = format.id"
+                >
+                  <div class="format-icon">{{ format.icon }}</div>
+                  <div class="format-info">
+                    <div class="format-name">{{ format.name }}</div>
+                    <div class="format-desc">{{ format.description }}</div>
+                  </div>
+                  <div class="format-check">
+                    <span
+                      class="check-circle"
+                      :class="{ checked: selectedExportFormat === format.id }"
+                    ></span>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            <!-- 导出选项 -->
+            <div class="export-options-section">
+              <div class="section-title">导出选项</div>
+
+              <label class="option-item">
+                <input type="checkbox" v-model="exportOptions.includeImages" />
+                <span class="option-text">包含原始图片文件</span>
+              </label>
+
+              <label class="option-item">
+                <input type="checkbox" v-model="exportOptions.includeYaml" />
+                <span class="option-text">生成数据集配置文件 (data.yaml)</span>
+              </label>
+
+              <label class="option-item" v-if="selectedExportFormat === 'yolo'">
+                <input type="checkbox" v-model="exportOptions.normalizeCoordinates" />
+                <span class="option-text">归一化坐标 (YOLO标准格式)</span>
+              </label>
+
+              <label class="option-item">
+                <input type="checkbox" v-model="exportOptions.splitDataset" />
+                <span class="option-text">自动划分训练/验证/测试集</span>
+              </label>
+
+              <div v-if="exportOptions.splitDataset" class="split-ratio-inputs">
+                <div class="ratio-item">
+                  <label>训练集</label>
+                  <input
+                    type="number"
+                    v-model.number="exportOptions.trainRatio"
+                    min="0"
+                    max="1"
+                    step="0.1"
+                  />
+                  <span>%</span>
+                </div>
+                <div class="ratio-item">
+                  <label>验证集</label>
+                  <input
+                    type="number"
+                    v-model.number="exportOptions.valRatio"
+                    min="0"
+                    max="1"
+                    step="0.1"
+                  />
+                  <span>%</span>
+                </div>
+                <div class="ratio-item">
+                  <label>测试集</label>
+                  <input
+                    type="number"
+                    v-model.number="exportOptions.testRatio"
+                    min="0"
+                    max="1"
+                    step="0.1"
+                  />
+                  <span>%</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 类别映射 -->
+            <div class="class-mapping-section">
+              <div class="section-title">类别映射</div>
+              <div class="class-mapping-hint">系统将自动检测标注中的类别并生成映射表</div>
+              <div v-if="detectedClasses.length > 0" class="detected-classes">
+                <div v-for="(cls, idx) in detectedClasses" :key="cls" class="class-item">
+                  <span class="class-id">{{ idx }}</span>
+                  <span class="class-name">{{ cls }}</span>
+                </div>
+              </div>
             </div>
           </div>
+
+          <div class="dialog-footer export-footer">
+            <button class="dialog-btn secondary" type="button" @click="closeExportDialog">
+              取消
+            </button>
+            <button
+              class="dialog-btn primary export-btn"
+              type="button"
+              @click="confirmExport"
+              :disabled="isExporting"
+            >
+              <span v-if="isExporting">⏳ 正在打包...</span>
+              <span v-else>📥 确认导出</span>
+            </button>
+          </div>
         </div>
-      </transition>
-    </teleport>
+      </div>
+    </transition>
+  </teleport>
 </template>
 
 <script setup>
@@ -883,7 +931,6 @@ import {
 import { useUserStore } from '@/stores/user'
 import JSZip from 'jszip' // 需要安装: npm install jszip
 import { saveAs } from 'file-saver' // 需要安装: npm install file-saver
-
 
 // ============ 基础状态 ============
 
@@ -911,7 +958,7 @@ const currentWorkFileId = ref(null)
 const workForm = reactive({
   mode: 'keyword',
   selectedTagIds: [],
-   confidenceThreshold: 0.25, 
+  confidenceThreshold: 0.25,
 })
 const selectedFileIds = ref([])
 
@@ -1014,7 +1061,6 @@ const scenes = ref([
   },
 ])
 
-
 // ============ 数据导出相关状态 ============
 const exportVisible = ref(false)
 const selectedExportFormat = ref('yolo')
@@ -1028,22 +1074,22 @@ const exportFormats = [
     name: 'YOLO 格式',
     icon: '📄',
     description: 'TXT文件，每行: <class_id> <x_center> <y_center> <width> <height>',
-    extension: 'txt'
+    extension: 'txt',
   },
   {
     id: 'coco',
     name: 'COCO JSON',
     icon: '📋',
     description: '单个JSON文件，包含所有图像和标注信息',
-    extension: 'json'
+    extension: 'json',
   },
   {
     id: 'voc',
     name: 'PASCAL VOC',
     icon: '📑',
     description: 'XML文件，每图一个标注文件',
-    extension: 'xml'
-  }
+    extension: 'xml',
+  },
 ]
 
 // 导出选项
@@ -1054,13 +1100,13 @@ const exportOptions = reactive({
   splitDataset: false,
   trainRatio: 0.7,
   valRatio: 0.2,
-  testRatio: 0.1
+  testRatio: 0.1,
 })
 
 // 待导出的文件列表（优先使用选中的，否则使用全部）
 const selectedFilesForExport = computed(() => {
   if (selectedFileIds.value.length > 0) {
-    return currentFolder.value?.files.filter(f => selectedFileIds.value.includes(f.id)) || []
+    return currentFolder.value?.files.filter((f) => selectedFileIds.value.includes(f.id)) || []
   }
   return currentFolder.value?.files || []
 })
@@ -1071,7 +1117,7 @@ const openExportDialog = async () => {
   exportVisible.value = true
   selectedExportFormat.value = 'yolo'
   isExporting.value = false
-  
+
   // 自动检测类别
   await detectClasses()
 }
@@ -1085,12 +1131,12 @@ const closeExportDialog = () => {
 const detectClasses = async () => {
   const classes = new Set()
   const files = selectedFilesForExport.value
-  
+
   for (const file of files) {
     try {
       const task = await getTaskByFileId(currentProject.value.id, file.id)
       if (task?.task?.annotations) {
-        task.task.annotations.forEach(anno => {
+        task.task.annotations.forEach((anno) => {
           const label = anno.label || anno.category || 'unknown'
           classes.add(label)
         })
@@ -1099,7 +1145,7 @@ const detectClasses = async () => {
       console.log('获取任务失败:', file.id)
     }
   }
-  
+
   detectedClasses.value = Array.from(classes).sort()
 }
 
@@ -1111,12 +1157,12 @@ const confirmExport = async () => {
   }
 
   isExporting.value = true
-  
+
   try {
     const zip = new JSZip()
     const format = selectedExportFormat.value
     const files = selectedFilesForExport.value
-    
+
     // 根据格式导出
     switch (format) {
       case 'yolo':
@@ -1129,13 +1175,13 @@ const confirmExport = async () => {
         await exportVOCFormat(zip, files)
         break
     }
-    
+
     // 生成并下载zip文件
     const content = await zip.generateAsync({ type: 'blob' })
     const projectName = currentProject.value?.projectName || 'project'
     const timestamp = new Date().toISOString().slice(0, 10)
     saveAs(content, `${projectName}_annotations_${format}_${timestamp}.zip`)
-    
+
     closeExportDialog()
   } catch (error) {
     console.error('导出失败:', error)
@@ -1150,28 +1196,28 @@ const exportYOLOFormat = async (zip, files) => {
   const labelsFolder = zip.folder('labels')
   const imagesFolder = zip.folder('images')
   const classMap = {}
-  
+
   // 构建类别映射
   detectedClasses.value.forEach((cls, idx) => {
     classMap[cls] = idx
   })
-  
+
   // 处理每个文件
   for (const file of files) {
     try {
       const taskData = await getTaskByFileId(currentProject.value.id, file.id)
       if (!taskData?.task?.annotations) continue
-      
+
       const annotations = taskData.task.annotations
       const baseName = file.name.replace(/\.[^/.]+$/, '')
-      
+
       // 生成YOLO格式标注
-      const yoloLines = annotations.map(anno => {
+      const yoloLines = annotations.map((anno) => {
         const label = anno.label || anno.category || 'unknown'
         const classId = classMap[label] || 0
-        
+
         let x, y, w, h
-        
+
         if (exportOptions.normalizeCoordinates) {
           // 归一化坐标 (YOLO标准)
           const imgWidth = anno.image_width || 1920
@@ -1187,13 +1233,13 @@ const exportYOLOFormat = async (zip, files) => {
           w = anno.width
           h = anno.height
         }
-        
+
         return `${classId} ${x.toFixed(6)} ${y.toFixed(6)} ${w.toFixed(6)} ${h.toFixed(6)}`
       })
-      
+
       // 保存标注文件
       labelsFolder.file(`${baseName}.txt`, yoloLines.join('\n'))
-      
+
       // 下载并保存图片
       if (exportOptions.includeImages) {
         try {
@@ -1208,13 +1254,13 @@ const exportYOLOFormat = async (zip, files) => {
       console.log('处理文件失败:', file.name, e)
     }
   }
-  
+
   // 生成data.yaml
   if (exportOptions.includeYaml) {
     const yamlContent = generateDataYaml(detectedClasses.value)
     zip.file('data.yaml', yamlContent)
   }
-  
+
   // 生成类别映射文件
   const classNamesContent = detectedClasses.value.map((cls, idx) => `${idx}: ${cls}`).join('\n')
   zip.file('classes.txt', classNamesContent)
@@ -1228,7 +1274,7 @@ const exportCOCOFormat = async (zip, files) => {
       version: '1.0',
       year: new Date().getFullYear(),
       contributor: 'Annotation Platform',
-      date_created: new Date().toISOString()
+      date_created: new Date().toISOString(),
     },
     licenses: [{ id: 1, name: 'Unknown', url: '' }],
     images: [],
@@ -1236,41 +1282,41 @@ const exportCOCOFormat = async (zip, files) => {
     categories: detectedClasses.value.map((cls, idx) => ({
       id: idx,
       name: cls,
-      supercategory: 'object'
-    }))
+      supercategory: 'object',
+    })),
   }
-  
+
   let annotationId = 1
   const classMap = {}
   detectedClasses.value.forEach((cls, idx) => {
     classMap[cls] = idx
   })
-  
+
   const imagesFolder = zip.folder('images')
-  
+
   for (let i = 0; i < files.length; i++) {
     const file = files[i]
     try {
       const taskData = await getTaskByFileId(currentProject.value.id, file.id)
       if (!taskData?.task?.annotations) continue
-      
+
       const annotations = taskData.task.annotations
       const imageId = i + 1
-      
+
       // 添加图像信息
       cocoData.images.push({
         id: imageId,
         file_name: file.name,
         height: annotations[0]?.image_height || 1080,
         width: annotations[0]?.image_width || 1920,
-        date_captured: new Date().toISOString()
+        date_captured: new Date().toISOString(),
       })
-      
+
       // 添加标注信息
-      annotations.forEach(anno => {
+      annotations.forEach((anno) => {
         const label = anno.label || anno.category || 'unknown'
         const categoryId = classMap[label] || 0
-        
+
         cocoData.annotations.push({
           id: annotationId++,
           image_id: imageId,
@@ -1278,10 +1324,10 @@ const exportCOCOFormat = async (zip, files) => {
           bbox: [anno.x, anno.y, anno.width, anno.height],
           area: anno.width * anno.height,
           segmentation: [],
-          iscrowd: 0
+          iscrowd: 0,
         })
       })
-      
+
       // 下载图片
       if (exportOptions.includeImages) {
         try {
@@ -1296,7 +1342,7 @@ const exportCOCOFormat = async (zip, files) => {
       console.log('处理文件失败:', file.name)
     }
   }
-  
+
   // 保存COCO JSON
   zip.file('annotations.json', JSON.stringify(cocoData, null, 2))
 }
@@ -1305,21 +1351,21 @@ const exportCOCOFormat = async (zip, files) => {
 const exportVOCFormat = async (zip, files) => {
   const annotationsFolder = zip.folder('Annotations')
   const imagesFolder = zip.folder('JPEGImages')
-  
+
   for (const file of files) {
     try {
       const taskData = await getTaskByFileId(currentProject.value.id, file.id)
       if (!taskData?.task?.annotations) continue
-      
+
       const annotations = taskData.task.annotations
       const baseName = file.name.replace(/\.[^/.]+$/, '')
       const imgWidth = annotations[0]?.image_width || 1920
       const imgHeight = annotations[0]?.image_height || 1080
-      
+
       // 生成VOC XML
       const xmlContent = generateVOCXml(baseName, imgWidth, imgHeight, annotations)
       annotationsFolder.file(`${baseName}.xml`, xmlContent)
-      
+
       // 下载图片
       if (exportOptions.includeImages) {
         try {
@@ -1351,15 +1397,16 @@ val: images/val
 test: images/test
 
 nc: ${classes.length}
-names: [${classes.map(c => `'${c}'`).join(', ')}]
+names: [${classes.map((c) => `'${c}'`).join(', ')}]
 `
 }
 
 // 生成VOC XML
 const generateVOCXml = (filename, width, height, annotations) => {
-  const objects = annotations.map(anno => {
-    const label = anno.label || anno.category || 'unknown'
-    return `
+  const objects = annotations
+    .map((anno) => {
+      const label = anno.label || anno.category || 'unknown'
+      return `
   <object>
     <name>${label}</name>
     <pose>Unspecified</pose>
@@ -1372,8 +1419,9 @@ const generateVOCXml = (filename, width, height, annotations) => {
       <ymax>${Math.round(anno.y + anno.height)}</ymax>
     </bndbox>
   </object>`
-  }).join('')
-  
+    })
+    .join('')
+
   return `<?xml version="1.0" encoding="UTF-8"?>
 <annotation>
   <folder>VOC2007</folder>
@@ -1481,7 +1529,7 @@ const isFileSelected = (fileId) => selectedFileIdSet.value.has(fileId)
 // 优化：文件状态映射缓存
 const fileStatusMap = computed(() => {
   const map = new Map()
-  currentFolder.value?.files.forEach(file => {
+  currentFolder.value?.files.forEach((file) => {
     map.set(file.id, file.status)
   })
   return map
@@ -1610,17 +1658,17 @@ const getStatusText = (status) => {
 
 const getLabelWidth = (label) => {
   const text = String(label || '未命名')
-  
+
   // 创建临时 canvas 测量文字宽度
   const canvas = document.createElement('canvas')
   const ctx = canvas.getContext('2d')
   // 匹配 SVG 中的字体设置
   ctx.font = '600 13px system-ui, -apple-system, sans-serif'
-  
+
   const metrics = ctx.measureText(text)
   // 实际宽度 + 左右内边距(12px) + 小图标空间(4px)
   const width = Math.ceil(metrics.width) + 16
-  
+
   // 限制最小和最大宽度
   return Math.max(50, Math.min(200, width))
 }
@@ -1722,7 +1770,7 @@ const loadFolderTasks = async () => {
 
       if (data?.tasks) {
         // ⚠️ 关键修复：过滤掉 null/undefined 元素
-        labelingTasks.value = data.tasks.filter(t => t && t.task_id && t.file_id)
+        labelingTasks.value = data.tasks.filter((t) => t && t.task_id && t.file_id)
         console.log(`[LOAD] 加载到 ${labelingTasks.value.length} 个有效标注中任务`)
 
         const labelingFolder = currentProject.value.folders.find((f) => f.name === '标注中')
@@ -1742,7 +1790,7 @@ const loadFolderTasks = async () => {
 
       if (data?.tasks) {
         // ⚠️ 同样过滤 null 元素
-        doneTasks.value = data.tasks.filter(t => t && t.task_id && t.file_id)
+        doneTasks.value = data.tasks.filter((t) => t && t.task_id && t.file_id)
         console.log(`[LOAD] 加载到 ${doneTasks.value.length} 个有效已完成任务`)
 
         const doneFolder = currentProject.value.folders.find((f) => f.name === '已标注')
@@ -1853,7 +1901,6 @@ const isImageFile = (file) => {
   return false
 }
 
-
 const previewFile = (file) => {
   previewFileName.value = file.name || ''
 
@@ -1897,23 +1944,21 @@ const closePreview = () => {
 
 // ============ 性能优化：懒加载与缓存 ============
 
-
-
 // 缓存系统
-const urlCache = new Map()           // URL 缓存
-const imageLoadCache = new Set()     // 已加载图片记录
-const preloadQueue = new Set()       // 预加载队列
+const urlCache = new Map() // URL 缓存
+const imageLoadCache = new Set() // 已加载图片记录
+const preloadQueue = new Set() // 预加载队列
 
 // 自定义懒加载指令
 const vLazy = {
   mounted(el, binding) {
     const src = binding.value
     if (!src) return
-    
+
     // 设置占位符
     el.style.opacity = '0'
     el.style.transition = 'opacity 0.3s'
-    
+
     const { stop } = useIntersectionObserver(
       el,
       ([{ isIntersecting }]) => {
@@ -1931,28 +1976,28 @@ const vLazy = {
           stop()
         }
       },
-      { 
-        rootMargin: '100px',  // 提前 100px 开始加载
-        threshold: 0.01 
+      {
+        rootMargin: '100px', // 提前 100px 开始加载
+        threshold: 0.01,
       }
     )
-    
+
     el._stopObserver = stop
   },
   unmounted(el) {
     el._stopObserver?.()
-  }
+  },
 }
 
 // 优化后的获取预览 URL（带缓存）
 const getFilePreviewUrl = (file) => {
   if (!isImageFile(file)) return ''
-  
+
   const cacheKey = file.id
   if (urlCache.has(cacheKey)) {
     return urlCache.get(cacheKey)
   }
-  
+
   let url = ''
   if (file.file) {
     if (!previewUrlMap.has(file.id)) {
@@ -1963,12 +2008,12 @@ const getFilePreviewUrl = (file) => {
   } else {
     url = file.previewUrl || file.downloadUrl || ''
   }
-  
+
   // 只缓存非 blob URL（blob URL 需要手动管理生命周期）
   if (!url.startsWith('blob:')) {
     urlCache.set(cacheKey, url)
   }
-  
+
   return url
 }
 
@@ -1976,10 +2021,10 @@ const getFilePreviewUrl = (file) => {
 const preloadNextImage = (currentIndex) => {
   const nextIndex = currentIndex + 1
   if (nextIndex >= previewableFiles.value.length) return
-  
+
   const nextFile = previewableFiles.value[nextIndex]
   if (!nextFile || preloadQueue.has(nextFile.id)) return
-  
+
   preloadQueue.add(nextFile.id)
   const img = new Image()
   img.onload = () => imageLoadCache.add(nextFile.id)
@@ -2014,11 +2059,10 @@ const loadPreviewData = async (file) => {
   annotationPreviewImageUrl.value = getFilePreviewUrl(file) || file.downloadUrl || ''
   annotationImageLoaded.value = false
   annotationDataSource.value = ''
-  
+
   currentPreviewTask.value = null
   selectedReviewCluster.value = null
   reviewDecisionLog.value = []
-
 
   let annotations = []
   let taskData = null
@@ -2035,14 +2079,14 @@ const loadPreviewData = async (file) => {
 
   // 标注中文件夹：优先从 labelingTasks 中查找（使用过滤后的列表）
   if (isLabelingFolder.value) {
-    const validTasks = labelingTasks.value.filter(t => t && t.file_id)
+    const validTasks = labelingTasks.value.filter((t) => t && t.file_id)
     taskData = validTasks.find((t) => t.file_id === file.id)
     if (taskData?.annotations?.length > 0) {
       annotations = taskData.annotations
       annotationDataSource.value = '任务'
     }
   } else if (isDoneFolder.value) {
-    const validTasks = doneTasks.value.filter(t => t && t.file_id)
+    const validTasks = doneTasks.value.filter((t) => t && t.file_id)
     taskData = validTasks.find((t) => t.file_id === file.id)
     if (taskData?.annotations?.length > 0) {
       annotations = taskData.annotations
@@ -2096,15 +2140,14 @@ const loadPreviewData = async (file) => {
   }
 
   // ========== 关键修复：保留颜色信息 ==========
-currentAnnotations.value = annotations.map((anno) => ({
-  x: anno.x || anno.bbox?.[0] || 0,
-  y: anno.y || anno.bbox?.[1] || 0,
-  width: anno.width || anno.bbox?.[2] || 0,
-  height: anno.height || anno.bbox?.[3] || 0,
-  label: anno.label || anno.category || anno.name || '未命名',
- color: getLabelColor(anno.label || anno.category || anno.name), // 优先使用标注自带的颜色
-}))
-
+  currentAnnotations.value = annotations.map((anno) => ({
+    x: anno.x || anno.bbox?.[0] || 0,
+    y: anno.y || anno.bbox?.[1] || 0,
+    width: anno.width || anno.bbox?.[2] || 0,
+    height: anno.height || anno.bbox?.[3] || 0,
+    label: anno.label || anno.category || anno.name || '未命名',
+    color: getLabelColor(anno.label || anno.category || anno.name), // 优先使用标注自带的颜色
+  }))
 
   currentPreviewTask.value = taskData
   if (taskData?.collaboration_integration) {
@@ -2116,7 +2159,7 @@ currentAnnotations.value = annotations.map((anno) => ({
   if (currentAnnotations.value.length === 0) {
     console.log(`[PREVIEW] 未找到标注数据 | file_id=${file.id}`)
   }
-  
+
   if (!taskData && isLabelingFolder.value) {
     console.warn(`[PREVIEW] 警告：标注中文件夹的文件没有对应的 task | file_id=${file.id}`)
   }
@@ -2164,7 +2207,9 @@ const applyClusterDecision = (action, payload = {}) => {
 const applyBatchBase = (annotatorIndex) => {
   const items = displayedReviewItems.value
   items.forEach((item) => {
-    const member = (item.overlay?.member_boxes || []).find((box) => box.annotator_index === annotatorIndex)
+    const member = (item.overlay?.member_boxes || []).find(
+      (box) => box.annotator_index === annotatorIndex
+    )
     if (!member) return
     currentAnnotations.value.push({
       x: member.x || 0,
@@ -2178,78 +2223,147 @@ const applyBatchBase = (annotatorIndex) => {
 }
 const getLabelColor = (label) => {
   if (!label) return '#ff0000'
-  
+
   // 与标注页面 useColorManager 保持一致的颜色映射
   const CATEGORY_COLORS = {
     // 人物 - 红色系
-    'person': '#ff0000', 'people': '#ff0000', 'man': '#ff0000',
-    'woman': '#ff0000', 'child': '#ff4444', 'pedestrian': '#ff0000',
-    
-    // 交通工具 - 蓝色系  
-    'vehicle': '#0000ff', 'car': '#0000ff', 'truck': '#0000ff',
-    'bus': '#0000ff', 'motorcycle': '#0000ff', 'bicycle': '#0000ff',
-    'van': '#0000ff', 'suv': '#0000ff', 'trailer': '#0000ff',
-    
+    person: '#ff0000',
+    people: '#ff0000',
+    man: '#ff0000',
+    woman: '#ff0000',
+    child: '#ff4444',
+    pedestrian: '#ff0000',
+
+    // 交通工具 - 蓝色系
+    vehicle: '#0000ff',
+    car: '#0000ff',
+    truck: '#0000ff',
+    bus: '#0000ff',
+    motorcycle: '#0000ff',
+    bicycle: '#0000ff',
+    van: '#0000ff',
+    suv: '#0000ff',
+    trailer: '#0000ff',
+
     // 动物 - 绿色系
-    'animal': '#00ff00', 'dog': '#00ff00', 'cat': '#00ff00',
-    'bird': '#00ff00', 'horse': '#00ff00', 'sheep': '#00ff00',
-    'cow': '#00ff00', 'zebra': '#ffeb3b', 'giraffe': '#ff9800',
-    'elephant': '#8b4513', 'bear': '#8b4513', 'panda': '#ff69b4',
-    
+    animal: '#00ff00',
+    dog: '#00ff00',
+    cat: '#00ff00',
+    bird: '#00ff00',
+    horse: '#00ff00',
+    sheep: '#00ff00',
+    cow: '#00ff00',
+    zebra: '#ffeb3b',
+    giraffe: '#ff9800',
+    elephant: '#8b4513',
+    bear: '#8b4513',
+    panda: '#ff69b4',
+
     // 其他常见标签（与 useColorManager 一致）
-    'traffic light': '#ffff00', 'stop sign': '#ff8800',
-    'boat': '#00ffff', 'ship': '#00ffff', 'airplane': '#8800ff',
-    'helicopter': '#8800ff', 'train': '#ff00ff',
-    'chair': '#ffaa00', 'sofa': '#ffaa00', 'bed': '#ffaa00',
-    'dining table': '#ffaa00', 'toilet': '#ffaa00', 'tv': '#ffaa00',
-    'laptop': '#ffaa00', 'mouse': '#ffaa00', 'remote': '#ffaa00',
-    'keyboard': '#ffaa00', 'cell phone': '#ffaa00', 'microwave': '#ffaa00',
-    'oven': '#ffaa00', 'toaster': '#ffaa00', 'sink': '#ffaa00',
-    'refrigerator': '#ffaa00', 'book': '#ffaa00', 'clock': '#ffaa00',
-    'vase': '#ffaa00', 'scissors': '#ffaa00', 'teddy bear': '#ffaa00',
-    'hair drier': '#ffaa00', 'toothbrush': '#ffaa00', 'bottle': '#ffaa00',
-    'wine glass': '#ffaa00', 'cup': '#ffaa00', 'fork': '#ffaa00',
-    'knife': '#ffaa00', 'spoon': '#ffaa00', 'bowl': '#ffaa00',
-    'banana': '#ffe135', 'apple': '#ff0000', 'sandwich': '#f5deb3',
-    'orange': '#ffa500', 'broccoli': '#228b22', 'carrot': '#ffa500',
-    'hot dog': '#ff69b4', 'pizza': '#ffd700', 'donut': '#ff69b4',
-    'cake': '#ffb6c1',
+    'traffic light': '#ffff00',
+    'stop sign': '#ff8800',
+    boat: '#00ffff',
+    ship: '#00ffff',
+    airplane: '#8800ff',
+    helicopter: '#8800ff',
+    train: '#ff00ff',
+    chair: '#ffaa00',
+    sofa: '#ffaa00',
+    bed: '#ffaa00',
+    'dining table': '#ffaa00',
+    toilet: '#ffaa00',
+    tv: '#ffaa00',
+    laptop: '#ffaa00',
+    mouse: '#ffaa00',
+    remote: '#ffaa00',
+    keyboard: '#ffaa00',
+    'cell phone': '#ffaa00',
+    microwave: '#ffaa00',
+    oven: '#ffaa00',
+    toaster: '#ffaa00',
+    sink: '#ffaa00',
+    refrigerator: '#ffaa00',
+    book: '#ffaa00',
+    clock: '#ffaa00',
+    vase: '#ffaa00',
+    scissors: '#ffaa00',
+    'teddy bear': '#ffaa00',
+    'hair drier': '#ffaa00',
+    toothbrush: '#ffaa00',
+    bottle: '#ffaa00',
+    'wine glass': '#ffaa00',
+    cup: '#ffaa00',
+    fork: '#ffaa00',
+    knife: '#ffaa00',
+    spoon: '#ffaa00',
+    bowl: '#ffaa00',
+    banana: '#ffe135',
+    apple: '#ff0000',
+    sandwich: '#f5deb3',
+    orange: '#ffa500',
+    broccoli: '#228b22',
+    carrot: '#ffa500',
+    'hot dog': '#ff69b4',
+    pizza: '#ffd700',
+    donut: '#ff69b4',
+    cake: '#ffb6c1',
   }
 
   const lowerLabel = label.toLowerCase()
-  
+
   // 精确匹配
   if (CATEGORY_COLORS[lowerLabel]) {
     return CATEGORY_COLORS[lowerLabel]
   }
-  
+
   // 包含匹配（如 "red car" 包含 "car"）
   for (const [keyword, color] of Object.entries(CATEGORY_COLORS)) {
     if (lowerLabel.includes(keyword)) {
       return color
     }
   }
-  
+
   // 回退：使用与 useColorManager 一致的哈希生成
   const usedColors = Object.values(CATEGORY_COLORS)
   const COLOR_POOL = [
-    '#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff',
-    '#00ffff', '#ff8800', '#8800ff', '#88ff00', '#ff0088',
-    '#0088ff', '#888888', '#ffaa00', '#aa00ff', '#aaff00',
-    '#ff6600', '#6600ff', '#00ff66', '#ff0066', '#66ff00'
+    '#ff0000',
+    '#00ff00',
+    '#0000ff',
+    '#ffff00',
+    '#ff00ff',
+    '#00ffff',
+    '#ff8800',
+    '#8800ff',
+    '#88ff00',
+    '#ff0088',
+    '#0088ff',
+    '#888888',
+    '#ffaa00',
+    '#aa00ff',
+    '#aaff00',
+    '#ff6600',
+    '#6600ff',
+    '#00ff66',
+    '#ff0066',
+    '#66ff00',
   ]
-  
-  const availableColors = COLOR_POOL.filter(c => !usedColors.includes(c))
-  
+
+  const availableColors = COLOR_POOL.filter((c) => !usedColors.includes(c))
+
   if (availableColors.length > 0) {
     const hash = label.split('').reduce((a, b) => {
-      a = ((a << 5) - a) + b.charCodeAt(0)
+      a = (a << 5) - a + b.charCodeAt(0)
       return a & a
     }, 0)
     return availableColors[Math.abs(hash) % availableColors.length]
   }
-  
-  return '#' + Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0')
+
+  return (
+    '#' +
+    Math.floor(Math.random() * 16777215)
+      .toString(16)
+      .padStart(6, '0')
+  )
 }
 
 // 判断标签是否应该显示在框下方（避免顶部溢出）
@@ -2261,13 +2375,13 @@ const isLabelBelow = (anno) => {
 // 获取标签样式（智能定位，避免溢出）
 const getLabelStyle = (anno) => {
   const isBelow = isLabelBelow(anno)
-  
+
   // 计算水平位置，避免左右溢出
   let leftPercent = (anno.x / annotationImageNaturalWidth.value) * 100
-  
+
   // 限制在 2-98% 范围内，避免贴边
   leftPercent = Math.max(2, Math.min(98, leftPercent))
-  
+
   // 计算垂直位置
   let topPercent
   if (isBelow) {
@@ -2277,12 +2391,12 @@ const getLabelStyle = (anno) => {
     // 显示在框上方（原逻辑）：框顶部 - 4px
     topPercent = (Math.max(0, anno.y - 4) / annotationImageNaturalHeight.value) * 100
   }
-  
+
   return {
     left: `${leftPercent}%`,
     top: `${topPercent}%`,
     backgroundColor: anno.color || '#ff0000',
-    transform: isBelow ? 'translateY(0)' : 'translateY(-100%)'
+    transform: isBelow ? 'translateY(0)' : 'translateY(-100%)',
   }
 }
 
@@ -2295,10 +2409,10 @@ const openAnnotationPreview = async (file, index = null) => {
     if (currentPreviewIndex.value === -1) currentPreviewIndex.value = 0
 
     updateContainerSize()
-    
+
     // 先加载当前图片
     await loadPreviewData(previewableFiles.value[currentPreviewIndex.value])
-    
+
     annotationPreviewVisible.value = true
 
     // 预加载相邻图片（关键优化）
@@ -2400,29 +2514,29 @@ const handleTouchEnd = (e) => {
 const continueFromPreview = () => {
   // 立即捕获当前值，避免竞态条件
   const task = currentPreviewTask.value
-  
+
   if (!task?.task_id) {
     console.error('[CONTINUE] 无法继续标注：task 为空或缺少 task_id', task)
     window.alert('无法继续标注：任务信息加载中或不存在，请稍后再试')
     return
   }
-  
+
   // 使用捕获的 task 继续后续逻辑...
-  const validLabelingTasks = labelingTasks.value.filter(t => t && t.task_id)
-  
+  const validLabelingTasks = labelingTasks.value.filter((t) => t && t.task_id)
+
   if (validLabelingTasks.length === 0) {
     console.error('[CONTINUE] 无法继续标注：没有有效的标注任务')
     window.alert('无法继续标注：标注任务列表为空，请刷新页面重试')
     return
   }
-  
-  const taskExists = validLabelingTasks.some(t => t.task_id === task.task_id)
+
+  const taskExists = validLabelingTasks.some((t) => t.task_id === task.task_id)
   if (!taskExists) {
     validLabelingTasks.push(task)
   }
-  
+
   closeAnnotationPreview()
-  navigateToAnnotate(task, validLabelingTasks)  // 使用捕获的 task
+  navigateToAnnotate(task, validLabelingTasks) // 使用捕获的 task
 }
 
 const handleResize = () => {
@@ -2455,9 +2569,9 @@ const loadSingleFileTask = async (file) => {
     console.log(`[WORK] 加载单个文件任务 | file_id=${file.id}`)
 
     // 使用过滤后的列表
-    const validLabelingTasks = labelingTasks.value.filter(t => t && t.file_id)
+    const validLabelingTasks = labelingTasks.value.filter((t) => t && t.file_id)
     const cachedTask = validLabelingTasks.find((t) => t.file_id === file.id)
-    
+
     if (cachedTask) {
       console.log(`[WORK] 从缓存找到任务 | task_id=${cachedTask.task_id}`)
       navigateToAnnotate(cachedTask, validLabelingTasks)
@@ -2467,7 +2581,10 @@ const loadSingleFileTask = async (file) => {
     const data = await getTaskByFileId(currentProject.value.id, file.id)
     if (data?.task) {
       console.log(`[WORK] 从后端获取任务 | task_id=${data.task.task_id}`)
-      navigateToAnnotate(data.task, [data.task].filter(t => t && t.task_id))
+      navigateToAnnotate(
+        data.task,
+        [data.task].filter((t) => t && t.task_id)
+      )
     } else {
       window.alert('该文件暂无标注任务，请先开始标注')
     }
@@ -2479,24 +2596,22 @@ const loadSingleFileTask = async (file) => {
 
 const continueLabeling = () => {
   // 过滤 null 元素
-  const validTasks = labelingTasks.value.filter(t => t && t.task_id)
-  
+  const validTasks = labelingTasks.value.filter((t) => t && t.task_id)
+
   if (validTasks.length === 0) {
     window.alert('暂无标注中的任务')
     return
   }
 
   const firstTask = validTasks.find((t) => t.status === 'labeling') || validTasks[0]
-  console.log(
-    `[CONTINUE] 继续标注 | task_id=${firstTask.task_id}, total=${validTasks.length}`
-  )
+  console.log(`[CONTINUE] 继续标注 | task_id=${firstTask.task_id}, total=${validTasks.length}`)
 
   navigateToAnnotate(firstTask, validTasks)
 }
 const reviewCompleted = () => {
   // 过滤 null 元素
-  const validTasks = doneTasks.value.filter(t => t && t.task_id)
-  
+  const validTasks = doneTasks.value.filter((t) => t && t.task_id)
+
   if (validTasks.length === 0) {
     window.alert('暂无已标注的文件')
     return
@@ -2561,9 +2676,9 @@ const viewCompletedAnnotation = async (file) => {
     console.log(`[VIEW] 查看已完成标注 | file_id=${file.id}`)
 
     // 使用过滤后的列表
-    const validDoneTasks = doneTasks.value.filter(t => t && t.file_id)
+    const validDoneTasks = doneTasks.value.filter((t) => t && t.file_id)
     const cachedTask = validDoneTasks.find((t) => t.file_id === file.id)
-    
+
     if (cachedTask) {
       console.log(`[VIEW] 从缓存找到已完成任务 | task_id=${cachedTask.task_id}`)
       navigateToAnnotate(cachedTask, validDoneTasks.length > 0 ? validDoneTasks : [cachedTask])
@@ -2574,7 +2689,8 @@ const viewCompletedAnnotation = async (file) => {
     if (data?.task) {
       console.log(`[VIEW] 从后端获取已完成任务 | task_id=${data.task.task_id}`)
       // 确保传入的数组也经过过滤
-      const taskList = validDoneTasks.length > 0 ? validDoneTasks : [data.task].filter(t => t && t.task_id)
+      const taskList =
+        validDoneTasks.length > 0 ? validDoneTasks : [data.task].filter((t) => t && t.task_id)
       navigateToAnnotate(data.task, taskList)
     } else {
       window.alert('该文件暂无标注结果')
@@ -2592,7 +2708,7 @@ const navigateToAnnotate = (task, taskList) => {
     window.alert('跳转失败：任务信息不完整')
     return
   }
-  
+
   if (!currentProject.value?.id) {
     console.error('[NAVIGATE] 错误：currentProject 为空')
     window.alert('跳转失败：项目信息丢失，请返回项目列表重试')
@@ -2600,8 +2716,8 @@ const navigateToAnnotate = (task, taskList) => {
   }
 
   // ⚠️ 关键修复：过滤 taskList 中的 null 元素
-  const validTaskList = (taskList || []).filter(t => t && t.task_id)
-  
+  const validTaskList = (taskList || []).filter((t) => t && t.task_id)
+
   if (validTaskList.length === 0) {
     console.error('[NAVIGATE] 错误：没有有效的任务列表')
     window.alert('跳转失败：任务列表为空')
@@ -2613,7 +2729,7 @@ const navigateToAnnotate = (task, taskList) => {
   try {
     // 使用过滤后的列表计算索引
     const currentIndex = validTaskList.findIndex((t) => t.task_id === task.task_id)
-    
+
     if (currentIndex === -1) {
       console.error('[NAVIGATE] 错误：在当前任务列表中找不到指定任务', task.task_id)
       window.alert('跳转失败：任务不在当前列表中，请刷新页面重试')
@@ -2670,14 +2786,14 @@ const navigateToAnnotate = (task, taskList) => {
         fromFolder: currentFolder.value?.name || 'unknown',
       },
     }
-    
+
     console.log('[NAVIGATE] 路由数据:', routeData)
-    
-    router.push(routeData).catch(err => {
+
+    router.push(routeData).catch((err) => {
       console.error('[NAVIGATE] 路由跳转失败:', err)
       window.alert('页面跳转失败，请检查网络连接或刷新页面重试')
     })
-    
+
     console.log('[NAVIGATE] ========== 流程结束 ==========')
   } catch (error) {
     console.error('[NAVIGATE] 跳转过程出错:', error)
@@ -2699,8 +2815,6 @@ const removeWorkTag = (id) => {
   const index = workForm.selectedTagIds.indexOf(id)
   if (index > -1) workForm.selectedTagIds.splice(index, 1)
 }
-
-
 
 const toggleFileSelection = (fileId) => {
   const index = selectedFileIds.value.indexOf(fileId)
@@ -2731,7 +2845,7 @@ const closeWorkDialog = () => {
   currentWorkFileId.value = null
   workForm.mode = 'keyword'
   workForm.selectedTagIds = []
-  workForm.confidenceThreshold = 0.25  // 重置为默认值
+  workForm.confidenceThreshold = 0.25 // 重置为默认值
 }
 
 const confirmWorkDialog = async () => {
@@ -2758,11 +2872,11 @@ const confirmWorkDialog = async () => {
 
     const keywords =
       workForm.mode === 'keyword' ? workSelectedTags.value.map((tag) => tag.name) : []
-    
+
     const confidenceThreshold = workForm.confidenceThreshold
 
     console.log('[VUE-103] 🚀 调用createAnnotationSession')
-   const data = await createAnnotationSession(currentProject.value.id, {
+    const data = await createAnnotationSession(currentProject.value.id, {
       file_ids: targetFiles.map((file) => file.id),
       use_keywords: workForm.mode === 'keyword',
       keywords,
@@ -2772,8 +2886,8 @@ const confirmWorkDialog = async () => {
 
     // ⚠️ 关键修复：过滤 null 元素
     const rawTasks = data.tasks || []
-    const validTasks = rawTasks.filter(t => t && t.task_id && t.file_id)
-    
+    const validTasks = rawTasks.filter((t) => t && t.task_id && t.file_id)
+
     if (validTasks.length === 0) {
       console.error('[VUE-104b] ❌ 没有有效的任务返回')
       window.alert('创建任务失败：后端返回的任务数据无效')
@@ -2866,9 +2980,9 @@ const confirmWorkDialog = async () => {
       keywords: t.keywords,
       annotations: t.annotations || [],
     }))
-    
+
     // ⚠️ 再次过滤确保没有 null
-    const finalTaskList = taskList.filter(t => t && t.task_id)
+    const finalTaskList = taskList.filter((t) => t && t.task_id)
 
     navigateToAnnotate(firstTask, finalTaskList)
     console.log('[VUE-119] ========== 流程结束 ==========')
@@ -2943,7 +3057,7 @@ const connectProgressSocket = () => {
   progressSocketStopped.value = false
   closeProgressSocket()
   progressSocketStopped.value = false
-  
+
   // 强制从 localStorage 读取最新 token，并检查有效性
   const rawToken = localStorage.getItem('token')
   if (!rawToken) {
@@ -2967,10 +3081,12 @@ const connectProgressSocket = () => {
 
   const token = rawToken
   const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-  const wsUrl = `${wsProtocol}://${window.location.host}/api/ws/progress?token=${encodeURIComponent(token)}`
-  
+  const wsUrl = `${wsProtocol}://${window.location.host}/api/ws/progress?token=${encodeURIComponent(
+    token
+  )}`
+
   console.log('[WebSocket] 连接中...', wsUrl.replace(/token=.*/, 'token=***'))
-  
+
   const socket = new WebSocket(wsUrl)
   progressSocket.value = socket
 
@@ -3002,18 +3118,18 @@ const connectProgressSocket = () => {
 
   socket.onclose = (event) => {
     console.log('[WebSocket] 连接关闭:', event.code, event.reason)
-    
+
     if (progressSocketStopped.value) return
-    
+
     // 403 错误不重连（token 问题）
     if (event.code === 1008) {
       console.warn('[WebSocket] 认证失败，停止重连')
       return
     }
-    
+
     if (progressSocket.value === socket) {
       progressSocket.value = null
-      window.setTimeout(() => connectProgressSocket(), 3000)  // 延长重连间隔
+      window.setTimeout(() => connectProgressSocket(), 3000) // 延长重连间隔
     }
   }
 }
@@ -3083,11 +3199,11 @@ onBeforeUnmount(() => {
 
   previewUrlMap.forEach((url) => URL.revokeObjectURL(url))
   previewUrlMap.clear()
- // 清理 URL 缓存
+  // 清理 URL 缓存
   urlCache.clear()
   imageLoadCache.clear()
   preloadQueue.clear()
-  
+
   // 清理 blob URL
   previewUrlMap.forEach((url) => {
     if (url.startsWith('blob:')) {
@@ -4536,7 +4652,7 @@ onBeforeUnmount(() => {
   font-weight: 600;
   font-family: system-ui, -apple-system, sans-serif;
   white-space: nowrap;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
   transform: translateY(-100%); /* 默认向上 */
   margin-top: -4px;
   z-index: 10;
@@ -4570,8 +4686,12 @@ onBeforeUnmount(() => {
 }
 
 @keyframes loading-shimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
 }
 
 /* 减少重绘优化 */
@@ -4664,7 +4784,6 @@ onBeforeUnmount(() => {
   color: #dc2626;
   font-weight: 500;
 }
-
 
 /* 数据导出按钮样式 */
 .file-action-btn.export-btn {
@@ -4853,7 +4972,7 @@ onBeforeUnmount(() => {
   color: #374151;
 }
 
-.option-item input[type="checkbox"] {
+.option-item input[type='checkbox'] {
   width: 18px;
   height: 18px;
   margin-right: 10px;
