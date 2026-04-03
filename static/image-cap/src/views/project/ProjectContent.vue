@@ -2129,14 +2129,16 @@ const loadPreviewData = async (file) => {
     taskData = validTasks.find((t) => t.file_id === file.id)
     if (taskData?.annotations?.length > 0) {
       annotations = taskData.annotations
-      annotationDataSource.value = '任务'
+      annotationDataSource.value =
+        taskData.annotation_source === 'collaboration_fused' ? '协作整合' : '任务'
     }
   } else if (isDoneFolder.value) {
     const validTasks = doneTasks.value.filter((t) => t && t.file_id)
     taskData = validTasks.find((t) => t.file_id === file.id)
     if (taskData?.annotations?.length > 0) {
       annotations = taskData.annotations
-      annotationDataSource.value = '任务'
+      annotationDataSource.value =
+        taskData.annotation_source === 'collaboration_fused' ? '协作整合' : '任务'
     }
   }
 
@@ -2149,7 +2151,8 @@ const loadPreviewData = async (file) => {
         taskData = data.task
         if (data.task.annotations?.length > 0) {
           annotations = data.task.annotations
-          annotationDataSource.value = '任务(后端)'
+          annotationDataSource.value =
+            data.task.annotation_source === 'collaboration_fused' ? '协作整合' : '任务(后端)'
         } else if (data.task.pre_annotations?.length > 0) {
           annotations = data.task.pre_annotations
           annotationDataSource.value = '预标注'

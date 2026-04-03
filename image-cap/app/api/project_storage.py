@@ -246,6 +246,7 @@ def share_project(
         .all()
     )
     membership_map = {membership.user_id: membership for membership in memberships}
+    reviewer_user: User | None = None
     if len(membership_map) != len(set(payload.recipient_ids)):
         raise HTTPException(status_code=400, detail="所选成员必须属于当前组织")
     if len(payload.recipient_ids) == 1:
@@ -269,10 +270,16 @@ def share_project(
         )
         if not reviewer_belongs_to_org:
             raise HTTPException(status_code=400, detail="审核人必须属于当前组织")
+        reviewer_user = db.query(User).filter(User.id == payload.reviewer_id).first()
+        if not reviewer_user:
+            raise HTTPException(status_code=404, detail="审核人不存在")
 
+    target_owners = [membership.user.username for membership in memberships]
+    if reviewer_user and reviewer_user.username not in target_owners:
+        target_owners.append(reviewer_user.username)
     existing_copies = (
         db.query(Project)
-        .filter(Project.source_project_id == project.id, Project.owner_id.in_([m.user.username for m in memberships]))
+        .filter(Project.source_project_id == project.id, Project.owner_id.in_(target_owners))
         .all()
     )
     existing_by_owner = {item.owner_id: item for item in existing_copies}
@@ -328,6 +335,56 @@ def share_project(
             )
 
         copied_to.append({"user_id": recipient.id, "username": recipient.username, "project_id": copied_project.id})
+
+    if reviewer_user and reviewer_user.username not in [membership.user.username for membership in memberships]:
+        copied_name = f"[审核] {project.name} - {reviewer_user.username}"
+        existing_copy = existing_by_owner.get(reviewer_user.username)
+        if existing_copy:
+            existing_copy.name = copied_name
+            existing_copy.description = project.description
+            existing_copy.share_message = payload.message
+            existing_copy.shared_by = user.username
+            existing_copy.shared_at = datetime.utcnow()
+            existing_copy.organization_nickname = payload.organization_nickname
+            existing_copy.share_accepted_at = None
+            existing_copy.share_mode = payload.share_mode
+            existing_copy.reviewer_id = payload.reviewer_id
+            reviewer_project = existing_copy
+            db.query(ProjectFile).filter(ProjectFile.project_id == existing_copy.id).delete()
+        else:
+            reviewer_project = Project(
+                name=copied_name,
+                description=project.description,
+                owner_id=reviewer_user.username,
+                source_project_id=project.id,
+                is_shared_copy=True,
+                shared_by=user.username,
+                shared_at=datetime.utcnow(),
+                share_message=payload.message,
+                organization_nickname=payload.organization_nickname,
+                share_accepted_at=None,
+                share_mode=payload.share_mode,
+                reviewer_id=payload.reviewer_id,
+            )
+            db.add(reviewer_project)
+            db.flush()
+
+        for source_file in project.files:
+            db.add(
+                ProjectFile(
+                    project_id=reviewer_project.id,
+                    filename=source_file.filename,
+                    storage_path=source_file.storage_path,
+                    mime_type=source_file.mime_type,
+                    size_bytes=source_file.size_bytes,
+                    uploaded_by=user.username,
+                    status="archived",
+                )
+            )
+
+        copied_to.append(
+            {"user_id": reviewer_user.id, "username": reviewer_user.username, "project_id": reviewer_project.id}
+        )
 
     db.commit()
     return {"message": "项目分享成功", "copied_to": copied_to}

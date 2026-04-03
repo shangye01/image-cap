@@ -130,6 +130,96 @@ def _load_task_annotations(task: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
+def _get_project_lineage_context(project_id: str) -> dict[str, Any]:
+    """解析项目与其共享副本关系，供协作标注跨副本聚合使用。"""
+    try:
+        project_uuid = uuid.UUID(str(project_id))
+    except (TypeError, ValueError):
+        return {
+            "current_project_id": str(project_id or ""),
+            "root_project_id": str(project_id or ""),
+            "current_owner": "",
+            "root_owner": "",
+            "reviewer_id": None,
+            "reviewer_username": None,
+            "related_project_ids": [str(project_id)] if project_id else [],
+            "reviewer_project_ids": [],
+        }
+
+    db = SessionLocal()
+    try:
+        project = db.query(Project).filter(Project.id == project_uuid).first()
+        if not project:
+            return {
+                "current_project_id": str(project_uuid),
+                "root_project_id": str(project_uuid),
+                "current_owner": "",
+                "root_owner": "",
+                "reviewer_id": None,
+                "reviewer_username": None,
+                "related_project_ids": [str(project_uuid)],
+                "reviewer_project_ids": [],
+            }
+
+        root_project_id = project.source_project_id or project.id
+        related_projects = (
+            db.query(Project)
+            .filter((Project.id == root_project_id) | (Project.source_project_id == root_project_id))
+            .all()
+        )
+        if not related_projects:
+            related_projects = [project]
+
+        reviewer_username = None
+        if project.reviewer_id:
+            reviewer = db.query(User).filter(User.id == project.reviewer_id).first()
+            if reviewer:
+                reviewer_username = reviewer.username
+
+        root_owner = project.owner_id
+        for item in related_projects:
+            if item.id == root_project_id:
+                root_owner = item.owner_id
+                break
+
+        return {
+            "current_project_id": str(project.id),
+            "root_project_id": str(root_project_id),
+            "current_owner": project.owner_id,
+            "root_owner": root_owner,
+            "reviewer_id": project.reviewer_id,
+            "reviewer_username": reviewer_username,
+            "related_project_ids": [str(item.id) for item in related_projects],
+            "reviewer_project_ids": [
+                str(item.id)
+                for item in related_projects
+                if reviewer_username and item.owner_id == reviewer_username
+            ],
+        }
+    finally:
+        db.close()
+
+
+def _apply_collaboration_preview(
+        task_obj: dict[str, Any],
+        task: dict[str, Any],
+        prefer_integrated_annotations: bool = False,
+) -> dict[str, Any]:
+    """在任务响应中附加协作整合结果，审核视角优先展示整合后的预览。"""
+    try:
+        integration = _collaborative_auto_integrate(task)
+        if integration.get("ready"):
+            task_obj["collaboration_integration"] = integration
+            if prefer_integrated_annotations:
+                task_obj["annotations"] = integration.get("fused_annotations") or []
+                task_obj["annotation_source"] = "collaboration_fused"
+    except Exception as integration_error:
+        logger.warning(
+            f"【COLLAB-PREVIEW】协作整合计算失败 | task_id={task.get('id')} | err={integration_error}"
+        )
+    return task_obj
+
+
 def _resolve_ws_username(token: str | None) -> str | None:
     if not token:
         print("[WS_AUTH] Token 为空")
@@ -505,11 +595,14 @@ def _collaborative_auto_integrate(task: Dict[str, Any]) -> Dict[str, Any]:
     if not image_storage_path or not project_id:
         return {"ready": False, "reason": "任务缺少 image_storage_path 或 project_id"}
 
+    lineage_context = _get_project_lineage_context(project_id)
+    related_project_ids = lineage_context.get("related_project_ids") or [str(project_id)]
+
     sibling_tasks_result = (
         supabase
         .table("tasks")
         .select("*")
-        .eq("project_id", project_id)
+        .in_("project_id", related_project_ids)
         .eq("image_storage_path", image_storage_path)
         .execute()
     )
@@ -521,7 +614,10 @@ def _collaborative_auto_integrate(task: Dict[str, Any]) -> Dict[str, Any]:
     if len(completed_siblings) < 3:
         return {"ready": False, "reason": "尚未收齐 3 份已提交标注"}
 
-    completed_siblings.sort(key=lambda x: x.get("completed_at") or "")
+    completed_siblings.sort(
+        key=lambda x: x.get("completed_at") or x.get("updated_at") or x.get("created_at") or "",
+        reverse=True,
+    )
     selected_tasks = completed_siblings[:3]
 
     annotation_sets: list[list[dict[str, Any]]] = []
@@ -643,9 +739,9 @@ def _collaborative_auto_integrate(task: Dict[str, Any]) -> Dict[str, Any]:
     else:
         integration_decision = "manual_full_review"
 
-        review_triggered = integration_decision != "auto_pass"
-        auto_integrated = integration_decision == "auto_pass"
-        consistency_ratio = round(auto_pass_clusters / max(1, total_clusters), 3)
+    review_triggered = integration_decision != "auto_pass"
+    auto_integrated = integration_decision == "auto_pass"
+    consistency_ratio = round(auto_pass_clusters / max(1, total_clusters), 3)
 
     return {
         "ready": True,
@@ -1057,7 +1153,15 @@ async def get_folder_tasks(
 
     project_uuid = uuid.UUID(project_id)
     project_record = db.query(Project).filter(Project.id == project_uuid).first()
-    allow_cross_project_fallback = bool(project_record and not project_record.is_shared_copy)
+    lineage_context = _get_project_lineage_context(project_id)
+    reviewer_username = lineage_context.get("reviewer_username")
+    allow_cross_project_fallback = bool(
+        project_record
+        and (
+            not project_record.is_shared_copy
+            or (reviewer_username and project_record.owner_id == reviewer_username)
+        )
+    )
 
     file_ids = [str(f.id) for f in files_result]
     storage_paths = [f.storage_path for f in files_result if f.storage_path]
@@ -1073,6 +1177,7 @@ async def get_folder_tasks(
         storage_task_result = (
             supabase.table("tasks")
             .select("*")
+            .in_("project_id", lineage_context.get("related_project_ids") or [project_id])
             .in_("image_storage_path", storage_paths)
             .order("updated_at", desc=True)
             .execute()
@@ -1098,8 +1203,9 @@ async def get_folder_tasks(
     # 构建响应
     task_list = []
     for file_record, task in matched_pairs:
+        has_direct_task = bool(direct_task_map.get(str(file_record.id)))
         annotations = _load_task_annotations(task)
-        task_list.append({
+        task_obj = {
             "task_id": task["id"],
             "file_id": str(file_record.id),
             "filename": file_record.filename or task.get("filename", ""),
@@ -1110,7 +1216,14 @@ async def get_folder_tasks(
             "use_keywords": task.get("use_keywords", False),
             "keywords": task.get("keywords", []),
             "annotations": annotations
-        })
+        }
+        task_list.append(
+            _apply_collaboration_preview(
+                task_obj,
+                task,
+                prefer_integrated_annotations=not has_direct_task,
+            )
+        )
 
     logger.info(f"【FOLDER-TASKS】返回 {len(task_list)} 个任务")
     return {"tasks": task_list, "total": len(task_list)}
@@ -1142,12 +1255,20 @@ async def get_file_task(
     # 先按 file_id 查询任务
     task_result = supabase.table("tasks").select("*").eq("file_id", file_id).maybe_single().execute()
     task = task_result.data if task_result else None
+    lineage_context = _get_project_lineage_context(project_id)
+    reviewer_username = lineage_context.get("reviewer_username")
+    used_fallback_task = False
 
     # 兜底：按 storage_path 查询同源任务（满足“谁标注谁可看，分享者均可看”）
-    if not task and file_record.storage_path and not project_record.is_shared_copy:
+    allow_cross_project_fallback = bool(
+        not project_record.is_shared_copy
+        or (reviewer_username and project_record.owner_id == reviewer_username)
+    )
+    if not task and file_record.storage_path and allow_cross_project_fallback:
         fallback_result = (
             supabase.table("tasks")
             .select("*")
+            .in_("project_id", lineage_context.get("related_project_ids") or [project_id])
             .eq("image_storage_path", file_record.storage_path)
             .order("updated_at", desc=True)
             .limit(1)
@@ -1155,6 +1276,7 @@ async def get_file_task(
         )
         fallback_tasks = fallback_result.data if fallback_result else []
         task = fallback_tasks[0] if fallback_tasks else None
+        used_fallback_task = bool(task)
 
     if not task:
         return {"task": None}
@@ -1176,15 +1298,13 @@ async def get_file_task(
         "annotations": annotations
     }
 
-    # 协作标注任务补充整合与审核工作台数据（供前端“裁决工作台”展示）
-    try:
-        integration = _collaborative_auto_integrate(task)
-        if integration.get("ready"):
-            task_obj["collaboration_integration"] = integration
-    except Exception as integration_error:
-        logger.warning(f"【FILE-TASK】协作整合计算失败 | task_id={task.get('id')} | err={integration_error}")
-
-    return {"task": task_obj}
+    return {
+        "task": _apply_collaboration_preview(
+            task_obj,
+            task,
+            prefer_integrated_annotations=used_fallback_task,
+        )
+    }
 
 
 @app.get("/api/projects/{project_id}/tasks/{task_id}/adjacent")
@@ -1786,39 +1906,113 @@ async def move_to_done(project_id: str, payload: dict, db: Session = Depends(get
 
     updated_rows = 0
     notify_usernames: set[str] = set()
+    integration_result = _collaborative_auto_integrate(task_data)
     # 仅同步到当前标注者项目与分享者项目（谁标注谁可看，分享者均可看）
     if storage_path:
         project_uuid = uuid.UUID(project_id)
         current_project = db.query(Project).filter(Project.id == project_uuid).first()
-        related_project_ids = [project_uuid]
+        related_projects = [current_project] if current_project else []
+        root_project_id = project_uuid
+        root_project = current_project
+        reviewer_project_ids: set[uuid.UUID] = set()
+
         if current_project:
             root_project_id = current_project.source_project_id or current_project.id
-            root_project = db.query(Project).filter(Project.id == root_project_id).first()
-            related_project_ids = [project_uuid]
-            if root_project_id not in related_project_ids:
-                related_project_ids.append(root_project_id)
+            related_projects = (
+                db.query(Project)
+                .filter((Project.id == root_project_id) | (Project.source_project_id == root_project_id))
+                .all()
+            )
+            root_project = next(
+                (project for project in related_projects if project.id == root_project_id),
+                current_project,
+            )
 
             notify_usernames = {current_project.owner_id}
             if root_project and root_project.owner_id:
                 notify_usernames.add(root_project.owner_id)
 
-        matched_files = (
-            db.query(ProjectFile)
-            .filter(
-                ProjectFile.storage_path == storage_path,
-                ProjectFile.project_id.in_(related_project_ids),
-            )
-            .all()
+            if current_project.reviewer_id:
+                reviewer_user = db.query(User).filter(User.id == current_project.reviewer_id).first()
+                if reviewer_user:
+                    notify_usernames.add(reviewer_user.username)
+                    reviewer_projects = [
+                        project
+                        for project in related_projects
+                        if project.owner_id == reviewer_user.username
+                    ]
+                    if not reviewer_projects and root_project:
+                        reviewer_project = Project(
+                            name=f"[审核] {root_project.name} - {reviewer_user.username}",
+                            description=root_project.description,
+                            owner_id=reviewer_user.username,
+                            source_project_id=root_project_id,
+                            is_shared_copy=True,
+                            shared_by=current_project.shared_by or root_project.owner_id,
+                            shared_at=datetime.utcnow(),
+                            share_message=current_project.share_message,
+                            organization_nickname=current_project.organization_nickname,
+                            share_accepted_at=None,
+                            share_mode=current_project.share_mode,
+                            reviewer_id=current_project.reviewer_id,
+                        )
+                        db.add(reviewer_project)
+                        db.flush()
+
+                        source_files = (
+                            db.query(ProjectFile)
+                            .filter(ProjectFile.project_id == root_project_id)
+                            .all()
+                        )
+                        for source_file in source_files:
+                            db.add(
+                                ProjectFile(
+                                    project_id=reviewer_project.id,
+                                    filename=source_file.filename,
+                                    storage_path=source_file.storage_path,
+                                    mime_type=source_file.mime_type,
+                                    size_bytes=source_file.size_bytes,
+                                    uploaded_by=current_project.shared_by or current_project.owner_id,
+                                    status="archived",
+                                )
+                            )
+                        related_projects.append(reviewer_project)
+                        reviewer_projects = [reviewer_project]
+
+                    reviewer_project_ids = {project.id for project in reviewer_projects}
+
+        related_project_ids = [project.id for project in related_projects if project]
+        visible_done_project_ids = {project_uuid, root_project_id}
+        reviewer_should_receive = bool(
+            integration_result.get("ready")
+            and integration_result.get("review_triggered")
         )
 
+        matched_files = []
+        if related_project_ids:
+            matched_files = (
+                db.query(ProjectFile)
+                .filter(
+                    ProjectFile.storage_path == storage_path,
+                    ProjectFile.project_id.in_(related_project_ids),
+                )
+                .all()
+            )
+
         for project_file in matched_files:
-            if project_file.status != "done":
-                project_file.status = "done"
+            target_status = None
+            if project_file.project_id in visible_done_project_ids:
+                target_status = "done"
+            elif project_file.project_id in reviewer_project_ids:
+                target_status = "done" if reviewer_should_receive else "archived"
+
+            if target_status and project_file.status != target_status:
+                project_file.status = target_status
                 updated_rows += 1
 
-        if matched_files:
+        if updated_rows:
             db.commit()
-            logger.info(f"文件状态已同步为 done | storage_path={storage_path}, updated={updated_rows}")
+            logger.info(f"文件状态已同步 | storage_path={storage_path}, updated={updated_rows}")
             await progress_ws_manager.emit_to_users(
                 list(notify_usernames),
                 {
@@ -1831,7 +2025,7 @@ async def move_to_done(project_id: str, payload: dict, db: Session = Depends(get
                     "timestamp": datetime.now().isoformat(),
                 },
             )
-        else:
+        elif not matched_files:
             logger.warning(f"未找到对应的文件记录: {storage_path}")
 
     # ✅ 修复：更新任务状态为 completed
