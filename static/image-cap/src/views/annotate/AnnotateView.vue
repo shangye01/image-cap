@@ -1306,6 +1306,7 @@ const getStatusText = (status) => {
     labeling: '标注中',
     done: '已完成',
     review: '审核中',
+    reviewed: '已审核',
     abandoned: '已放弃',
   }
   return statusMap[status] || status || '未知'
@@ -1317,6 +1318,7 @@ const getStatusColor = (status) => {
     labeling: '#52c41a',
     done: '#1890ff',
     review: '#722ed1',
+    reviewed: '#7c3aed',
     abandoned: '#ff4d4f',
   }
   return colorMap[status] || '#666'

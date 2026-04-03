@@ -30,6 +30,7 @@ export interface BackendProjectFile {
   created_at: string
   download_url?: string | null
   preview_url?: string | null
+  status?: 'pending' | 'labeling' | 'done' | 'reviewed' | 'archived' | string
 }
 
 export interface AnnotationSessionTask {
@@ -130,11 +131,15 @@ export const createAnnotationSession = (
 // src/api/projectStorage.ts - 在文件末尾添加
 
 // 获取文件夹中的任务列表（用于标注中文件夹的继续标注功能）
-export const getFolderTasks = (projectId: string, folderName: 'pending' | 'labeling' | 'done') => {
+export const getFolderTasks = (
+  projectId: string,
+  folderName: 'pending' | 'labeling' | 'done' | 'reviewed',
+) => {
   const statusMap = {
     'pending': 'pending',
     'labeling': 'labeling', 
-    'done': 'done'
+    'done': 'done',
+    'reviewed': 'reviewed',
   }
   const status = statusMap[folderName]
   
@@ -169,3 +174,14 @@ export const getAdjacentTask = (
 export const getTaskById = (taskId: string) => {
   return request.get(`/tasks/${taskId}`)
 }
+
+export const confirmReviewDecision = (
+  projectId: string,
+  payload: {
+    file_id: string
+    task_id?: string
+    annotations: any[]
+    review_decision_log?: any[]
+    base_source?: string
+  },
+) => request.post(`/projects/${projectId}/review/confirm`, payload)

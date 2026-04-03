@@ -281,8 +281,22 @@
                 </button>
               </template>
 
-              <!-- 已标注文件夹：查看 -->
-              <template v-else-if="isDoneFolder">
+              <template v-else-if="isPendingReviewFolder">
+                <button type="button" class="file-action-btn batch" @click="openPendingReviewDialog">
+                  批量审核
+                </button>
+                <button
+                  type="button"
+                  class="file-action-btn work review-btn"
+                  @click="openPendingReviewDialog"
+                  :disabled="currentFolder.files.length === 0"
+                >
+                  {{ currentFolder.files.length > 0 ? `进入审核 (${currentFolder.files.length})` : '暂无待审核文件' }}
+                </button>
+              </template>
+
+              <!-- 已标注/已审核文件夹：查看 -->
+              <template v-else-if="isDoneFolder || isReviewedFolder">
                 <button type="button" class="file-action-btn batch" @click="selectAllFilesInFolder">
                   批量选择
                 </button>
@@ -340,7 +354,23 @@
           </div>
 
           <div class="image-card-actions">
-            <template v-if="isDoneFolder">
+            <template v-if="isPendingReviewFolder">
+              <button
+                type="button"
+                class="file-action-btn work review-btn"
+                @click.stop="
+                  openAnnotationPreview(
+                    file,
+                    currentFolder.files.findIndex((f) => f.id === file.id)
+                  )
+                "
+                style="width: 100%"
+              >
+                🧑‍⚖️ 进入审核
+              </button>
+            </template>
+
+            <template v-else-if="isDoneFolder || isReviewedFolder">
               <button
                 type="button"
                 class="file-action-btn work review-btn"
@@ -587,6 +617,23 @@
 
             <div class="toolbar-actions">
               <button
+                v-if="reviewWorkbenchEnabled"
+                type="button"
+                class="toolbar-btn btn-secondary"
+                @click.stop="resetReviewWorkbench"
+              >
+                重置裁决
+              </button>
+              <button
+                v-if="canSubmitReviewDecision"
+                type="button"
+                class="toolbar-btn btn-review-submit"
+                :disabled="reviewSubmitting"
+                @click.stop="submitReviewResult"
+              >
+                {{ reviewSubmitting ? '归档中...' : '确认裁决并归档' }}
+              </button>
+              <button
                 v-if="isLabelingFolder && currentPreviewTask"
                 type="button"
                 class="toolbar-btn btn-continue"
@@ -678,16 +725,26 @@
               </span>
             </div>
 
+            <div v-if="reviewPreviewTabs.length > 0" class="review-preview-tabs">
+              <button
+                v-for="tab in reviewPreviewTabs"
+                :key="tab.key"
+                type="button"
+                class="review-preview-tab"
+                :class="{ active: reviewPreviewMode === tab.key }"
+                @click="switchReviewPreviewMode(tab.key)"
+              >
+                {{ tab.label }}
+              </button>
+            </div>
+
             <div v-if="annotationLabels.length > 0" class="annotation-label-list">
               <span v-for="label in annotationLabels" :key="label" class="annotation-label-chip">
                 🏷️ {{ label }}
               </span>
             </div>
 
-            <div
-              v-if="collaborationIntegration && displayedReviewItems.length > 0"
-              class="review-workbench"
-            >
+            <div v-if="collaborationIntegration" class="review-workbench">
               <div class="review-workbench-header">
                 <div class="workbench-title">🧑‍⚖️ 裁决工作台</div>
                 <div class="workbench-decision">{{ integrationDecisionText }}</div>
@@ -697,7 +754,7 @@
                 </label>
               </div>
 
-              <div class="workbench-body">
+              <div v-if="displayedReviewItems.length > 0" class="workbench-body">
                 <div class="cluster-list">
                   <button
                     v-for="item in displayedReviewItems"
@@ -764,8 +821,11 @@
                   </div>
                 </div>
               </div>
+              <div v-else class="review-workbench-empty">
+                当前图片暂未识别到可裁决的冲突簇。你仍可切换上方视图查看各标注员结果。
+              </div>
 
-              <div class="batch-actions">
+              <div v-if="displayedReviewItems.length > 0" class="batch-actions">
                 <span>批量裁决：</span>
                 <button type="button" class="mini-btn" @click="applyBatchBase(0)">
                   全图采用A为基础
@@ -775,6 +835,9 @@
                 </button>
                 <button type="button" class="mini-btn" @click="applyBatchBase(2)">
                   全图采用C为基础
+                </button>
+                <button type="button" class="mini-btn" @click="resetReviewWorkbench">
+                  恢复融合结果
                 </button>
               </div>
             </div>
@@ -950,6 +1013,7 @@ import {
   createAnnotationSession,
   getFolderTasks,
   getTaskByFileId,
+  confirmReviewDecision,
 } from '@/api/projectStorage'
 import { useUserStore } from '@/stores/user'
 import JSZip from 'jszip' // 需要安装: npm install jszip
@@ -999,11 +1063,18 @@ const progressSocketStopped = ref(false)
 const previewImageRef = ref(null)
 const imageWrapperRef = ref(null)
 const previewMaskRef = ref(null)
+const swipeAreaRef = ref(null)
 
 const annotationPreviewVisible = ref(false)
 const annotationPreviewImageUrl = ref('')
 const annotationPreviewFileName = ref('')
 const currentAnnotations = ref([])
+const previewBaseAnnotations = ref([])
+const previewBaseSourceLabel = ref('')
+const reviewPreviewMode = ref('default')
+const reviewBaseSource = ref('fused')
+const reviewClusterDecisions = ref({})
+const reviewSubmitting = ref(false)
 const annotationImageLoaded = ref(false)
 const annotationImageNaturalWidth = ref(0)
 const annotationImageNaturalHeight = ref(0)
@@ -1031,6 +1102,8 @@ const collaborationIntegration = computed(
   () => currentPreviewTask.value?.collaboration_integration || null
 )
 
+const currentPreviewFile = computed(() => previewableFiles.value[currentPreviewIndex.value] || null)
+
 const integrationDecisionText = computed(
   () => collaborationIntegration.value?.integration_decision_text || '未判定'
 )
@@ -1054,6 +1127,26 @@ const displayedReviewItems = computed(() => {
   const queue = new Set(collaborationIntegration.value?.review_queue || [])
   if (!queue.size) return normalizedReviewItems.value
   return normalizedReviewItems.value.filter((item) => queue.has(item.clusterKey))
+})
+
+const reviewAnnotatorEntries = computed(() => collaborationIntegration.value?.annotator_entries || [])
+
+const reviewPreviewTabs = computed(() => {
+  if (!reviewAnnotatorEntries.value.length) return []
+
+  const tabs = [
+    { key: 'resolved', label: '裁决结果' },
+    { key: 'all', label: '全部标注员' },
+  ]
+
+  reviewAnnotatorEntries.value.forEach((entry) => {
+    tabs.push({
+      key: `annotator_${entry.annotator_index}`,
+      label: entry.annotator_label || getAnnotatorBadge(entry.annotator_index),
+    })
+  })
+
+  return tabs
 })
 // ============ 任务列表状态 ============
 
@@ -1472,6 +1565,7 @@ const showPendingShareActions = computed(() =>
   Boolean(currentProject.value?.isSharedCopy && !currentProject.value?.shareAcceptedAt)
 )
 const currentUserId = computed(() => userStore.user?.id || '')
+const currentUsername = computed(() => userStore.user?.username || '')
 
 const currentFolder = computed(() => {
   if (!currentProject.value || !currentFolderId.value) return null
@@ -1576,13 +1670,35 @@ const renameError = computed(() => {
   return ''
 })
 
-const isPendingFolder = computed(() => currentFolder.value?.name === '待标注')
-const isLabelingFolder = computed(() => currentFolder.value?.name === '标注中')
-const isDoneFolder = computed(() => currentFolder.value?.name === '已标注')
+const isReviewerWorkspace = computed(() => Boolean(currentProject.value?.isReviewerWorkspace))
+const currentFolderStatus = computed(() => currentFolder.value?.status || '')
+const isPendingFolder = computed(() => currentFolderStatus.value === 'pending')
+const isLabelingFolder = computed(() => currentFolderStatus.value === 'labeling')
+const isDoneFolder = computed(
+  () => currentFolderStatus.value === 'done' && currentFolder.value?.name === '已标注'
+)
+const isPendingReviewFolder = computed(
+  () => currentFolderStatus.value === 'done' && currentFolder.value?.name === '待审核'
+)
+const isReviewedFolder = computed(() => currentFolderStatus.value === 'reviewed')
+const reviewWorkbenchEnabled = computed(
+  () => Boolean(collaborationIntegration.value && reviewPreviewTabs.value.length > 0)
+)
+const canSubmitReviewDecision = computed(
+  () =>
+    Boolean(
+      isReviewerWorkspace.value &&
+        isPendingReviewFolder.value &&
+        currentPreviewTask.value &&
+        currentPreviewFile.value,
+    )
+)
 
 const getWorkButtonText = computed(() => {
   if (isPendingFolder.value) return '工作'
   if (isLabelingFolder.value) return '继续'
+  if (isPendingReviewFolder.value) return '审核'
+  if (isReviewedFolder.value) return '查看'
   if (isDoneFolder.value) return '查看'
   return '工作'
 })
@@ -1590,6 +1706,8 @@ const getWorkButtonText = computed(() => {
 const getEmptyFolderText = computed(() => {
   if (isPendingFolder.value) return '该文件夹暂无待标注文件'
   if (isLabelingFolder.value) return '该文件夹暂无标注中文件'
+  if (isPendingReviewFolder.value) return '该文件夹暂无待审核文件'
+  if (isReviewedFolder.value) return '该文件夹暂无已审核文件'
   if (isDoneFolder.value) return '该文件夹暂无已标注文件'
   return '该文件夹暂无文件'
 })
@@ -1609,11 +1727,13 @@ const isCurrentProjectReviewer = computed(
 )
 const pendingReviewFiles = computed(() => {
   if (!currentProject.value) return []
-  const doneFolder = currentProject.value.folders.find((folder) => folder.name === '已标注')
-  return Array.isArray(doneFolder?.files) ? doneFolder.files : []
+  const reviewFolder = currentProject.value.folders.find((folder) => folder.status === 'done')
+  return Array.isArray(reviewFolder?.files) ? reviewFolder.files : []
 })
 const pendingReviewCount = computed(() => pendingReviewFiles.value.length)
-const showPendingReviewButton = computed(() => isCurrentProjectReviewer.value)
+const showPendingReviewButton = computed(
+  () => isCurrentProjectReviewer.value && isReviewerWorkspace.value
+)
 
 const imageContainerStyle = computed(() => {
   if (!annotationImageLoaded.value) {
@@ -1679,6 +1799,7 @@ const getStatusText = (status) => {
     pending: '待标注',
     labeling: '标注中',
     done: '已完成',
+    reviewed: '已审核',
   }
   return statusMap[status] || status
 }
@@ -1720,11 +1841,13 @@ const mapBackendFile = (backendFile) => {
   return mapped
 }
 const getProjectPendingReviewCount = (project) => {
-  const doneFolder = project?.folders?.find((folder) => folder.name === '已标注')
-  return Array.isArray(doneFolder?.files) ? doneFolder.files.length : 0
+  const reviewFolder = project?.folders?.find((folder) => folder.status === 'done')
+  return Array.isArray(reviewFolder?.files) ? reviewFolder.files.length : 0
 }
 const showProjectReviewDot = (project) =>
-  project?.reviewerId === currentUserId.value && getProjectPendingReviewCount(project) > 0
+  project?.isReviewerWorkspace &&
+  project?.reviewerId === currentUserId.value &&
+  getProjectPendingReviewCount(project) > 0
 
 // ============ 数据加载 ============
 
@@ -1745,9 +1868,14 @@ const loadProjects = async () => {
         const pendingFiles = allFiles.filter((f) => f.status === 'pending')
         const labelingFiles = allFiles.filter((f) => f.status === 'labeling')
         const doneFiles = allFiles.filter((f) => f.status === 'done')
+        const reviewedFiles = allFiles.filter((f) => f.status === 'reviewed')
+        const isReviewerWorkspace =
+          Boolean(project.is_shared_copy) &&
+          project.reviewer_id === currentUserId.value &&
+          project.owner_id === currentUsername.value
 
         console.log(
-          `[VUE-003] 项目[${project.name}] | pending=${pendingFiles.length}, labeling=${labelingFiles.length}, done=${doneFiles.length}`
+          `[VUE-003] 项目[${project.name}] | pending=${pendingFiles.length}, labeling=${labelingFiles.length}, done=${doneFiles.length}, reviewed=${reviewedFiles.length}, reviewerWorkspace=${isReviewerWorkspace}`
         )
 
         return {
@@ -1767,11 +1895,22 @@ const loadProjects = async () => {
             ? new Date(project.share_accepted_at).getTime()
             : null,
           reviewerId: project.reviewer_id || '',
-          folders: [
-            { id: `pending_${project.id}`, name: '待标注', files: pendingFiles },
-            { id: `labeling_${project.id}`, name: '标注中', files: labelingFiles },
-            { id: `done_${project.id}`, name: '已标注', files: doneFiles },
-          ],
+          isReviewerWorkspace,
+          folders: isReviewerWorkspace
+            ? [
+                { id: `review_pending_${project.id}`, name: '待审核', status: 'done', files: doneFiles },
+                {
+                  id: `reviewed_${project.id}`,
+                  name: '已审核',
+                  status: 'reviewed',
+                  files: reviewedFiles,
+                },
+              ]
+            : [
+                { id: `pending_${project.id}`, name: '待标注', status: 'pending', files: pendingFiles },
+                { id: `labeling_${project.id}`, name: '标注中', status: 'labeling', files: labelingFiles },
+                { id: `done_${project.id}`, name: '已标注', status: 'done', files: doneFiles },
+              ],
         }
       })
     )
@@ -1811,18 +1950,19 @@ const loadFolderTasks = async () => {
           })
         }
       }
-    } else if (isDoneFolder.value) {
-      console.log(`[LOAD] 加载已完成任务 | project_id=${currentProject.value.id}`)
-      const data = await getFolderTasks(currentProject.value.id, 'done')
+    } else if (isDoneFolder.value || isPendingReviewFolder.value || isReviewedFolder.value) {
+      const folderStatus = isReviewedFolder.value ? 'reviewed' : 'done'
+      console.log(`[LOAD] 加载最终任务 | project_id=${currentProject.value.id}, status=${folderStatus}`)
+      const data = await getFolderTasks(currentProject.value.id, folderStatus)
 
       if (data?.tasks) {
         // ⚠️ 同样过滤 null 元素
         doneTasks.value = data.tasks.filter((t) => t && t.task_id && t.file_id)
         console.log(`[LOAD] 加载到 ${doneTasks.value.length} 个有效已完成任务`)
 
-        const doneFolder = currentProject.value.folders.find((f) => f.name === '已标注')
-        if (doneFolder) {
-          doneFolder.files.forEach((file) => {
+        const targetFolder = currentProject.value.folders.find((f) => f.status === folderStatus)
+        if (targetFolder) {
+          targetFolder.files.forEach((file) => {
             const task = doneTasks.value.find((t) => t.file_id === file.id)
             if (task) {
               file.taskId = task.task_id
@@ -1968,7 +2108,12 @@ const previewFile = (file) => {
 }
 
 const handleImagePreview = (file) => {
-  if (isDoneFolder.value || isLabelingFolder.value) {
+  if (
+    isDoneFolder.value ||
+    isLabelingFolder.value ||
+    isPendingReviewFolder.value ||
+    isReviewedFolder.value
+  ) {
     openAnnotationPreview(
       file,
       currentFolder.value?.files.findIndex((f) => f.id === file.id)
@@ -2100,15 +2245,228 @@ const loadDraftFromStorage = async (fileId) => {
   return draft ? JSON.parse(draft) : null
 }
 
+const REVIEW_SOURCE_COLORS = ['#ff6b6b', '#4c6ef5', '#12b886']
+
+const cloneAnnotations = (annotations = []) => annotations.map((annotation) => ({ ...annotation }))
+
+const normalizePreviewAnnotation = (anno, overrides = {}) => {
+  const label = overrides.label ?? anno.label ?? anno.category ?? anno.name ?? '未命名'
+
+  return {
+    x: Number(overrides.x ?? anno.x ?? anno.bbox?.[0] ?? 0),
+    y: Number(overrides.y ?? anno.y ?? anno.bbox?.[1] ?? 0),
+    width: Number(overrides.width ?? anno.width ?? anno.bbox?.[2] ?? 0),
+    height: Number(overrides.height ?? anno.height ?? anno.bbox?.[3] ?? 0),
+    label,
+    color: overrides.color ?? anno.color ?? getLabelColor(label),
+    confidence: Number(overrides.confidence ?? anno.confidence ?? anno.score ?? 1),
+  }
+}
+
+const getAnnotatorColor = (annotatorIndex) =>
+  REVIEW_SOURCE_COLORS[annotatorIndex % REVIEW_SOURCE_COLORS.length]
+
+const getAnnotatorEntry = (annotatorIndex) =>
+  reviewAnnotatorEntries.value.find((entry) => entry.annotator_index === annotatorIndex)
+
+const buildAnnotatorPreviewAnnotations = (
+  annotations = [],
+  annotatorIndex,
+  { includeAnnotatorTag = false } = {},
+) =>
+  annotations.map((annotation) => {
+    const normalized = normalizePreviewAnnotation(annotation)
+    return {
+      ...normalized,
+      color: getAnnotatorColor(annotatorIndex),
+      label: includeAnnotatorTag
+        ? `${normalized.label} · ${getAnnotatorBadge(annotatorIndex).replace('标注员 ', '')}`
+        : normalized.label,
+    }
+  })
+
+const calculateIou = (a, b) => {
+  const x1 = Math.max(a.x, b.x)
+  const y1 = Math.max(a.y, b.y)
+  const x2 = Math.min(a.x + a.width, b.x + b.width)
+  const y2 = Math.min(a.y + a.height, b.y + b.height)
+  const interWidth = Math.max(0, x2 - x1)
+  const interHeight = Math.max(0, y2 - y1)
+  const interArea = interWidth * interHeight
+  const unionArea = a.width * a.height + b.width * b.height - interArea
+  return unionArea > 0 ? interArea / unionArea : 0
+}
+
+const removeDuplicatePreviewAnnotations = (annotations = []) => {
+  const deduped = []
+  annotations.forEach((annotation) => {
+    const exists = deduped.some(
+      (current) => current.label === annotation.label && calculateIou(current, annotation) >= 0.85,
+    )
+    if (!exists) {
+      deduped.push({ ...annotation })
+    }
+  })
+  return deduped
+}
+
+const getBaseReviewAnnotations = (sourceKey) => {
+  if (sourceKey === 'reviewed') {
+    return cloneAnnotations(previewBaseAnnotations.value)
+  }
+
+  if (sourceKey === 'fused') {
+    const fusedAnnotations = collaborationIntegration.value?.fused_annotations || []
+    return fusedAnnotations.length
+      ? fusedAnnotations.map((annotation) => normalizePreviewAnnotation(annotation))
+      : cloneAnnotations(previewBaseAnnotations.value)
+  }
+
+  const annotatorMatch = /^annotator_(\d+)$/.exec(sourceKey || '')
+  if (annotatorMatch) {
+    const annotatorIndex = Number(annotatorMatch[1])
+    const annotatorEntry = getAnnotatorEntry(annotatorIndex)
+    return (annotatorEntry?.annotations || []).map((annotation) => normalizePreviewAnnotation(annotation))
+  }
+
+  return cloneAnnotations(previewBaseAnnotations.value)
+}
+
+const annotationMatchesCluster = (annotation, cluster) => {
+  const overlayBoxes = [
+    cluster?.overlay?.fused_preview,
+    ...(cluster?.overlay?.member_boxes || []),
+  ]
+    .filter(Boolean)
+    .map((box) => normalizePreviewAnnotation(box))
+
+  return overlayBoxes.some((box) => calculateIou(annotation, box) >= 0.35)
+}
+
+const buildResolvedReviewAnnotations = () => {
+  let resolved = getBaseReviewAnnotations(reviewBaseSource.value)
+
+  Object.entries(reviewClusterDecisions.value || {}).forEach(([clusterKey, decision]) => {
+    const cluster = normalizedReviewItems.value.find(
+      (item) => String(item.clusterKey) === String(clusterKey),
+    )
+    if (!cluster || !decision) return
+
+    let adoptedAnnotations = []
+    if (decision.action === 'adopt_fused' && cluster.overlay?.fused_preview) {
+      adoptedAnnotations = [normalizePreviewAnnotation(cluster.overlay.fused_preview)]
+    } else if (decision.action === 'adopt_annotator') {
+      const matchedBox = (cluster.overlay?.member_boxes || []).find(
+        (box) => box.annotator_index === decision.annotatorIndex,
+      )
+      if (matchedBox) {
+        adoptedAnnotations = [normalizePreviewAnnotation(matchedBox)]
+      }
+    }
+
+    resolved = resolved.filter((annotation) => !annotationMatchesCluster(annotation, cluster))
+    resolved.push(...adoptedAnnotations)
+  })
+
+  return removeDuplicatePreviewAnnotations(resolved)
+}
+
+const refreshPreviewAnnotations = () => {
+  if (!reviewPreviewTabs.value.length) {
+    currentAnnotations.value = cloneAnnotations(previewBaseAnnotations.value)
+    annotationDataSource.value = previewBaseSourceLabel.value
+    nextTick(() => {
+      updateContainerSize()
+      updateImageRenderRect()
+    })
+    return
+  }
+
+  if (reviewPreviewMode.value === 'resolved') {
+    currentAnnotations.value = buildResolvedReviewAnnotations()
+    const sourceLabelMap = {
+      fused: '裁决结果 · 融合基础',
+      reviewed: '裁决结果 · 已审核版本',
+    }
+    annotationDataSource.value =
+      sourceLabelMap[reviewBaseSource.value] ||
+      `裁决结果 · ${reviewPreviewTabs.value.find((tab) => tab.key === reviewBaseSource.value)?.label || '人工裁决'}`
+    nextTick(() => {
+      updateContainerSize()
+      updateImageRenderRect()
+    })
+    return
+  }
+
+  if (reviewPreviewMode.value === 'all') {
+    currentAnnotations.value = reviewAnnotatorEntries.value.flatMap((entry) =>
+      buildAnnotatorPreviewAnnotations(entry.annotations || [], entry.annotator_index, {
+        includeAnnotatorTag: true,
+      }),
+    )
+    annotationDataSource.value = '全部标注员叠加'
+    nextTick(() => {
+      updateContainerSize()
+      updateImageRenderRect()
+    })
+    return
+  }
+
+  const annotatorMatch = /^annotator_(\d+)$/.exec(reviewPreviewMode.value || '')
+  if (annotatorMatch) {
+    const annotatorIndex = Number(annotatorMatch[1])
+    const annotatorEntry = getAnnotatorEntry(annotatorIndex)
+    currentAnnotations.value = buildAnnotatorPreviewAnnotations(
+      annotatorEntry?.annotations || [],
+      annotatorIndex,
+    )
+    annotationDataSource.value = `${annotatorEntry?.annotator_label || getAnnotatorBadge(annotatorIndex)}${annotatorEntry?.owner_id ? ` · ${annotatorEntry.owner_id}` : ''}`
+    nextTick(() => {
+      updateContainerSize()
+      updateImageRenderRect()
+    })
+    return
+  }
+
+  currentAnnotations.value = cloneAnnotations(previewBaseAnnotations.value)
+  annotationDataSource.value = previewBaseSourceLabel.value
+  nextTick(() => {
+    updateContainerSize()
+    updateImageRenderRect()
+  })
+}
+
+const switchReviewPreviewMode = (mode) => {
+  reviewPreviewMode.value = mode
+  refreshPreviewAnnotations()
+}
+
+const resetReviewWorkbench = () => {
+  if (!collaborationIntegration.value) return
+  reviewBaseSource.value =
+    currentPreviewTask.value?.status === 'reviewed' || isReviewedFolder.value ? 'reviewed' : 'fused'
+  reviewClusterDecisions.value = {}
+  reviewPreviewMode.value = 'resolved'
+  reviewDecisionLog.value.push({
+    action: 'reset_to_default',
+    at: Date.now(),
+  })
+  refreshPreviewAnnotations()
+}
+
 const loadPreviewData = async (file) => {
   annotationPreviewFileName.value = file.name || ''
   annotationPreviewImageUrl.value = getFilePreviewUrl(file) || file.downloadUrl || ''
   annotationImageLoaded.value = false
   annotationDataSource.value = ''
+  previewBaseSourceLabel.value = ''
 
   currentPreviewTask.value = null
   selectedReviewCluster.value = null
   reviewDecisionLog.value = []
+  reviewClusterDecisions.value = {}
+  reviewBaseSource.value = 'fused'
+  reviewPreviewMode.value = 'default'
 
   let annotations = []
   let taskData = null
@@ -2132,7 +2490,7 @@ const loadPreviewData = async (file) => {
       annotationDataSource.value =
         taskData.annotation_source === 'collaboration_fused' ? '协作整合' : '任务'
     }
-  } else if (isDoneFolder.value) {
+  } else if (isDoneFolder.value || isPendingReviewFolder.value || isReviewedFolder.value) {
     const validTasks = doneTasks.value.filter((t) => t && t.file_id)
     taskData = validTasks.find((t) => t.file_id === file.id)
     if (taskData?.annotations?.length > 0) {
@@ -2188,22 +2546,20 @@ const loadPreviewData = async (file) => {
     }
   }
 
-  // ========== 关键修复：保留颜色信息 ==========
-  currentAnnotations.value = annotations.map((anno) => ({
-    x: anno.x || anno.bbox?.[0] || 0,
-    y: anno.y || anno.bbox?.[1] || 0,
-    width: anno.width || anno.bbox?.[2] || 0,
-    height: anno.height || anno.bbox?.[3] || 0,
-    label: anno.label || anno.category || anno.name || '未命名',
-    color: getLabelColor(anno.label || anno.category || anno.name), // 优先使用标注自带的颜色
-  }))
-
   currentPreviewTask.value = taskData
+  previewBaseAnnotations.value = annotations.map((anno) => normalizePreviewAnnotation(anno))
+  previewBaseSourceLabel.value = annotationDataSource.value || '任务'
+
   if (taskData?.collaboration_integration) {
     reviewConflictOnly.value =
       taskData.collaboration_integration.review_workbench?.conflict_only_mode_default ?? true
     selectedReviewCluster.value = displayedReviewItems.value[0] || null
+    reviewBaseSource.value =
+      taskData.status === 'reviewed' || isReviewedFolder.value ? 'reviewed' : 'fused'
+    reviewPreviewMode.value = 'resolved'
   }
+
+  refreshPreviewAnnotations()
 
   if (currentAnnotations.value.length === 0) {
     console.log(`[PREVIEW] 未找到标注数据 | file_id=${file.id}`)
@@ -2224,26 +2580,15 @@ const applyClusterDecision = (action, payload = {}) => {
   const cluster = selectedReviewCluster.value
   if (!cluster) return
 
-  let adoptedBox = null
-  if (action === 'adopt_fused') {
-    adoptedBox = cluster.overlay?.fused_preview
-  } else if (action === 'adopt_annotator') {
-    const memberBoxes = cluster.overlay?.member_boxes || []
-    adoptedBox = memberBoxes.find((box) => box.annotator_index === payload.annotatorIndex)
-  }
-  if (!adoptedBox) return
-
-  currentAnnotations.value = [
-    ...currentAnnotations.value,
-    {
-      x: adoptedBox.x || 0,
-      y: adoptedBox.y || 0,
-      width: adoptedBox.width || 0,
-      height: adoptedBox.height || 0,
-      label: adoptedBox.label || '未命名',
-      color: adoptedBox.color || getLabelColor(adoptedBox.label),
+  reviewClusterDecisions.value = {
+    ...reviewClusterDecisions.value,
+    [cluster.clusterKey]: {
+      action,
+      annotatorIndex: payload.annotatorIndex ?? null,
     },
-  ]
+  }
+  reviewPreviewMode.value = 'resolved'
+  refreshPreviewAnnotations()
 
   reviewDecisionLog.value.push({
     clusterKey: cluster.clusterKey,
@@ -2254,22 +2599,60 @@ const applyClusterDecision = (action, payload = {}) => {
 }
 
 const applyBatchBase = (annotatorIndex) => {
-  const items = displayedReviewItems.value
-  items.forEach((item) => {
-    const member = (item.overlay?.member_boxes || []).find(
-      (box) => box.annotator_index === annotatorIndex
-    )
-    if (!member) return
-    currentAnnotations.value.push({
-      x: member.x || 0,
-      y: member.y || 0,
-      width: member.width || 0,
-      height: member.height || 0,
-      label: member.label || '未命名',
-      color: member.color || getLabelColor(member.label),
-    })
+  if (!getAnnotatorEntry(annotatorIndex)) return
+  reviewBaseSource.value = `annotator_${annotatorIndex}`
+  reviewClusterDecisions.value = {}
+  reviewPreviewMode.value = 'resolved'
+  refreshPreviewAnnotations()
+  reviewDecisionLog.value.push({
+    action: 'adopt_all_from_annotator',
+    annotatorIndex,
+    at: Date.now(),
   })
 }
+
+const submitReviewResult = async () => {
+  if (!canSubmitReviewDecision.value || !currentProject.value || !currentPreviewTask.value) return
+
+  const targetFile = currentPreviewFile.value
+  if (!targetFile) return
+
+  reviewSubmitting.value = true
+
+  try {
+    const resolvedAnnotations = buildResolvedReviewAnnotations()
+    await confirmReviewDecision(currentProject.value.id, {
+      file_id: targetFile.id,
+      task_id: currentPreviewTask.value.task_id,
+      annotations: resolvedAnnotations,
+      review_decision_log: reviewDecisionLog.value,
+      base_source: reviewBaseSource.value,
+    })
+
+    const activeProjectId = currentProject.value.id
+    await loadProjects()
+    currentProjectId.value = activeProjectId
+
+    await nextTick()
+
+    const refreshedProject = projectList.value.find((project) => project.id === activeProjectId)
+    const reviewedFolder = refreshedProject?.folders?.find((folder) => folder.status === 'reviewed')
+    if (reviewedFolder) {
+      currentFolderId.value = reviewedFolder.id
+    }
+
+    await nextTick()
+    await loadFolderTasks()
+    closeAnnotationPreview()
+    window.alert('审核结果已归档到“已审核”文件夹，并同步到分享者的“已标注”')
+  } catch (error) {
+    console.error('提交审核结果失败:', error)
+    window.alert(error?.response?.data?.detail || error?.message || '提交审核结果失败')
+  } finally {
+    reviewSubmitting.value = false
+  }
+}
+
 const getLabelColor = (label) => {
   if (!label) return '#ff0000'
 
@@ -2457,15 +2840,19 @@ const openAnnotationPreview = async (file, index = null) => {
 
     if (currentPreviewIndex.value === -1) currentPreviewIndex.value = 0
 
+    annotationPreviewVisible.value = true
+    await nextTick()
     updateContainerSize()
 
     // 先加载当前图片
     await loadPreviewData(previewableFiles.value[currentPreviewIndex.value])
-
-    annotationPreviewVisible.value = true
+    await nextTick()
+    updateContainerSize()
 
     // 预加载相邻图片（关键优化）
     nextTick(() => {
+      updateContainerSize()
+      updateImageRenderRect()
       batchPreload(currentPreviewIndex.value, 2)
       previewMaskRef.value?.focus()
     })
@@ -2479,6 +2866,11 @@ const closeAnnotationPreview = () => {
   annotationPreviewImageUrl.value = ''
   annotationPreviewFileName.value = ''
   currentAnnotations.value = []
+  previewBaseAnnotations.value = []
+  previewBaseSourceLabel.value = ''
+  reviewPreviewMode.value = 'default'
+  reviewBaseSource.value = 'fused'
+  reviewClusterDecisions.value = {}
   annotationImageLoaded.value = false
   annotationImageNaturalWidth.value = 0
   annotationImageNaturalHeight.value = 0
@@ -2489,6 +2881,37 @@ const closeAnnotationPreview = () => {
 }
 
 const updateContainerSize = () => {
+  const wrapperEl = imageWrapperRef.value
+  if (wrapperEl) {
+    const rect = wrapperEl.getBoundingClientRect()
+    if (rect.width > 0 && rect.height > 0) {
+      containerSize.value = {
+        width: rect.width,
+        height: rect.height,
+      }
+      return
+    }
+  }
+
+  const contentEl = swipeAreaRef.value
+  if (contentEl) {
+    const style = window.getComputedStyle(contentEl)
+    const horizontalPadding =
+      Number.parseFloat(style.paddingLeft || '0') + Number.parseFloat(style.paddingRight || '0')
+    const verticalPadding =
+      Number.parseFloat(style.paddingTop || '0') + Number.parseFloat(style.paddingBottom || '0')
+    const width = contentEl.clientWidth - horizontalPadding
+    const height = contentEl.clientHeight - verticalPadding
+
+    if (width > 0 && height > 0) {
+      containerSize.value = {
+        width,
+        height,
+      }
+      return
+    }
+  }
+
   const vw = window.innerWidth
   const vh = window.innerHeight
 
@@ -2519,7 +2942,10 @@ const onAnnotationImageLoad = (event) => {
   annotationImageNaturalWidth.value = img.naturalWidth
   annotationImageNaturalHeight.value = img.naturalHeight
   annotationImageLoaded.value = true
-  nextTick(() => updateImageRenderRect())
+  nextTick(() => {
+    updateContainerSize()
+    updateImageRenderRect()
+  })
 }
 
 const goToPrevImage = async () => {
@@ -2595,6 +3021,20 @@ const handleResize = () => {
   }
 }
 
+watch(displayedReviewItems, (items) => {
+  if (!items.length) {
+    selectedReviewCluster.value = null
+    return
+  }
+
+  const hasSelected = items.some(
+    (item) => String(item.clusterKey) === String(selectedReviewCluster.value?.clusterKey),
+  )
+  if (!hasSelected) {
+    selectedReviewCluster.value = items[0]
+  }
+})
+
 // ============ 工作流核心方法 ============
 
 const handleWork = async (file) => {
@@ -2608,7 +3048,7 @@ const handleWork = async (file) => {
     workVisible.value = true
   } else if (isLabelingFolder.value) {
     await loadSingleFileTask(file)
-  } else if (isDoneFolder.value) {
+  } else if (isDoneFolder.value || isPendingReviewFolder.value || isReviewedFolder.value) {
     await openAnnotationPreview(file)
   }
 }
@@ -2712,11 +3152,11 @@ const closePendingReviewDialog = () => {
 const openPendingReviewItem = async (file) => {
   closePendingReviewDialog()
   if (!currentProject.value) return
-  const doneFolder = currentProject.value.folders.find((folder) => folder.name === '已标注')
-  if (!doneFolder) return
-  currentFolderId.value = doneFolder.id
+  const reviewFolder = currentProject.value.folders.find((folder) => folder.status === 'done')
+  if (!reviewFolder) return
+  currentFolderId.value = reviewFolder.id
   await nextTick()
-  const index = doneFolder.files.findIndex((item) => item.id === file.id)
+  const index = reviewFolder.files.findIndex((item) => item.id === file.id)
   await openAnnotationPreview(file, index >= 0 ? index : 0)
 }
 
@@ -3152,7 +3592,12 @@ const connectProgressSocket = () => {
       await loadProjects()
       if (activeProjectId) {
         currentProjectId.value = activeProjectId
-        if (isLabelingFolder.value || isDoneFolder.value) {
+        if (
+          isLabelingFolder.value ||
+          isDoneFolder.value ||
+          isPendingReviewFolder.value ||
+          isReviewedFolder.value
+        ) {
           await loadFolderTasks()
         }
       }
@@ -3844,6 +4289,11 @@ onBeforeUnmount(() => {
   color: #065f46;
 }
 
+.file-status-tag.reviewed {
+  background: #ede9fe;
+  color: #5b21b6;
+}
+
 .image-card-actions {
   padding: 0 12px 12px;
   display: flex;
@@ -4373,6 +4823,8 @@ onBeforeUnmount(() => {
 .toolbar-actions {
   display: flex;
   gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .toolbar-btn {
@@ -4383,6 +4835,12 @@ onBeforeUnmount(() => {
   font-weight: 600;
   cursor: pointer;
   transition: all 0.2s ease;
+}
+
+.toolbar-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
 }
 
 .btn-continue {
@@ -4412,14 +4870,35 @@ onBeforeUnmount(() => {
   color: #374151;
 }
 
+.btn-secondary {
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.btn-secondary:hover {
+  background: #e2e8f0;
+  color: #334155;
+}
+
+.btn-review-submit {
+  background: linear-gradient(135deg, #f59e0b, #ea580c);
+  color: #fff;
+}
+
+.btn-review-submit:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.04);
+}
+
 /* 图片内容区 - 关键：使用 flex 布局让容器自动计算尺寸 */
 .annotation-preview-content {
   flex: 1;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 24px;
-  overflow: hidden;
+  overflow: auto;
   position: relative;
   background: #f9fafb;
 }
@@ -4428,6 +4907,8 @@ onBeforeUnmount(() => {
 .annotation-image-wrapper {
   width: 100%;
   height: 100%;
+  min-width: 0;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -4437,6 +4918,8 @@ onBeforeUnmount(() => {
 .annotation-image-container {
   position: relative;
   /* 尺寸由 JS 计算的 style 绑定控制 */
+  max-width: 100%;
+  max-height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -4447,7 +4930,7 @@ onBeforeUnmount(() => {
 .annotation-preview-image {
   width: 100%;
   height: 100%;
-  object-fit: fill; /* 关键：填满容器，不保持比例，由容器控制比例 */
+  object-fit: contain;
   display: block;
 }
 
@@ -4482,6 +4965,8 @@ onBeforeUnmount(() => {
   gap: 24px;
   color: #6b7280;
   font-size: 14px;
+  flex-wrap: wrap;
+  justify-content: center;
 }
 
 .stat-item {
@@ -4499,6 +4984,36 @@ onBeforeUnmount(() => {
 .stat-item.empty {
   color: #9ca3af;
   background: #f9fafb;
+}
+
+.review-preview-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+
+.review-preview-tab {
+  border: 1px solid #dbeafe;
+  background: #fff;
+  color: #334155;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.review-preview-tab:hover {
+  border-color: #93c5fd;
+  color: #1d4ed8;
+}
+
+.review-preview-tab.active {
+  background: #dbeafe;
+  border-color: #60a5fa;
+  color: #1d4ed8;
 }
 
 .annotation-label-list {
@@ -4531,6 +5046,17 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+.review-workbench-empty {
+  margin-top: 10px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 10px;
+  padding: 14px 16px;
+  background: #fff;
+  color: #64748b;
+  font-size: 13px;
+  text-align: center;
 }
 
 .workbench-title {
