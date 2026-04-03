@@ -1098,8 +1098,8 @@ const imageRenderRect = ref({
   top: 0,
 })
 
-const collaborationIntegration = computed(
-  () => currentPreviewTask.value?.collaboration_integration || null
+const collaborationIntegration = computed(() =>
+  isReviewerWorkspace.value ? currentPreviewTask.value?.collaboration_integration || null : null,
 )
 
 const currentPreviewFile = computed(() => previewableFiles.value[currentPreviewIndex.value] || null)
@@ -1132,6 +1132,7 @@ const displayedReviewItems = computed(() => {
 const reviewAnnotatorEntries = computed(() => collaborationIntegration.value?.annotator_entries || [])
 
 const reviewPreviewTabs = computed(() => {
+  if (!isReviewerWorkspace.value) return []
   if (!reviewAnnotatorEntries.value.length) return []
 
   const tabs = [

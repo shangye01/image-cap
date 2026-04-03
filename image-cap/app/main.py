@@ -204,8 +204,12 @@ def _apply_collaboration_preview(
         task_obj: dict[str, Any],
         task: dict[str, Any],
         prefer_integrated_annotations: bool = False,
+        include_collaboration_preview: bool = True,
 ) -> dict[str, Any]:
     """在任务响应中附加协作整合结果，审核视角优先展示整合后的预览。"""
+    if not include_collaboration_preview:
+        return task_obj
+
     try:
         integration = _collaborative_auto_integrate(task)
         if integration.get("ready"):
@@ -230,14 +234,19 @@ def _task_sort_value(task: dict[str, Any]) -> str:
     )
 
 
+def _is_reviewer_workspace_owner(project_owner: str, lineage_context: dict[str, Any]) -> bool:
+    reviewer_username = lineage_context.get("reviewer_username")
+    return bool(project_owner and reviewer_username and project_owner == reviewer_username)
+
+
 def _should_prefer_reviewed_task(project_owner: str, lineage_context: dict[str, Any]) -> bool:
-    preferred_owners = {
-        lineage_context.get("root_owner"),
-        lineage_context.get("reviewer_username"),
-    }
-    preferred_owners.discard(None)
-    preferred_owners.discard("")
-    return bool(project_owner and project_owner in preferred_owners)
+    return _is_reviewer_workspace_owner(project_owner, lineage_context)
+
+
+def _can_access_cross_project_annotations(project: Project | None, lineage_context: dict[str, Any]) -> bool:
+    if not project:
+        return False
+    return _is_reviewer_workspace_owner(project.owner_id, lineage_context)
 
 
 def _pick_preferred_storage_task(
@@ -1270,14 +1279,7 @@ async def get_folder_tasks(
     project_uuid = uuid.UUID(project_id)
     project_record = db.query(Project).filter(Project.id == project_uuid).first()
     lineage_context = _get_project_lineage_context(project_id)
-    reviewer_username = lineage_context.get("reviewer_username")
-    allow_cross_project_fallback = bool(
-        project_record
-        and (
-            not project_record.is_shared_copy
-            or (reviewer_username and project_record.owner_id == reviewer_username)
-        )
-    )
+    allow_cross_project_fallback = _can_access_cross_project_annotations(project_record, lineage_context)
     prefer_reviewed_task = bool(
         project_record and _should_prefer_reviewed_task(project_record.owner_id, lineage_context)
     )
@@ -1349,7 +1351,10 @@ async def get_folder_tasks(
             _apply_collaboration_preview(
                 task_obj,
                 task,
-                prefer_integrated_annotations=used_fallback_task and task.get("status") != "reviewed",
+                prefer_integrated_annotations=(
+                    allow_cross_project_fallback and used_fallback_task and task.get("status") != "reviewed"
+                ),
+                include_collaboration_preview=allow_cross_project_fallback,
             )
         )
 
@@ -1384,15 +1389,11 @@ async def get_file_task(
     task_result = supabase.table("tasks").select("*").eq("file_id", file_id).maybe_single().execute()
     task = task_result.data if task_result else None
     lineage_context = _get_project_lineage_context(project_id)
-    reviewer_username = lineage_context.get("reviewer_username")
     used_fallback_task = False
     prefer_reviewed_task = _should_prefer_reviewed_task(project_record.owner_id, lineage_context)
 
     # 兜底：按 storage_path 查询同源任务（满足“谁标注谁可看，分享者均可看”）
-    allow_cross_project_fallback = bool(
-        not project_record.is_shared_copy
-        or (reviewer_username and project_record.owner_id == reviewer_username)
-    )
+    allow_cross_project_fallback = _can_access_cross_project_annotations(project_record, lineage_context)
     if file_record.storage_path and allow_cross_project_fallback:
         fallback_result = (
             supabase.table("tasks")
@@ -1440,7 +1441,10 @@ async def get_file_task(
         "task": _apply_collaboration_preview(
             task_obj,
             task,
-            prefer_integrated_annotations=used_fallback_task and task.get("status") != "reviewed",
+            prefer_integrated_annotations=(
+                allow_cross_project_fallback and used_fallback_task and task.get("status") != "reviewed"
+            ),
+            include_collaboration_preview=allow_cross_project_fallback,
         )
     }
 
@@ -2186,165 +2190,188 @@ async def confirm_review_result(
         db: Session = Depends(get_db)
 ):
     """审核员确认裁决结果：归档到“已审核”，并同步分享者查看最终结果。"""
-    user = _require_current_user(db, authorization)
-
     try:
-        project_uuid = uuid.UUID(str(project_id))
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="项目 ID 无效")
+        user = _require_current_user(db, authorization)
 
-    current_project = db.query(Project).filter(Project.id == project_uuid).first()
-    if not current_project:
-        raise HTTPException(status_code=404, detail="项目不存在")
-    if current_project.owner_id != user.username:
-        raise HTTPException(status_code=403, detail="仅当前审核项目拥有者可以提交审核结果")
+        try:
+            project_uuid = uuid.UUID(str(project_id))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="项目 ID 无效")
 
-    lineage_context = _get_project_lineage_context(project_id)
-    reviewer_username = lineage_context.get("reviewer_username")
-    if not reviewer_username or reviewer_username != user.username:
-        raise HTTPException(status_code=403, detail="仅项目审核人可以确认裁决结果")
+        current_project = db.query(Project).filter(Project.id == project_uuid).first()
+        if not current_project:
+            raise HTTPException(status_code=404, detail="项目不存在")
+        if current_project.owner_id != user.username:
+            raise HTTPException(status_code=403, detail="仅当前审核项目拥有者可以提交审核结果")
 
-    file_id = payload.get("file_id")
-    if not file_id:
-        raise HTTPException(status_code=400, detail="缺少 file_id")
+        lineage_context = _get_project_lineage_context(project_id)
+        reviewer_username = lineage_context.get("reviewer_username")
+        if not reviewer_username or reviewer_username != user.username:
+            raise HTTPException(status_code=403, detail="仅项目审核人可以确认裁决结果")
 
-    annotations = payload.get("annotations")
-    if not isinstance(annotations, list):
-        raise HTTPException(status_code=400, detail="annotations 必须为数组")
+        file_id = payload.get("file_id")
+        if not file_id:
+            raise HTTPException(status_code=400, detail="缺少 file_id")
 
-    file_record = db.query(ProjectFile).filter(
-        ProjectFile.id == file_id,
-        ProjectFile.project_id == project_uuid,
-    ).first()
-    if not file_record:
-        raise HTTPException(status_code=404, detail="审核文件不存在")
+        try:
+            file_uuid = uuid.UUID(str(file_id))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="文件 ID 无效")
 
-    source_task = None
-    source_task_id = payload.get("task_id")
-    if source_task_id:
-        source_task_result = supabase.table("tasks").select("*").eq("id", source_task_id).maybe_single().execute()
-        source_task = source_task_result.data if source_task_result else None
+        annotations = payload.get("annotations")
+        if not isinstance(annotations, list):
+            raise HTTPException(status_code=400, detail="annotations 必须为数组")
 
-    if not source_task:
-        fallback_result = (
+        file_record = db.query(ProjectFile).filter(
+            ProjectFile.id == file_uuid,
+            ProjectFile.project_id == project_uuid,
+        ).first()
+        if not file_record:
+            raise HTTPException(status_code=404, detail="审核文件不存在")
+
+        source_task = None
+        source_task_id = payload.get("task_id")
+        if source_task_id:
+            source_task_result = (
+                supabase.table("tasks").select("*").eq("id", source_task_id).limit(1).execute()
+            )
+            source_tasks = source_task_result.data or []
+            source_task = source_tasks[0] if source_tasks else None
+
+        if not source_task:
+            fallback_result = (
+                supabase.table("tasks")
+                .select("*")
+                .in_("project_id", lineage_context.get("related_project_ids") or [project_id])
+                .eq("image_storage_path", file_record.storage_path)
+                .order("updated_at", desc=True)
+                .limit(10)
+                .execute()
+            )
+            fallback_tasks = fallback_result.data or []
+            source_task = _pick_preferred_storage_task(fallback_tasks, prefer_reviewed=False)
+
+        if not source_task:
+            raise HTTPException(status_code=404, detail="未找到待审核任务")
+
+        review_task_result = (
             supabase.table("tasks")
             .select("*")
-            .in_("project_id", lineage_context.get("related_project_ids") or [project_id])
-            .eq("image_storage_path", file_record.storage_path)
+            .eq("project_id", project_id)
+            .eq("file_id", str(file_record.id))
             .order("updated_at", desc=True)
-            .limit(10)
+            .limit(5)
             .execute()
         )
-        fallback_tasks = fallback_result.data or []
-        source_task = _pick_preferred_storage_task(fallback_tasks, prefer_reviewed=False)
-
-    if not source_task:
-        raise HTTPException(status_code=404, detail="未找到待审核任务")
-
-    review_task_result = supabase.table("tasks").select("*").eq("file_id", str(file_record.id)).maybe_single().execute()
-    review_task = review_task_result.data if review_task_result else None
-    review_task_id = (
-        review_task.get("id")
-        if review_task
-        else f"review_{str(project_uuid).replace('-', '')[:8]}_{str(file_record.id).replace('-', '')[:8]}"
-    )
-
-    now_iso = datetime.now().isoformat()
-    task_payload = {
-        "id": review_task_id,
-        "image_url": source_task.get("image_url"),
-        "image_storage_path": file_record.storage_path,
-        "status": "reviewed",
-        "project_name": current_project.name,
-        "project_id": project_id,
-        "file_id": str(file_record.id),
-        "created_at": review_task.get("created_at") if review_task else now_iso,
-        "completed_at": now_iso,
-        "annotations_count": len(annotations),
-    }
-    supabase.table("tasks").upsert(task_payload).execute()
-    supabase.table("drafts").delete().eq("task_id", review_task_id).execute()
-    supabase.table("annotations").delete().eq("task_id", review_task_id).execute()
-
-    annotation_rows = []
-    for ann in annotations:
-        annotation_rows.append({
-            "id": ann.get("id", f"review_{uuid.uuid4().hex[:8]}"),
-            "task_id": review_task_id,
-            "label": ann.get("label", "未命名"),
-            "x": ann.get("x", 0),
-            "y": ann.get("y", 0),
-            "width": ann.get("width", 0),
-            "height": ann.get("height", 0),
-            "confidence": ann.get("confidence", 1.0),
-            "color": ann.get("color", DEFAULT_COLOR),
-            "annotated_by": user.username,
-            "created_at": now_iso,
-        })
-    if annotation_rows:
-        supabase.table("annotations").insert(annotation_rows).execute()
-
-    root_project_id = current_project.source_project_id or current_project.id
-    related_projects = (
-        db.query(Project)
-        .filter((Project.id == root_project_id) | (Project.source_project_id == root_project_id))
-        .all()
-    )
-    related_project_ids = [project.id for project in related_projects]
-    matched_files = []
-    if related_project_ids:
-        matched_files = (
-            db.query(ProjectFile)
-            .filter(
-                ProjectFile.storage_path == file_record.storage_path,
-                ProjectFile.project_id.in_(related_project_ids),
-            )
-            .all()
+        review_tasks = review_task_result.data or []
+        review_task = review_tasks[0] if review_tasks else None
+        review_task_id = (
+            review_task.get("id")
+            if review_task
+            else f"review_{str(project_uuid).replace('-', '')[:8]}_{str(file_record.id).replace('-', '')[:8]}"
         )
 
-    updated_rows = 0
-    for project_file in matched_files:
-        target_status = project_file.status
-        if project_file.project_id == current_project.id:
-            target_status = "reviewed"
-        elif project_file.project_id == root_project_id:
-            target_status = "done"
-
-        if target_status != project_file.status:
-            project_file.status = target_status
-            updated_rows += 1
-
-    db.commit()
-
-    notify_usernames = {
-        username
-        for username in {
-            user.username,
-            lineage_context.get("root_owner"),
-            current_project.shared_by,
-        }
-        if username
-    }
-    await progress_ws_manager.emit_to_users(
-        list(notify_usernames),
-        {
-            "type": "PROJECT_PROGRESS_UPDATED",
-            "owner": current_project.owner_id,
-            "project_id": str(root_project_id),
+        now_iso = datetime.now().isoformat()
+        task_payload = {
+            "id": review_task_id,
+            "image_url": source_task.get("image_url"),
+            "image_storage_path": file_record.storage_path,
+            "status": "reviewed",
+            "project_name": current_project.name,
+            "project_id": project_id,
             "file_id": str(file_record.id),
-            "storage_path": file_record.storage_path,
-            "updated_rows": updated_rows,
-            "timestamp": now_iso,
-        },
-    )
+            "created_at": review_task.get("created_at") if review_task else now_iso,
+            "completed_at": now_iso,
+            "annotations_count": len(annotations),
+        }
+        supabase.table("tasks").upsert(task_payload).execute()
+        supabase.table("drafts").delete().eq("task_id", review_task_id).execute()
+        supabase.table("annotations").delete().eq("task_id", review_task_id).execute()
 
-    return {
-        "success": True,
-        "message": "审核结果已确认",
-        "task_id": review_task_id,
-        "file_id": str(file_record.id),
-        "reviewed_count": len(annotation_rows),
-    }
+        annotation_rows = []
+        for ann in annotations:
+            annotation_rows.append({
+                "id": f"review_ann_{uuid.uuid4().hex[:12]}",
+                "task_id": review_task_id,
+                "label": ann.get("label", "未命名"),
+                "x": ann.get("x", 0),
+                "y": ann.get("y", 0),
+                "width": ann.get("width", 0),
+                "height": ann.get("height", 0),
+                "confidence": ann.get("confidence", 1.0),
+                "color": ann.get("color", DEFAULT_COLOR),
+                "annotated_by": user.username,
+                "created_at": now_iso,
+            })
+        if annotation_rows:
+            supabase.table("annotations").insert(annotation_rows).execute()
+
+        root_project_id = current_project.source_project_id or current_project.id
+        related_projects = (
+            db.query(Project)
+            .filter((Project.id == root_project_id) | (Project.source_project_id == root_project_id))
+            .all()
+        )
+        related_project_ids = [project.id for project in related_projects]
+        matched_files = []
+        if related_project_ids:
+            matched_files = (
+                db.query(ProjectFile)
+                .filter(
+                    ProjectFile.storage_path == file_record.storage_path,
+                    ProjectFile.project_id.in_(related_project_ids),
+                )
+                .all()
+            )
+
+        updated_rows = 0
+        for project_file in matched_files:
+            target_status = project_file.status
+            if project_file.project_id == current_project.id:
+                target_status = "reviewed"
+            elif project_file.project_id == root_project_id:
+                target_status = "done"
+
+            if target_status != project_file.status:
+                project_file.status = target_status
+                updated_rows += 1
+
+        db.commit()
+
+        notify_usernames = {
+            username
+            for username in {
+                user.username,
+                lineage_context.get("root_owner"),
+                current_project.shared_by,
+            }
+            if username
+        }
+        await progress_ws_manager.emit_to_users(
+            list(notify_usernames),
+            {
+                "type": "PROJECT_PROGRESS_UPDATED",
+                "owner": current_project.owner_id,
+                "project_id": str(root_project_id),
+                "file_id": str(file_record.id),
+                "storage_path": file_record.storage_path,
+                "updated_rows": updated_rows,
+                "timestamp": now_iso,
+            },
+        )
+
+        return {
+            "success": True,
+            "message": "审核结果已确认",
+            "task_id": review_task_id,
+            "file_id": str(file_record.id),
+            "reviewed_count": len(annotation_rows),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("确认裁决并归档失败 | project_id=%s | payload_keys=%s", project_id, list(payload.keys()))
+        raise HTTPException(status_code=500, detail=f"确认裁决失败: {str(exc)}")
 
 
 # =================================================================

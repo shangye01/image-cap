@@ -59,7 +59,7 @@ def _build_file_urls(file_record: ProjectFile, request: Request) -> tuple[str, s
     return download_url, download_url
 
 
-def _serialize_file(file_record: ProjectFile, request: Request) -> FileOut:
+def _serialize_file(file_record: ProjectFile, request: Request, override_status: str | None = None) -> FileOut:
     download_url, preview_url = _build_file_urls(file_record, request)
     payload = {
         "id": file_record.id,
@@ -73,9 +73,33 @@ def _serialize_file(file_record: ProjectFile, request: Request) -> FileOut:
         "created_at": file_record.created_at,
         "download_url": download_url,
         "preview_url": preview_url,
-        "status": file_record.status,
+        "status": override_status or file_record.status,
     }
     return FileOut(**payload)
+
+
+def _load_reviewed_file_ids(project_id: uuid.UUID, file_ids: list[str]) -> set[str]:
+    if supabase is None or not file_ids:
+        return set()
+
+    reviewed_file_ids: set[str] = set()
+    chunk_size = 200
+    for idx in range(0, len(file_ids), chunk_size):
+        batch_ids = file_ids[idx : idx + chunk_size]
+        result = (
+            supabase.table("tasks")
+            .select("file_id,status,updated_at")
+            .eq("project_id", str(project_id))
+            .in_("file_id", batch_ids)
+            .eq("status", "reviewed")
+            .order("updated_at", desc=True)
+            .execute()
+        )
+        for item in result.data or []:
+            file_id = item.get("file_id")
+            if file_id:
+                reviewed_file_ids.add(file_id)
+    return reviewed_file_ids
 
 
 def _ensure_storage_client():
@@ -491,7 +515,15 @@ def list_project_files(project_id: uuid.UUID, request: Request, db: Session = De
         .order_by(ProjectFile.created_at.desc())
         .all()
     )
-    return [_serialize_file(file_record, request) for file_record in file_records]
+    reviewed_file_ids = _load_reviewed_file_ids(project_id, [str(file_record.id) for file_record in file_records])
+    return [
+        _serialize_file(
+            file_record,
+            request,
+            override_status="reviewed" if str(file_record.id) in reviewed_file_ids else None,
+        )
+        for file_record in file_records
+    ]
 
 
 @router.get("/files/{file_id}/download")
