@@ -81,6 +81,8 @@ class ProjectOut(BaseModel):
     share_accepted_at: datetime | None = None
     share_mode: str = "single"
     reviewer_id: str | None = None
+    has_shared_copies: bool = False
+    shared_copy_count: int = 0
 
     class Config:
         from_attributes = True

@@ -179,7 +179,7 @@
                 v-for="task in tasks"
                 :key="task.id"
                 :class="['task-item', task.status]"
-                @click="openTask(task.id)"
+                @click="openTask(task)"
               >
                 <div class="task-main">
                   <span class="task-id">#{{ task.id.slice(-6) }}</span>
@@ -246,6 +246,8 @@ const tasks = ref([])
 const loading = ref(false)
 const expandedProjects = ref({})
 const trendPeriod = ref('week')
+const summary = ref(null)
+const projectStats = ref([])
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -301,16 +303,11 @@ const trends = computed(() => {
 
   const completedCurrent = tasks.value.filter((task) => {
     const ts = toTime(task.created_at)
-    return ts && ts >= now - 30 * DAY_MS && ['completed', 'reviewed'].includes(task.status)
+    return ts && ts >= now - 30 * DAY_MS && task.status === 'completed'
   }).length
   const completedPrevious = tasks.value.filter((task) => {
     const ts = toTime(task.created_at)
-    return (
-      ts &&
-      ts >= now - 60 * DAY_MS &&
-      ts < now - 30 * DAY_MS &&
-      ['completed', 'reviewed'].includes(task.status)
-    )
+    return ts && ts >= now - 60 * DAY_MS && ts < now - 30 * DAY_MS && task.status === 'completed'
   }).length
 
   return {
@@ -320,10 +317,30 @@ const trends = computed(() => {
 })
 
 // 计算属性
-const totalTasks = computed(() => tasks.value.length)
-const pendingTasks = computed(() => tasks.value.filter((t) => t.status === 'pending').length)
-const annotatingTasks = computed(() => tasks.value.filter((t) => t.status === 'annotating').length)
-const completedTasks = computed(() => tasks.value.filter((t) => t.status === 'completed').length)
+const totalTasks = computed(() =>
+  summary.value ? Number(summary.value.total_images || 0) : tasks.value.length
+)
+const pendingTasks = computed(() =>
+  summary.value
+    ? Number(summary.value.pending_images || 0)
+    : tasks.value.filter((t) => t.status === 'pending').length
+)
+const annotatingTasks = computed(() =>
+  summary.value
+    ? Number(summary.value.labeling_images || 0)
+    : tasks.value.filter((t) => t.status === 'annotating').length
+)
+const completedTasks = computed(() =>
+  summary.value
+    ? Number(summary.value.completed_images || 0)
+    : tasks.value.filter((t) => t.status === 'completed').length
+)
+const completedOnlyTasks = computed(() => completedTasks.value)
+const reviewedTasks = computed(() =>
+  summary.value
+    ? Number(summary.value.reviewed_images || 0)
+    : tasks.value.filter((t) => t.status === 'reviewed').length
+)
 const efficiency = computed(() => {
   if (totalTasks.value === 0) return 0
   return Math.round((completedTasks.value / totalTasks.value) * 100)
@@ -352,15 +369,34 @@ const trendChartOption = computed(() => {
   const formatDateKey = (date) => date.toISOString().split('T')[0]
   const createdByDay = new Map()
   const completedByDay = new Map()
-  tasks.value.forEach((task) => {
-    const createdTs = toTime(task.created_at)
-    if (!createdTs) return
-    const dayKey = formatDateKey(new Date(createdTs))
-    createdByDay.set(dayKey, (createdByDay.get(dayKey) || 0) + 1)
-    if (['completed', 'reviewed'].includes(task.status)) {
-      completedByDay.set(dayKey, (completedByDay.get(dayKey) || 0) + 1)
-    }
-  })
+
+  if (projectStats.value.length) {
+    projectStats.value.forEach((project) => {
+      const createdTs = toTime(project.created_at)
+      if (createdTs) {
+        const createdDayKey = formatDateKey(new Date(createdTs))
+        createdByDay.set(createdDayKey, (createdByDay.get(createdDayKey) || 0) + 1)
+      }
+      if (project.is_completed) {
+        const completedTs = toTime(project.completed_at || project.created_at)
+        if (completedTs) {
+          const completedDayKey = formatDateKey(new Date(completedTs))
+          completedByDay.set(completedDayKey, (completedByDay.get(completedDayKey) || 0) + 1)
+        }
+      }
+    })
+  } else {
+    // 兼容回退：后端未返回 project_stats 时，使用旧数据口径
+    tasks.value.forEach((task) => {
+      const createdTs = toTime(task.created_at)
+      if (!createdTs) return
+      const dayKey = formatDateKey(new Date(createdTs))
+      createdByDay.set(dayKey, (createdByDay.get(dayKey) || 0) + 1)
+      if (task.status === 'completed') {
+        completedByDay.set(dayKey, (completedByDay.get(dayKey) || 0) + 1)
+      }
+    })
+  }
 
   for (let i = days - 1; i >= 0; i--) {
     const date = new Date()
@@ -480,9 +516,9 @@ const statusChartOption = computed(() => ({
       data: [
         { value: pendingTasks.value, name: '待处理', itemStyle: { color: '#faad14' } },
         { value: annotatingTasks.value, name: '标注中', itemStyle: { color: '#1890ff' } },
-        { value: completedTasks.value, name: '已完成', itemStyle: { color: '#52c41a' } },
+        { value: completedOnlyTasks.value, name: '已完成', itemStyle: { color: '#52c41a' } },
         {
-          value: tasks.value.filter((t) => t.status === 'reviewed').length,
+          value: reviewedTasks.value,
           name: '已审核',
           itemStyle: { color: '#722ed1' },
         },
@@ -664,10 +700,22 @@ const loadTasks = async () => {
     }
 
     const overview = await getTaskCenterOverview(owner)
+    summary.value = overview?.summary || null
+    projectStats.value = (overview?.project_stats || [])
+      .filter((item) => item?.project_id)
+      .map((item) => ({
+        project_id: item.project_id,
+        project_name: item.project_name || '未分类项目',
+        created_at: item.created_at || new Date().toISOString(),
+        is_completed: Boolean(item.is_completed),
+        completed_at: item.completed_at || null,
+      }))
+
     tasks.value = (overview?.tasks || [])
       .filter((task) => task?.id)
       .map((task) => ({
         id: task.id,
+        route_task_id: task.task_id || null,
         project_name: task.project_name || '未分类项目',
         status: normalizeStatus(task.status),
         created_at: task.created_at || new Date().toISOString(),
@@ -691,8 +739,13 @@ const toggleProject = (project) => {
   expandedProjects.value[project] = !expandedProjects.value[project]
 }
 
-const openTask = (taskId) => {
-  router.push(`/app/annotate?task=${taskId}`)
+const openTask = (task) => {
+  const routeTaskId = task?.route_task_id
+  if (!routeTaskId) {
+    window.alert('该图像暂无可进入的标注任务')
+    return
+  }
+  router.push(`/app/annotate?task=${encodeURIComponent(routeTaskId)}`)
 }
 
 const formatTime = (timeStr) => {

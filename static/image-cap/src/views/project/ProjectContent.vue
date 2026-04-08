@@ -81,9 +81,10 @@
                 <button
                   class="project-menu-item danger"
                   type="button"
+                  :disabled="deletingProjectId === project.id"
                   @click.stop="handleDeleteFromMenu(project.id)"
                 >
-                  删除
+                  {{ getDeleteMenuLabel(project) }}
                 </button>
               </div>
             </transition>
@@ -118,6 +119,12 @@
 
             <div v-if="project.isSharedCopy" class="shared-project-badge">
               已分享给我 · 来自 {{ project.sharedBy || '团队成员' }}
+            </div>
+            <div
+              v-if="!project.isSharedCopy && project.hasSharedCopies"
+              class="owner-shared-project-badge"
+            >
+              我已分享 · {{ project.sharedCopyCount || 0 }} 份
             </div>
             <div v-if="project.organizationNickname" class="project-team-badge">
               团队：{{ project.organizationNickname }}
@@ -1057,6 +1064,9 @@ const router = useRouter()
 const previewUrlMap = new Map()
 const progressSocket = ref(null)
 const progressSocketStopped = ref(false)
+const projectFilesLoadingMap = new Map()
+let loadProjectsPromise = null
+let projectRefreshTimer = null
 
 // ============ 大图标注预览相关 ============
 
@@ -1850,9 +1860,71 @@ const showProjectReviewDot = (project) =>
   project?.reviewerId === currentUserId.value &&
   getProjectPendingReviewCount(project) > 0
 
+const buildProjectFolders = (
+  isReviewerWorkspace,
+  pendingFiles = [],
+  labelingFiles = [],
+  doneFiles = [],
+  reviewedFiles = [],
+) =>
+  isReviewerWorkspace
+    ? [
+        { id: `review_pending`, name: '待审核', status: 'done', files: doneFiles },
+        { id: `reviewed`, name: '已审核', status: 'reviewed', files: reviewedFiles },
+      ]
+    : [
+        { id: `pending`, name: '待标注', status: 'pending', files: pendingFiles },
+        { id: `labeling`, name: '标注中', status: 'labeling', files: labelingFiles },
+        { id: `done`, name: '已标注', status: 'done', files: doneFiles },
+      ]
+
+const ensureProjectFilesLoaded = async (projectId, { force = false } = {}) => {
+  const target = projectList.value.find((item) => item.id === projectId)
+  if (!target) return
+  if (!force && target.filesLoaded) return
+
+  if (projectFilesLoadingMap.has(projectId)) {
+    await projectFilesLoadingMap.get(projectId)
+    return
+  }
+
+  const loadingPromise = (async () => {
+    const fileResp = await listProjectFiles(projectId, { syncReviewStatus: false })
+    const allFiles = (fileResp || []).map(mapBackendFile)
+    const pendingFiles = allFiles.filter((f) => f.status === 'pending')
+    const labelingFiles = allFiles.filter((f) => f.status === 'labeling')
+    const doneFiles = allFiles.filter((f) => f.status === 'done')
+    const reviewedFiles = allFiles.filter((f) => f.status === 'reviewed')
+
+    target.folders = buildProjectFolders(
+      target.isReviewerWorkspace,
+      pendingFiles,
+      labelingFiles,
+      doneFiles,
+      reviewedFiles,
+    ).map((folder) => ({
+      ...folder,
+      id: `${folder.id}_${target.id}`,
+    }))
+    target.filesLoaded = true
+  })()
+
+  projectFilesLoadingMap.set(projectId, loadingPromise)
+  try {
+    await loadingPromise
+  } finally {
+    projectFilesLoadingMap.delete(projectId)
+  }
+}
+
 // ============ 数据加载 ============
 
 const loadProjects = async () => {
+  if (loadProjectsPromise) {
+    return loadProjectsPromise
+  }
+
+  loadProjectsPromise = (async () => {
   console.log('[VUE-001] 开始加载项目列表')
 
   try {
@@ -1860,24 +1932,19 @@ const loadProjects = async () => {
     const data = await listProjects(owner)
 
     console.log(`[VUE-002] 获取${data?.length || 0}个项目`)
+    const previousMap = new Map(projectList.value.map((item) => [item.id, item]))
 
-    const projectData = await Promise.all(
-      (data || []).map(async (project) => {
-        const fileResp = await listProjectFiles(project.id)
-        const allFiles = (fileResp || []).map(mapBackendFile)
-
-        const pendingFiles = allFiles.filter((f) => f.status === 'pending')
-        const labelingFiles = allFiles.filter((f) => f.status === 'labeling')
-        const doneFiles = allFiles.filter((f) => f.status === 'done')
-        const reviewedFiles = allFiles.filter((f) => f.status === 'reviewed')
+    const projectData = (data || []).map((project) => {
+        const previousProject = previousMap.get(project.id)
         const isReviewerWorkspace =
           Boolean(project.is_shared_copy) &&
           project.reviewer_id === currentUserId.value &&
           project.owner_id === currentUsername.value
-
-        console.log(
-          `[VUE-003] 项目[${project.name}] | pending=${pendingFiles.length}, labeling=${labelingFiles.length}, done=${doneFiles.length}, reviewed=${reviewedFiles.length}, reviewerWorkspace=${isReviewerWorkspace}`
-        )
+        const hasReusableFolders =
+          Boolean(previousProject) &&
+          previousProject.isReviewerWorkspace === isReviewerWorkspace &&
+          Array.isArray(previousProject?.folders) &&
+          previousProject.folders.length > 0
 
         return {
           id: project.id,
@@ -1889,6 +1956,8 @@ const loadProjects = async () => {
           createdAt: new Date(project.created_at).getTime(),
           sharedAt: project.shared_at ? new Date(project.shared_at).getTime() : null,
           isSharedCopy: Boolean(project.is_shared_copy),
+          hasSharedCopies: Boolean(project.has_shared_copies),
+          sharedCopyCount: Number(project.shared_copy_count || 0),
           sharedBy: project.shared_by || '',
           shareMessage: project.share_message || '',
           organizationNickname: project.organization_nickname || '',
@@ -1897,24 +1966,15 @@ const loadProjects = async () => {
             : null,
           reviewerId: project.reviewer_id || '',
           isReviewerWorkspace,
-          folders: isReviewerWorkspace
-            ? [
-                { id: `review_pending_${project.id}`, name: '待审核', status: 'done', files: doneFiles },
-                {
-                  id: `reviewed_${project.id}`,
-                  name: '已审核',
-                  status: 'reviewed',
-                  files: reviewedFiles,
-                },
-              ]
-            : [
-                { id: `pending_${project.id}`, name: '待标注', status: 'pending', files: pendingFiles },
-                { id: `labeling_${project.id}`, name: '标注中', status: 'labeling', files: labelingFiles },
-                { id: `done_${project.id}`, name: '已标注', status: 'done', files: doneFiles },
-              ],
+          filesLoaded: Boolean(previousProject?.filesLoaded),
+          folders: hasReusableFolders
+            ? previousProject.folders
+            : buildProjectFolders(isReviewerWorkspace).map((folder) => ({
+                ...folder,
+                id: `${folder.id}_${project.id}`,
+              })),
         }
       })
-    )
 
     projectList.value = [...projectData]
     console.log('[VUE-004] projectList已更新，长度=', projectList.value.length)
@@ -1925,6 +1985,24 @@ const loadProjects = async () => {
     console.error('读取项目失败：', error)
     window.alert(error?.response?.data?.detail || error.message || '读取项目失败')
   }
+  })()
+
+  try {
+    await loadProjectsPromise
+  } finally {
+    loadProjectsPromise = null
+  }
+}
+
+const scheduleProjectRefresh = (delay = 300) => {
+  if (projectRefreshTimer) {
+    window.clearTimeout(projectRefreshTimer)
+  }
+  projectRefreshTimer = window.setTimeout(() => {
+    loadProjects().catch((err) => {
+      console.warn('调度刷新项目列表失败:', err)
+    })
+  }, delay)
 }
 
 const loadFolderTasks = async () => {
@@ -2010,10 +2088,16 @@ const handleCreateProject = async (projectData) => {
   }
 }
 
-const enterProject = (project) => {
+const enterProject = async (project) => {
   closeProjectMenu()
   currentProjectId.value = project.id
   currentFolderId.value = null
+  try {
+    await ensureProjectFilesLoaded(project.id)
+  } catch (error) {
+    console.error('加载项目文件失败：', error)
+    window.alert(error?.response?.data?.detail || error.message || '加载项目文件失败')
+  }
 }
 
 const handleAcceptCurrentSharedProject = async () => {
@@ -3514,7 +3598,10 @@ const deleteProject = async (projectId) => {
   const target = projectList.value.find((item) => item.id === projectId)
   if (!target) return
 
-  const confirmed = window.confirm(`确定删除项目"${target.projectName}"吗？`)
+  const confirmMessage = target.isSharedCopy
+    ? `确定删除分享项目"${target.projectName}"吗？\n\n此操作只会删除你自己的副本，不会影响分享者的源项目。`
+    : `确定删除项目"${target.projectName}"吗？\n\n项目内文件、任务和标注记录会被永久删除，且不可恢复。`
+  const confirmed = window.confirm(confirmMessage)
   if (!confirmed) return
 
   try {
@@ -3522,14 +3609,26 @@ const deleteProject = async (projectId) => {
 
     await deleteProjectApi(projectId)
 
+    // 先乐观更新列表，确保删除后立即反馈
+    projectList.value = projectList.value.filter((item) => item.id !== projectId)
+
     if (currentProjectId.value === projectId) {
       backToProjectList()
     }
 
-    await loadProjects()
+    // 再异步拉最新数据，修正可能的服务端并发变化
+    loadProjects().catch((err) => {
+      console.warn('删除后刷新项目列表失败：', err)
+    })
   } catch (error) {
     console.error('删除项目失败：', error)
-    window.alert(error?.response?.data?.detail || error.message || '删除项目失败')
+    const statusCode = error?.response?.status
+    const detail = error?.response?.data?.detail || error.message || '删除项目失败'
+    if (statusCode === 409) {
+      window.alert(`${detail}\n\n请先让接收方删除分享副本，再删除源项目。`)
+      return
+    }
+    window.alert(detail)
   } finally {
     deletingProjectId.value = null
   }
@@ -3590,7 +3689,7 @@ const connectProgressSocket = () => {
       if (message.type !== 'PROJECT_PROGRESS_UPDATED') return
 
       const activeProjectId = currentProject.value?.id
-      await loadProjects()
+      scheduleProjectRefresh(250)
       if (activeProjectId) {
         currentProjectId.value = activeProjectId
         if (
@@ -3599,7 +3698,11 @@ const connectProgressSocket = () => {
           isPendingReviewFolder.value ||
           isReviewedFolder.value
         ) {
-          await loadFolderTasks()
+          window.setTimeout(() => {
+            loadFolderTasks().catch((err) => {
+              console.warn('刷新文件夹任务失败:', err)
+            })
+          }, 300)
         }
       }
     } catch (error) {
@@ -3651,6 +3754,12 @@ const handleDeleteFromMenu = (projectId) => {
   deleteProject(projectId)
 }
 
+const getDeleteMenuLabel = (project) => {
+  if (!project) return '删除'
+  if (deletingProjectId.value === project.id) return '删除中...'
+  return project.isSharedCopy ? '删除副本' : '删除'
+}
+
 // ============ 生命周期 ============
 
 watch(
@@ -3679,7 +3788,7 @@ onMounted(() => {
 
   window.addEventListener('message', (event) => {
     if (event.data === 'refresh-project') {
-      loadProjects()
+      scheduleProjectRefresh(100)
       if (isLabelingFolder.value) {
         loadFolderTasks()
       }
@@ -3688,6 +3797,11 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  if (projectRefreshTimer) {
+    window.clearTimeout(projectRefreshTimer)
+    projectRefreshTimer = null
+  }
+
   if (previewImageUrl.value && previewImageUrl.value.startsWith('blob:')) {
     URL.revokeObjectURL(previewImageUrl.value)
   }
@@ -3796,6 +3910,13 @@ onBeforeUnmount(() => {
   font-size: 12px;
   font-weight: 600;
   color: #4f46e5;
+}
+
+.owner-shared-project-badge {
+  margin-top: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #0f766e;
 }
 
 .project-team-badge,

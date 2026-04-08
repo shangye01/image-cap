@@ -16,6 +16,8 @@ export interface BackendProject {
   share_accepted_at?: string | null
   share_mode?: 'single' | 'collaborative'
   reviewer_id?: string | null
+  has_shared_copies?: boolean
+  shared_copy_count?: number
 }
 
 export interface BackendProjectFile {
@@ -73,15 +75,38 @@ export const listProjects = (ownerId?: string) =>
 
 export interface TaskCenterTaskItem {
   id: string
+  task_id?: string | null
+  file_id?: string | null
   project_id: string
   project_name: string
-  status: 'pending' | 'labeling' | 'done' | string
+  status: 'pending' | 'labeling' | 'done' | 'reviewed' | string
   created_at: string
   annotations_count: number
 }
 
+export interface TaskCenterSummary {
+  total_images: number
+  pending_images: number
+  labeling_images: number
+  completed_images: number
+  reviewed_images: number
+}
+
+export interface TaskCenterProjectStat {
+  project_id: string
+  project_name: string
+  created_at: string
+  is_completed: boolean
+  completed_at?: string | null
+}
+
 export const getTaskCenterOverview = (ownerId: string) =>
-  request.get<{ tasks: TaskCenterTaskItem[]; total: number }>('/projects/task-center/overview', {
+  request.get<{
+    tasks: TaskCenterTaskItem[]
+    total: number
+    summary?: TaskCenterSummary
+    project_stats?: TaskCenterProjectStat[]
+  }>('/projects/task-center/overview', {
     params: { owner_id: ownerId },
   })
 
@@ -92,13 +117,18 @@ export const uploadProjectFile = (projectId: string, file: File, uploadedBy: str
   return request.post<BackendProjectFile>(`/projects/${projectId}/files`, formData)
 }
 
-export const listProjectFiles = (projectId: string) =>
-  request.get<BackendProjectFile[]>(`/projects/${projectId}/files`)
+export const listProjectFiles = (projectId: string, options?: { syncReviewStatus?: boolean }) =>
+  request.get<BackendProjectFile[]>(`/projects/${projectId}/files`, {
+    params: options?.syncReviewStatus ? { sync_review_status: true } : undefined,
+    timeout: 30000,
+  })
 
 export const getProjectFileDownloadUrl = (fileId: string) => `/api/projects/files/${fileId}/download`
 
 export const deleteProjectApi = (projectId: string) =>
-  request.delete(`/projects/${projectId}`)
+  request.delete(`/projects/${projectId}`, {
+    timeout: 180000,
+  })
 
 export const shareProject = (
   projectId: string,

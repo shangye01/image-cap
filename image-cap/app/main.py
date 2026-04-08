@@ -1453,7 +1453,7 @@ async def get_file_task(
 async def get_adjacent_task(
         project_id: str,
         task_id: str,
-        direction: str = Query(..., regex="^(next|prev)$"),
+        direction: str = Query(..., pattern="^(next|prev)$"),
         db: Session = Depends(get_db)
 ):
     """获取当前任务的下一个或上一个任务"""
@@ -2328,7 +2328,8 @@ async def confirm_review_result(
         for project_file in matched_files:
             target_status = project_file.status
             if project_file.project_id == current_project.id:
-                target_status = "reviewed"
+                # project_files.status 在数据库约束中不接受 reviewed，审核确认后统一落到 done
+                target_status = "done"
             elif project_file.project_id == root_project_id:
                 target_status = "done"
 
@@ -2851,7 +2852,7 @@ async def training_status():
 async def start_training(
         epochs: int = Query(default=100, ge=10, le=500),
         batch: int = Query(default=16, ge=1, le=64),
-        model_size: str = Query(default="auto", regex="^(auto|n|s|m|l|x)$"),
+        model_size: str = Query(default="auto", pattern="^(auto|n|s|m|l|x)$"),
         augmentation: bool = Query(default=True),
         background_tasks: BackgroundTasks = None
 ):
