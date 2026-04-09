@@ -298,6 +298,142 @@ def _pick_preferred_storage_task(
     return ordered_tasks[0]
 
 
+def _parse_annotator_index_from_base_source(base_source: Any) -> int | None:
+    if not isinstance(base_source, str):
+        return None
+    source = base_source.strip()
+    prefix = "annotator_"
+    if not source.startswith(prefix):
+        return None
+    suffix = source[len(prefix):]
+    if not suffix.isdigit():
+        return None
+    return int(suffix)
+
+
+def _is_metric_task_eligible(
+        task: dict[str, Any] | None,
+        *,
+        file_storage_path: str | None,
+        lineage_context: dict[str, Any],
+) -> bool:
+    if not task:
+        return False
+    if file_storage_path and task.get("image_storage_path") != file_storage_path:
+        return False
+
+    related_project_ids = {
+        str(project_id)
+        for project_id in (lineage_context.get("related_project_ids") or [])
+        if project_id
+    }
+    task_project_id = str(task.get("project_id") or "")
+    if related_project_ids and task_project_id not in related_project_ids:
+        return False
+
+    task_status = str(task.get("status") or "").lower()
+    return task_status in {"completed", "reviewed"}
+
+
+def _resolve_metric_source_task_from_base_source(
+        *,
+        fallback_task: dict[str, Any],
+        base_source: Any,
+        lineage_context: dict[str, Any],
+        file_storage_path: str | None,
+        db: Session,
+) -> dict[str, Any]:
+    annotator_index = _parse_annotator_index_from_base_source(base_source)
+    if annotator_index is None:
+        return fallback_task
+
+    image_storage_path = file_storage_path or fallback_task.get("image_storage_path")
+    if not image_storage_path:
+        return fallback_task
+
+    related_project_ids = [
+        str(project_id)
+        for project_id in (lineage_context.get("related_project_ids") or [fallback_task.get("project_id")])
+        if project_id
+    ]
+    if not related_project_ids:
+        return fallback_task
+
+    related_project_uuid_ids: list[uuid.UUID] = []
+    for related_id in related_project_ids:
+        try:
+            related_project_uuid_ids.append(uuid.UUID(str(related_id)))
+        except (TypeError, ValueError):
+            continue
+
+    project_owner_map: dict[str, str] = {}
+    if related_project_uuid_ids:
+        related_projects = (
+            db.query(Project)
+            .filter(Project.id.in_(related_project_uuid_ids))
+            .all()
+        )
+        project_owner_map = {str(project.id): project.owner_id for project in related_projects}
+
+    sibling_tasks_result = (
+        supabase
+        .table("tasks")
+        .select("*")
+        .in_("project_id", related_project_ids)
+        .eq("image_storage_path", image_storage_path)
+        .execute()
+    )
+    sibling_tasks = sibling_tasks_result.data or []
+    if not sibling_tasks:
+        return fallback_task
+
+    excluded_owners = {
+        lineage_context.get("root_owner"),
+        lineage_context.get("reviewer_username"),
+    }
+    completed_siblings: list[dict[str, Any]] = []
+    for sibling in sibling_tasks:
+        sibling_status = str(sibling.get("status") or "").lower()
+        if sibling_status != "completed":
+            continue
+        sibling_owner = project_owner_map.get(str(sibling.get("project_id")))
+        if sibling_owner and sibling_owner in excluded_owners:
+            continue
+        completed_siblings.append(sibling)
+
+    if not completed_siblings:
+        return fallback_task
+
+    completed_siblings.sort(key=_task_sort_value, reverse=True)
+    latest_task_by_project: dict[str, dict[str, Any]] = {}
+    for sibling in completed_siblings:
+        sibling_project_id = str(sibling.get("project_id") or "")
+        if sibling_project_id and sibling_project_id not in latest_task_by_project:
+            latest_task_by_project[sibling_project_id] = sibling
+
+    candidate_tasks = list(latest_task_by_project.values())
+    if not candidate_tasks:
+        return fallback_task
+
+    candidate_tasks.sort(
+        key=lambda item: (
+            project_owner_map.get(str(item.get("project_id")), ""),
+            str(item.get("project_id") or ""),
+        )
+    )
+    if annotator_index < 0 or annotator_index >= len(candidate_tasks):
+        return fallback_task
+
+    selected_task = candidate_tasks[annotator_index]
+    if not _is_metric_task_eligible(
+            selected_task,
+            file_storage_path=image_storage_path,
+            lineage_context=lineage_context,
+    ):
+        return fallback_task
+    return selected_task
+
+
 def _resolve_user_id_from_token(authorization: str | None) -> str | None:
     if not authorization or not authorization.lower().startswith("bearer "):
         return None
@@ -809,6 +945,7 @@ def _collaborative_auto_integrate(task: Dict[str, Any]) -> Dict[str, Any]:
     review_items: list[dict[str, Any]] = []
     fused_annotations: list[dict[str, Any]] = []
     auto_pass_clusters = 0
+    unresolved_conflict_count = 0
 
     for idx, summary in enumerate(cluster_summaries):
         diff_type, recommendation = _classify_cluster_difference(summary)
@@ -843,6 +980,8 @@ def _collaborative_auto_integrate(task: Dict[str, Any]) -> Dict[str, Any]:
                 fused_annotations.append(_fuse_matched_annotations(dominant_members))
 
         if diff_type:
+            if not is_semi_auto_mergeable:
+                unresolved_conflict_count += 1
             overlay_member_boxes = [
                 {
                     "annotator_index": member["annotator_idx"],
@@ -894,18 +1033,24 @@ def _collaborative_auto_integrate(task: Dict[str, Any]) -> Dict[str, Any]:
     review_rules: list[str] = []
     if global_quantity_anomaly:
         review_rules.append("全局数量异常：三份标注目标数差距较大")
-    if semi_auto_conflict_count:
-        review_rules.append("存在需人工处理的差异簇")
 
     if auto_pass_clusters == total_clusters and not global_quantity_anomaly:
         integration_decision = "auto_pass"
-    elif not global_quantity_anomaly and semi_auto_conflict_count <= max(2, total_clusters // 2):
+    elif (
+            not global_quantity_anomaly
+            and semi_auto_conflict_count <= max(2, total_clusters // 2)
+            and unresolved_conflict_count == 0
+    ):
         integration_decision = "semi_auto_pass"
     else:
         integration_decision = "manual_full_review"
 
-    review_triggered = integration_decision != "auto_pass"
-    auto_integrated = integration_decision == "auto_pass"
+    review_triggered = integration_decision == "manual_full_review"
+    auto_integrated = integration_decision in {"auto_pass", "semi_auto_pass"}
+    if review_triggered:
+        review_rules.append("存在需人工处理的差异簇")
+    elif semi_auto_conflict_count:
+        review_rules.append("存在轻微差异，系统已自动融合")
     consistency_ratio = round(auto_pass_clusters / max(1, total_clusters), 3)
 
     return {
@@ -914,6 +1059,7 @@ def _collaborative_auto_integrate(task: Dict[str, Any]) -> Dict[str, Any]:
         "count_consistent": count_consistent,
         "count_spread": count_spread,
         "global_quantity_anomaly": global_quantity_anomaly,
+        "unresolved_conflict_count": unresolved_conflict_count,
         "consistency_ratio": consistency_ratio,
         "align_method": "global_iou_clustering",
         "integration_decision": integration_decision,
@@ -1327,10 +1473,9 @@ async def get_folder_tasks(
     prefer_reviewed_task = bool(
         project_record and _should_prefer_reviewed_task(project_record.owner_id, lineage_context)
     )
-    reviewed_only_for_owner = bool(
-        project_record
-        and _requires_reviewed_result_for_root_owner(project_record.owner_id, lineage_context)
-    )
+    # 已标注文件是否可见由 project_files.status 控制；这里不再做“仅 reviewed 可读”的全局限制，
+    # 避免将轻微偏差（自动融合）任务错误挡在分享者视角之外。
+    reviewed_only_for_owner = False
 
     file_ids = [str(f.id) for f in files_result]
     storage_paths = [f.storage_path for f in files_result if f.storage_path]
@@ -1446,9 +1591,7 @@ async def get_file_task(
     used_fallback_task = False
     is_reviewer_workspace = _is_reviewer_workspace_owner(project_record.owner_id, lineage_context)
     prefer_reviewed_task = _should_prefer_reviewed_task(project_record.owner_id, lineage_context)
-    reviewed_only_for_owner = _requires_reviewed_result_for_root_owner(
-        project_record.owner_id, lineage_context
-    )
+    reviewed_only_for_owner = False
 
     # 兜底：按 storage_path 查询同源任务（满足“谁标注谁可看，分享者均可看”）
     allow_cross_project_fallback = _can_access_cross_project_annotations(project_record, lineage_context)
@@ -2358,7 +2501,46 @@ async def confirm_review_result(
 
         if not source_task:
             raise HTTPException(status_code=404, detail="未找到待审核任务")
-        source_annotations = _load_task_annotations(source_task)
+
+        base_source = payload.get("base_source")
+        metric_task_id = payload.get("metric_task_id")
+        metric_source_task = source_task
+
+        if metric_task_id:
+            metric_task_result = (
+                supabase.table("tasks").select("*").eq("id", metric_task_id).limit(1).execute()
+            )
+            metric_task_rows = metric_task_result.data or []
+            metric_task = metric_task_rows[0] if metric_task_rows else None
+            if _is_metric_task_eligible(
+                    metric_task,
+                    file_storage_path=file_record.storage_path,
+                    lineage_context=lineage_context,
+            ):
+                metric_source_task = metric_task
+            else:
+                logger.warning(
+                    "审核记分任务校验失败，回退到默认任务 | metric_task_id=%s | source_task_id=%s",
+                    metric_task_id,
+                    source_task.get("id"),
+                )
+        else:
+            metric_source_task = _resolve_metric_source_task_from_base_source(
+                fallback_task=source_task,
+                base_source=base_source,
+                lineage_context=lineage_context,
+                file_storage_path=file_record.storage_path,
+                db=db,
+            )
+
+        metric_task_effective_id = metric_source_task.get("id")
+        if not metric_task_effective_id:
+            metric_source_task = source_task
+            metric_task_effective_id = metric_source_task.get("id")
+        if not metric_task_effective_id:
+            raise HTTPException(status_code=500, detail="审核记分任务无效")
+
+        source_annotations = _load_task_annotations(metric_source_task)
 
         review_task_result = (
             supabase.table("tasks")
@@ -2466,14 +2648,19 @@ async def confirm_review_result(
                 "timestamp": now_iso,
             },
         )
+        collaboration_snapshot = (
+            source_task.get("collaboration_integration")
+            if isinstance(source_task.get("collaboration_integration"), dict)
+            else None
+        )
         record_review_result(
             db,
-            task_id=source_task.get("id"),
+            task_id=metric_task_effective_id,
             reviewer=user,
             reviewed_annotations=annotations,
             submitted_annotations=source_annotations,
             reviewed_at=datetime.now(),
-            integration_result=_collaborative_auto_integrate(source_task),
+            integration_result=collaboration_snapshot,
         )
 
         return {
@@ -2482,6 +2669,7 @@ async def confirm_review_result(
             "task_id": review_task_id,
             "file_id": str(file_record.id),
             "reviewed_count": len(annotation_rows),
+            "metric_task_id": metric_task_effective_id,
         }
     except HTTPException:
         raise

@@ -254,11 +254,15 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="js">
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { createOrganizationApi, logoutApi } from '@/api/auth'
 import { useUserStore } from '@/stores/user'
+
+defineOptions({
+  name: 'ProjectLayoutView',
+})
 
 const router = useRouter()
 const userStore = useUserStore()

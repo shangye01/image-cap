@@ -83,7 +83,7 @@
           <h3>📈 任务趋势分析</h3>
           <div class="chart-actions">
             <button
-              v-for="period in ['week', 'month', 'year']"
+              v-for="period in TREND_PERIOD_OPTIONS"
               :key="period"
               :class="['period-btn', { active: trendPeriod === period }]"
               @click="changeTrendPeriod(period)"
@@ -164,7 +164,7 @@
             <div class="project-stats">
               <div class="mini-bar">
                 <div
-                  v-for="status in ['completed', 'annotating', 'pending']"
+                  v-for="status in PROJECT_STATUS_SEGMENTS"
                   :key="status"
                   class="bar-segment"
                   :class="status"
@@ -185,7 +185,7 @@
                 @click="openTask(task)"
               >
                 <div class="task-main">
-                  <span class="task-id">#{{ task.id.slice(-6) }}</span>
+                  <span class="task-id">#{{ String(task.id).slice(-6) }}</span>
                   <span class="task-time">{{ formatTime(task.created_at) }}</span>
                 </div>
                 <div class="task-status">
@@ -256,6 +256,9 @@ type HeatmapPoint = [string, number]
 
 type TrendPeriod = 'week' | 'month' | 'year'
 
+const TREND_PERIOD_OPTIONS: TrendPeriod[] = ['week', 'month', 'year']
+const PROJECT_STATUS_SEGMENTS: TaskStatus[] = ['completed', 'annotating', 'pending']
+
 use([
   CanvasRenderer,
   LineChart,
@@ -296,6 +299,11 @@ const toTime = (value?: string | null): number | null => {
   if (!value) return null
   const ts = new Date(value).getTime()
   return Number.isFinite(ts) ? ts : null
+}
+
+const formatDateKey = (date: Date): string => {
+  const [day = ''] = date.toISOString().split('T')
+  return day
 }
 
 const calcTrendPercent = (current: number, previous: number): number => {
@@ -404,7 +412,9 @@ const groupedTasks = computed<Record<string, TaskItem[]>>(() => {
   })
 
   Object.keys(groups).forEach((project) => {
-    groups[project].sort((a, b) => (toTime(b.created_at) || 0) - (toTime(a.created_at) || 0))
+    const projectTasks = groups[project]
+    if (!projectTasks) return
+    projectTasks.sort((a, b) => (toTime(b.created_at) || 0) - (toTime(a.created_at) || 0))
   })
 
   return groups
@@ -416,7 +426,6 @@ const trendChartOption = computed(() => {
   const completed: number[] = []
   const created: number[] = []
 
-  const formatDateKey = (date: Date): string => date.toISOString().split('T')[0]
   const createdByDay = new Map<string, number>()
   const completedByDay = new Map<string, number>()
 
@@ -575,7 +584,7 @@ const statusChartOption = computed(() => ({
 
 const projectChartOption = computed(() => {
   const projects = Object.keys(groupedTasks.value).slice(0, 6)
-  const data = projects.map((p) => groupedTasks.value[p].length)
+  const data = projects.map((p) => groupedTasks.value[p]?.length ?? 0)
 
   return {
     tooltip: {
@@ -686,12 +695,12 @@ const heatmapOption = computed(() => {
   tasks.value.forEach((task) => {
     const ts = toTime(task.created_at)
     if (!ts) return
-    const dayKey = new Date(ts).toISOString().split('T')[0]
+    const dayKey = formatDateKey(new Date(ts))
     createdByDay.set(dayKey, (createdByDay.get(dayKey) || 0) + 1)
   })
 
   for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
-    const dateStr = d.toISOString().split('T')[0]
+    const dateStr = formatDateKey(d)
     data.push([dateStr, createdByDay.get(dateStr) || 0])
   }
 

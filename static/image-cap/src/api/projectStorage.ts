@@ -212,8 +212,12 @@ export const confirmReviewDecision = (
   payload: {
     file_id: string
     task_id?: string
-    annotations: any[]
-    review_decision_log?: any[]
+    metric_task_id?: string
+    annotations: Array<Record<string, unknown>>
+    review_decision_log?: Array<Record<string, unknown>>
     base_source?: string
   },
-) => request.post(`/projects/${projectId}/review/confirm`, payload)
+) =>
+  request.post(`/projects/${projectId}/review/confirm`, payload, {
+    timeout: 45000,
+  })

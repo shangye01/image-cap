@@ -682,20 +682,18 @@
                     :viewBox="`0 0 ${annotationImageNaturalWidth} ${annotationImageNaturalHeight}`"
                     preserveAspectRatio="none"
                   >
-                    <g v-for="(anno, index) in currentAnnotations" :key="`box-${index}`">
-                      <rect
-                        v-for="(anno, index) in currentAnnotations"
-                        :key="`box-${index}`"
-                        :x="anno.x"
-                        :y="anno.y"
-                        :width="anno.width"
-                        :height="anno.height"
-                        fill="none"
-                        :stroke="anno.color || '#ff4444'"
-                        stroke-width="2"
-                        rx="2"
-                      />
-                    </g>
+                    <rect
+                      v-for="(anno, index) in currentAnnotations"
+                      :key="`box-${index}`"
+                      :x="anno.x"
+                      :y="anno.y"
+                      :width="anno.width"
+                      :height="anno.height"
+                      fill="none"
+                      :stroke="anno.color || '#ff4444'"
+                      stroke-width="2"
+                      rx="2"
+                    />
                   </svg>
 
                   <div
@@ -2581,8 +2579,6 @@ const loadPreviewData = async (file) => {
   const isFinalResultFolder =
     isDoneFolder.value || isPendingReviewFolder.value || isReviewedFolder.value
   const shouldSkipLocalFallback = isFinalResultFolder
-  const mustUseReviewedResult =
-    requireReviewedResultForOwnerDoneFolder.value && isDoneFolder.value
 
   let annotations = []
   let taskData = null
@@ -2590,7 +2586,12 @@ const loadPreviewData = async (file) => {
   const tryApplyTaskAnnotations = (task, sourceLabel = '任务') => {
     if (!task?.annotations?.length) return false
     const taskStatus = String(task.status || '').toLowerCase()
-    if (mustUseReviewedResult && taskStatus !== 'reviewed') return false
+    const needReviewedForCurrentTask = Boolean(
+      requireReviewedResultForOwnerDoneFolder.value &&
+        isDoneFolder.value &&
+        task?.collaboration_integration?.review_triggered,
+    )
+    if (needReviewedForCurrentTask && taskStatus !== 'reviewed') return false
 
     annotations = task.annotations
     annotationDataSource.value =
@@ -2630,7 +2631,7 @@ const loadPreviewData = async (file) => {
         taskData = data.task
 
         const appliedFromTask = tryApplyTaskAnnotations(data.task, '任务(后端)')
-        if (!appliedFromTask && !mustUseReviewedResult && !isFinalResultFolder && data.task.pre_annotations?.length > 0) {
+        if (!appliedFromTask && !isFinalResultFolder && data.task.pre_annotations?.length > 0) {
           annotations = data.task.pre_annotations
           annotationDataSource.value = '预标注'
         }
@@ -2729,6 +2730,31 @@ const applyBatchBase = (annotatorIndex) => {
   })
 }
 
+const resolveReviewMetricTaskId = () => {
+  const parseAnnotatorIndex = (value) => {
+    const matched = /^annotator_(\d+)$/.exec(value || '')
+    return matched ? Number(matched[1]) : null
+  }
+
+  const fromBaseSource = parseAnnotatorIndex(reviewBaseSource.value)
+  if (fromBaseSource !== null) {
+    return getAnnotatorEntry(fromBaseSource)?.task_id
+  }
+
+  const lastBatchDecision = [...reviewDecisionLog.value]
+    .reverse()
+    .find(
+      (item) =>
+        item?.action === 'adopt_all_from_annotator' &&
+        Number.isInteger(item?.annotatorIndex),
+    )
+  if (lastBatchDecision) {
+    return getAnnotatorEntry(lastBatchDecision.annotatorIndex)?.task_id
+  }
+
+  return undefined
+}
+
 const submitReviewResult = async () => {
   if (!canSubmitReviewDecision.value || !currentProject.value || !currentPreviewTask.value) return
 
@@ -2739,9 +2765,11 @@ const submitReviewResult = async () => {
 
   try {
     const resolvedAnnotations = buildResolvedReviewAnnotations()
+    const metricTaskId = resolveReviewMetricTaskId()
     await confirmReviewDecision(currentProject.value.id, {
       file_id: targetFile.id,
       task_id: currentPreviewTask.value.task_id,
+      metric_task_id: metricTaskId,
       annotations: resolvedAnnotations,
       review_decision_log: reviewDecisionLog.value,
       base_source: reviewBaseSource.value,

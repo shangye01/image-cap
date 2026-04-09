@@ -102,6 +102,17 @@ const registerTarget = computed(() => ({
   query: { redirect: redirectPath.value },
 }))
 
+const getErrorMessage = (error: unknown, fallback: string): string => {
+  if (typeof error === 'object' && error !== null) {
+    const maybeError = error as {
+      response?: { data?: { detail?: string } }
+      message?: string
+    }
+    return maybeError.response?.data?.detail || maybeError.message || fallback
+  }
+  return fallback
+}
+
 const loadInvitation = async () => {
   loading.value = true
   try {
@@ -118,10 +129,9 @@ const loadInvitation = async () => {
     } else {
       statusMessage.value = ''
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     invitation.value = null
-    statusMessage.value =
-      error?.response?.data?.detail || error?.message || '邀请链接不存在或已失效。'
+    statusMessage.value = getErrorMessage(error, '邀请链接不存在或已失效。')
     inviteStatusType.value = 'error'
   } finally {
     loading.value = false
@@ -144,9 +154,8 @@ const acceptInvite = async () => {
     window.setTimeout(() => {
       router.push('/app/guide')
     }, 600)
-  } catch (error: any) {
-    statusMessage.value =
-      error?.response?.data?.detail || error?.message || '加入团队失败，请稍后重试。'
+  } catch (error: unknown) {
+    statusMessage.value = getErrorMessage(error, '加入团队失败，请稍后重试。')
     inviteStatusType.value = 'error'
   } finally {
     accepting.value = false

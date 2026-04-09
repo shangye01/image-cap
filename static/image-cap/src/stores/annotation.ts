@@ -203,7 +203,7 @@ export const useAnnotationStore = defineStore('annotation', () => {
     annotations.value.push({
       ...ann,
       id,
-      color: undefined
+      color: ann.color
     })
     if (currentTaskId.value) touchTaskTracking(currentTaskId.value)
     debouncedAutoSave()
@@ -222,7 +222,6 @@ export const useAnnotationStore = defineStore('annotation', () => {
     const index = annotations.value.findIndex(ann => ann.id === id)
     if (index !== -1) {
       const cleanUpdates = { ...updates }
-      delete cleanUpdates.color
       
       if (cleanUpdates.x !== undefined) cleanUpdates.x = Number(cleanUpdates.x)
       if (cleanUpdates.y !== undefined) cleanUpdates.y = Number(cleanUpdates.y)
@@ -247,14 +246,10 @@ export const useAnnotationStore = defineStore('annotation', () => {
   }
   
   const setAnnotations = (anns: Annotation[]): void => {
-    annotations.value = anns.map(ann => {
-      const cleanAnn = { ...ann }
-      delete cleanAnn.color
-      return {
-        ...cleanAnn,
-        id: ann.id || generateId('pred')
-      }
-    })
+    annotations.value = anns.map(ann => ({
+      ...ann,
+      id: ann.id || generateId('pred')
+    }))
     if (currentTaskId.value) touchTaskTracking(currentTaskId.value)
     debouncedAutoSave()
   }

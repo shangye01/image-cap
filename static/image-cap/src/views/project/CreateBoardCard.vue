@@ -112,7 +112,7 @@
   </teleport>
 </template>
 
-<script setup>
+<script setup lang="js">
 import { computed, reactive, ref } from 'vue'
 
 const props = defineProps({

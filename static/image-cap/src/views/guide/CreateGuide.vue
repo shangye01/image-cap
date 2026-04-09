@@ -161,8 +161,8 @@ const currentIndex = ref(0)
 const direction = ref<'next' | 'prev'>('next')
 const animating = ref(false)
 const progress = ref(0)
-let timer = ref<number | null>(null)
-let progressTimer = ref<number | null>(null)
+const timer = ref<number | null>(null)
+const progressTimer = ref<number | null>(null)
 
 const startAuto = () => {
   if (timer.value) clearInterval(timer.value)

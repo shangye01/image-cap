@@ -78,8 +78,12 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="js">
 import { ref } from 'vue'
+
+defineOptions({
+  name: 'UserProfileLegacyView',
+})
 
 const activeTab = ref(1)
 

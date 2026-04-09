@@ -253,7 +253,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="js">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
