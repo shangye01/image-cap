@@ -1,5 +1,8 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import type { Ref } from 'vue'
+import request from '@/api/request'
+import { getCurrentUserId } from '@/utils/currentUser'
+import { getTaskTrackingPayload, incrementTaskSaveCount } from '@/utils/taskWorkTracker'
 
 console.log('🔧 正在初始化 Supabase...')
 
@@ -34,14 +37,13 @@ export function useAutoSave(
     if (!taskIdRef?.value || !annotationsRef?.value?.length) return
 
     try {
-      await supabase
-        .from('drafts')
-        .upsert({
-          task_id: taskIdRef.value,
-          annotations_json: annotationsRef.value,
-          user_id: 'anonymous',
-          saved_at: new Date().toISOString()
-        })
+      incrementTaskSaveCount(taskIdRef.value)
+      await request.post(`/annotations/${taskIdRef.value}`, {
+        annotations: annotationsRef.value,
+        is_draft: true,
+        user_id: getCurrentUserId(),
+        ...(getTaskTrackingPayload(taskIdRef.value) || {}),
+      })
       console.log('💾 自动保存成功')
     } catch (err) {
       console.error('自动保存失败:', err)

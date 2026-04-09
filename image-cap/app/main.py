@@ -33,6 +33,7 @@ from fastapi.responses import JSONResponse, FileResponse
 from sqlalchemy.orm import Session
 
 from .api import auth
+from .api import performance
 from .api import project_storage
 from .api import collaboration
 from .db.base import init_db
@@ -51,6 +52,14 @@ from fastapi.concurrency import run_in_threadpool
 from app.models import User
 from app.db.session import SessionLocal
 from app.utils.jwt import ALGORITHM, SECRET_KEY
+from app.services.user_performance import (
+    bind_task_to_user,
+    parse_tracker_payload,
+    record_review_result,
+    record_task_progress,
+    record_task_started,
+    record_task_submission,
+)
 from jose import jwt
 
 logger = logging.getLogger(__name__)
@@ -59,6 +68,7 @@ app = FastAPI()
 
 # 注册路由
 app.include_router(auth.router)
+app.include_router(performance.router)
 app.include_router(project_storage.router)
 app.include_router(collaboration.router)
 
@@ -239,19 +249,41 @@ def _is_reviewer_workspace_owner(project_owner: str, lineage_context: dict[str, 
     return bool(project_owner and reviewer_username and project_owner == reviewer_username)
 
 
+def _is_root_workspace_owner(project_owner: str, lineage_context: dict[str, Any]) -> bool:
+    root_owner = lineage_context.get("root_owner")
+    return bool(project_owner and root_owner and project_owner == root_owner)
+
+
+def _requires_reviewed_result_for_root_owner(project_owner: str, lineage_context: dict[str, Any]) -> bool:
+    reviewer_username = lineage_context.get("reviewer_username")
+    return bool(
+        reviewer_username
+        and _is_root_workspace_owner(project_owner, lineage_context)
+        and project_owner != reviewer_username
+    )
+
+
 def _should_prefer_reviewed_task(project_owner: str, lineage_context: dict[str, Any]) -> bool:
-    return _is_reviewer_workspace_owner(project_owner, lineage_context)
+    return _is_reviewer_workspace_owner(
+        project_owner, lineage_context
+    ) or _requires_reviewed_result_for_root_owner(project_owner, lineage_context)
 
 
 def _can_access_cross_project_annotations(project: Project | None, lineage_context: dict[str, Any]) -> bool:
     if not project:
         return False
-    return _is_reviewer_workspace_owner(project.owner_id, lineage_context)
+    if _is_reviewer_workspace_owner(project.owner_id, lineage_context):
+        return True
+    if _is_root_workspace_owner(project.owner_id, lineage_context):
+        related_ids = lineage_context.get("related_project_ids") or []
+        return len(related_ids) > 1
+    return False
 
 
 def _pick_preferred_storage_task(
         storage_tasks: list[dict[str, Any]],
         prefer_reviewed: bool,
+        reviewed_only: bool = False,
 ) -> dict[str, Any] | None:
     if not storage_tasks:
         return None
@@ -261,6 +293,8 @@ def _pick_preferred_storage_task(
         reviewed_task = next((task for task in ordered_tasks if task.get("status") == "reviewed"), None)
         if reviewed_task:
             return reviewed_task
+        if reviewed_only:
+            return None
     return ordered_tasks[0]
 
 
@@ -285,6 +319,13 @@ def _require_current_user(db: Session, authorization: str | None) -> User:
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在")
     return user
+
+
+def _get_current_user_if_available(db: Session, authorization: str | None) -> User | None:
+    user_id = _resolve_user_id_from_token(authorization)
+    if not user_id:
+        return None
+    return db.query(User).filter(User.id == user_id).first()
 
 
 def _resolve_ws_username(token: str | None) -> str | None:
@@ -1280,8 +1321,15 @@ async def get_folder_tasks(
     project_record = db.query(Project).filter(Project.id == project_uuid).first()
     lineage_context = _get_project_lineage_context(project_id)
     allow_cross_project_fallback = _can_access_cross_project_annotations(project_record, lineage_context)
+    is_reviewer_workspace = bool(
+        project_record and _is_reviewer_workspace_owner(project_record.owner_id, lineage_context)
+    )
     prefer_reviewed_task = bool(
         project_record and _should_prefer_reviewed_task(project_record.owner_id, lineage_context)
+    )
+    reviewed_only_for_owner = bool(
+        project_record
+        and _requires_reviewed_result_for_root_owner(project_record.owner_id, lineage_context)
     )
 
     file_ids = [str(f.id) for f in files_result]
@@ -1318,12 +1366,18 @@ async def get_folder_tasks(
         storage_task = _pick_preferred_storage_task(
             storage_task_map.get(file_record.storage_path, []),
             prefer_reviewed=prefer_reviewed_task,
+            reviewed_only=reviewed_only_for_owner,
         )
-        matched_task = (
-            storage_task or direct_task
-            if prefer_reviewed_task
-            else direct_task or storage_task
-        )
+        direct_task_status = str((direct_task or {}).get("status") or "").lower()
+        direct_reviewed_task = direct_task if direct_task_status == "reviewed" else None
+        if reviewed_only_for_owner:
+            matched_task = storage_task or direct_reviewed_task
+        else:
+            matched_task = (
+                storage_task or direct_task
+                if prefer_reviewed_task
+                else direct_task or storage_task
+            )
         if matched_task:
             matched_pairs.append((file_record, matched_task, direct_task))
 
@@ -1352,9 +1406,9 @@ async def get_folder_tasks(
                 task_obj,
                 task,
                 prefer_integrated_annotations=(
-                    allow_cross_project_fallback and used_fallback_task and task.get("status") != "reviewed"
+                    is_reviewer_workspace and used_fallback_task and task.get("status") != "reviewed"
                 ),
-                include_collaboration_preview=allow_cross_project_fallback,
+                include_collaboration_preview=is_reviewer_workspace,
             )
         )
 
@@ -1390,7 +1444,11 @@ async def get_file_task(
     task = task_result.data if task_result else None
     lineage_context = _get_project_lineage_context(project_id)
     used_fallback_task = False
+    is_reviewer_workspace = _is_reviewer_workspace_owner(project_record.owner_id, lineage_context)
     prefer_reviewed_task = _should_prefer_reviewed_task(project_record.owner_id, lineage_context)
+    reviewed_only_for_owner = _requires_reviewed_result_for_root_owner(
+        project_record.owner_id, lineage_context
+    )
 
     # 兜底：按 storage_path 查询同源任务（满足“谁标注谁可看，分享者均可看”）
     allow_cross_project_fallback = _can_access_cross_project_annotations(project_record, lineage_context)
@@ -1408,8 +1466,17 @@ async def get_file_task(
         fallback_task = _pick_preferred_storage_task(
             fallback_tasks or [],
             prefer_reviewed=prefer_reviewed_task,
+            reviewed_only=reviewed_only_for_owner,
         )
-        if prefer_reviewed_task and fallback_task:
+        if reviewed_only_for_owner:
+            direct_task = task
+            direct_task_status = str((direct_task or {}).get("status") or "").lower()
+            if fallback_task:
+                task = fallback_task
+                used_fallback_task = not direct_task or task.get("id") != direct_task.get("id")
+            elif direct_task_status != "reviewed":
+                task = None
+        elif prefer_reviewed_task and fallback_task:
             direct_task = task
             task = fallback_task
             used_fallback_task = not direct_task or task.get("id") != direct_task.get("id")
@@ -1442,9 +1509,9 @@ async def get_file_task(
             task_obj,
             task,
             prefer_integrated_annotations=(
-                allow_cross_project_fallback and used_fallback_task and task.get("status") != "reviewed"
+                is_reviewer_workspace and used_fallback_task and task.get("status") != "reviewed"
             ),
-            include_collaboration_preview=allow_cross_project_fallback,
+            include_collaboration_preview=is_reviewer_workspace,
         )
     }
 
@@ -1655,12 +1722,14 @@ from fastapi.concurrency import run_in_threadpool
 async def create_annotation_session(
         project_id: str,
         payload: AnnotationSessionCreate,
+        authorization: str | None = Header(default=None),
         db: Session = Depends(get_db)
 ):
     """创建标注会话，生成项目名_序号格式的任务ID，防止重复创建
     对于已有标注的文件，直接返回已有标注，不再进行AI预测"""
     target_keywords = [k.strip().lower() for k in payload.keywords] if payload.keywords else []
     bucket = supabase.storage.from_("project-files")
+    current_user = _get_current_user_if_available(db, authorization)
 
     logger.info(f"【SESSION-001】开始创建标注会话 | project_id={project_id}, file_ids={payload.file_ids}")
 
@@ -1749,6 +1818,13 @@ async def create_annotation_session(
                     annotations=existing_annotations  # 返回已有标注
                 )
                 tasks.append(task_obj)
+                bind_task_to_user(db, task_id=task_data["id"], user=current_user, task_row=task_data)
+                record_task_started(
+                    db,
+                    task_id=task_data["id"],
+                    user=current_user,
+                    task_row=task_data,
+                )
                 logger.info(f"【SESSION-014】已有任务添加到返回列表 | task_id={task_data['id']}, 标注数={len(existing_annotations)}")
             continue
 
@@ -1804,6 +1880,13 @@ async def create_annotation_session(
             }
             logger.info(f"【SESSION-023】插入任务到Supabase | task_id={task_id}")
             supabase.table("tasks").upsert(task_insert_data).execute()
+            bind_task_to_user(db, task_id=task_id, user=current_user, task_row=task_insert_data)
+            record_task_started(
+                db,
+                task_id=task_id,
+                user=current_user,
+                task_row=task_insert_data,
+            )
             logger.info(f"【SESSION-024】任务创建成功 | task_id={task_id}")
         except Exception as e:
             logger.error(f"【SESSION-025】创建任务失败 | task_id={task_id}, error={str(e)}")
@@ -1816,7 +1899,7 @@ async def create_annotation_session(
                 supabase.table("drafts").upsert({
                     "task_id": task_id,
                     "annotations_json": annotations,
-                    "user_id": "current_user",
+                    "user_id": current_user.id if current_user else "system",
                     "saved_at": datetime.now().isoformat()
                 }).execute()
                 logger.info(f"【SESSION-027】草稿保存成功 | task_id={task_id}")
@@ -1890,13 +1973,16 @@ async def create_annotation_session(
 @app.post("/api/tasks/{task_id}/smart-annotate")
 async def smart_annotate_incremental(
         task_id: str,
-        payload: dict
+        payload: dict,
+        authorization: str | None = Header(default=None),
+        db: Session = Depends(get_db),
 ):
     """
     增量式智能预标注：检测新物体，只添加不与已有标注重叠的框
     """
     try:
         logger.info(f"【SMART-ANNOTATE】开始增量预标注 | task_id={task_id}")
+        current_user = _get_current_user_if_available(db, authorization)
 
         # 获取任务信息
         task_res = supabase.table("tasks").select("*").eq("id", task_id).execute()
@@ -1904,6 +1990,7 @@ async def smart_annotate_incremental(
             raise HTTPException(404, detail="任务不存在")
 
         task = task_res.data[0]
+        bind_task_to_user(db, task_id=task_id, user=current_user, task_row=task)
         image_url = task.get("image_url")
         image_storage_path = task.get("image_storage_path")
 
@@ -2006,9 +2093,17 @@ async def smart_annotate_incremental(
                 supabase.table("drafts").upsert({
                     "task_id": task_id,
                     "annotations_json": all_annotations,
-                    "user_id": "current_user",
+                    "user_id": current_user.id if current_user else "system",
                     "saved_at": datetime.now().isoformat()
                 }).execute()
+                record_task_progress(
+                    db,
+                    task_id=task_id,
+                    user=current_user,
+                    task_row=task,
+                    save_count_increment=1,
+                    payload_snapshot={"source": "smart_annotate", "new_annotations": len(new_annotations)},
+                )
                 logger.info(f"【SMART-ANNOTATE】合并标注已保存到草稿 | 总计{len(all_annotations)}个")
             except Exception as e:
                 logger.warning(f"【SMART-ANNOTATE】保存草稿失败: {e}")
@@ -2034,7 +2129,12 @@ async def smart_annotate_incremental(
         logger.error(f"【SMART-ANNOTATE】增量预标注失败: {e}")
         raise HTTPException(500, detail=f"智能预标注失败: {str(e)}")
 @app.post("/api/project/{project_id}/move-to-done")
-async def move_to_done(project_id: str, payload: dict, db: Session = Depends(get_db)):
+async def move_to_done(
+        project_id: str,
+        payload: dict,
+        authorization: str | None = Header(default=None),
+        db: Session = Depends(get_db)
+):
     """前端点击「提交标注」后触发：将数据库中的文件状态更为已标注"""
     task_id = payload.get("taskId")
 
@@ -2044,6 +2144,8 @@ async def move_to_done(project_id: str, payload: dict, db: Session = Depends(get
         raise HTTPException(404, detail=f"任务 {task_id} 不存在")
 
     task_data = task_res.data[0]
+    current_user = _get_current_user_if_available(db, authorization)
+    bind_task_to_user(db, task_id=task_id, user=current_user, task_row=task_data)
     storage_path = task_data.get("image_storage_path")
 
     updated_rows = 0
@@ -2124,11 +2226,14 @@ async def move_to_done(project_id: str, payload: dict, db: Session = Depends(get
                     reviewer_project_ids = {project.id for project in reviewer_projects}
 
         related_project_ids = [project.id for project in related_projects if project]
-        visible_done_project_ids = {project_uuid, root_project_id}
         reviewer_should_receive = bool(
             integration_result.get("ready")
             and integration_result.get("review_triggered")
         )
+        # 协作审核流程中，分享者（root）在审核完成前不进入“已标注”。
+        visible_done_project_ids = {project_uuid}
+        if not reviewer_should_receive:
+            visible_done_project_ids.add(root_project_id)
 
         matched_files = []
         if related_project_ids:
@@ -2253,6 +2358,7 @@ async def confirm_review_result(
 
         if not source_task:
             raise HTTPException(status_code=404, detail="未找到待审核任务")
+        source_annotations = _load_task_annotations(source_task)
 
         review_task_result = (
             supabase.table("tasks")
@@ -2360,6 +2466,15 @@ async def confirm_review_result(
                 "timestamp": now_iso,
             },
         )
+        record_review_result(
+            db,
+            task_id=source_task.get("id"),
+            reviewer=user,
+            reviewed_annotations=annotations,
+            submitted_annotations=source_annotations,
+            reviewed_at=datetime.now(),
+            integration_result=_collaborative_auto_integrate(source_task),
+        )
 
         return {
             "success": True,
@@ -2432,7 +2547,7 @@ async def run_prediction(
                 supabase.table("drafts").upsert({
                     "task_id": task_id,
                     "annotations_json": annotations,
-                    "user_id": "current_user",
+                    "user_id": "system_ai",
                     "saved_at": datetime.now().isoformat()
                 }).execute()
                 logger.info(f"预标注草稿已保存: {task_id}, {len(annotations)} 个框")
@@ -2542,7 +2657,7 @@ async def run_prediction(
                     supabase.table("drafts").upsert({
                         "task_id": task_id,
                         "annotations_json": all_annotations,
-                        "user_id": "current_user",
+                        "user_id": "system_ai",
                         "saved_at": datetime.now().isoformat()
                     }).execute()
                     logger.info(f"合并标注草稿已保存: {task_id}, 共 {len(all_annotations)} 个框")
@@ -2998,12 +3113,21 @@ async def switch_model(payload: dict):
 
 
 @app.post("/api/annotations/{task_id}")
-async def save_annotations(task_id: str, payload: dict):
+async def save_annotations(
+        task_id: str,
+        payload: dict,
+        authorization: str | None = Header(default=None),
+        db: Session = Depends(get_db)
+):
     """保存标注，支持 项目名_序号 格式"""
     try:
         anns = payload.get("annotations", [])
         is_draft = payload.get("is_draft", True)
-        user_id = payload.get("user_id", "anonymous")
+        current_user = _get_current_user_if_available(db, authorization)
+        if not current_user and payload.get("user_id"):
+            current_user = db.query(User).filter(User.id == str(payload.get("user_id"))).first()
+        user_id = current_user.id if current_user else payload.get("user_id", "anonymous")
+        tracker_payload = parse_tracker_payload(payload)
 
         logger.info(f"保存标注: task_id={task_id}, is_draft={is_draft}, count={len(anns)}")
 
@@ -3020,6 +3144,7 @@ async def save_annotations(task_id: str, payload: dict):
 
         task_row = task_check.data[0]
         project_name = task_row.get("project_name", "unknown")
+        bind_task_to_user(db, task_id=task_id, user=current_user, task_row=task_row)
 
         if is_draft:
             # 保存草稿
@@ -3029,6 +3154,20 @@ async def save_annotations(task_id: str, payload: dict):
                 "user_id": user_id,
                 "saved_at": datetime.now().isoformat()
             }).execute()
+            record_task_progress(
+                db,
+                task_id=task_id,
+                user=current_user,
+                task_row=task_row,
+                started_at=tracker_payload.get("started_at"),
+                last_saved_at=tracker_payload.get("last_activity_at"),
+                work_seconds=tracker_payload.get("work_seconds"),
+                save_count_total=tracker_payload.get("save_count"),
+                payload_snapshot={
+                    "annotation_count": len(anns),
+                    "mode": "draft",
+                },
+            )
             return {"success": True, "status": "draft_saved", "count": len(anns)}
         else:
             # 提交最终标注
@@ -3066,6 +3205,23 @@ async def save_annotations(task_id: str, payload: dict):
 
             # 协作标注自动整合流程（不新增字段，仅返回整合与审核结果）
             integration_result = _collaborative_auto_integrate(task_row)
+            record_task_submission(
+                db,
+                task_id=task_id,
+                user=current_user,
+                task_row=task_row,
+                submitted_annotations=anns,
+                started_at=tracker_payload.get("started_at"),
+                submitted_at=tracker_payload.get("last_activity_at"),
+                work_seconds=tracker_payload.get("work_seconds"),
+                save_count=tracker_payload.get("save_count"),
+                integration_result=integration_result,
+                payload_snapshot={
+                    "annotation_count": len(anns),
+                    "mode": "submit",
+                    "has_collaboration_review": bool(integration_result.get("review_triggered")),
+                },
+            )
             if integration_result.get("auto_integrated") and integration_result.get("fused_annotations"):
                 final_task_id = (integration_result.get("source_task_ids") or [task_id])[0]
                 supabase.table("annotations").delete().eq("task_id", final_task_id).eq("annotated_by",

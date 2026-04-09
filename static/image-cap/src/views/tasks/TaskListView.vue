@@ -115,6 +115,9 @@
       <div class="chart-card">
         <div class="chart-header">
           <h3>🎯 效率指标</h3>
+          <span v-if="performanceSummary" class="chart-subtitle">
+            综合评分 {{ performanceSummary.scores.total }} · 等级 {{ performanceSummary.level }}
+          </span>
         </div>
         <v-chart class="chart" :option="radarChartOption" autoresize />
       </div>
@@ -202,7 +205,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { use } from 'echarts/core'
@@ -220,8 +223,39 @@ import {
 import VChart from 'vue-echarts'
 import { useUserStore } from '@/stores/user'
 import { getTaskCenterOverview } from '@/api/projectStorage'
+import type { PerformanceSummary } from '@/api/performance'
 
-// 注册 ECharts 组件
+type TaskStatus = 'pending' | 'annotating' | 'completed' | 'reviewed'
+
+type TaskItem = {
+  id: string | number
+  route_task_id: string | null
+  project_name: string
+  status: TaskStatus
+  created_at: string
+  annotations_count: number
+}
+
+type ProjectStatItem = {
+  project_id: string | number
+  project_name: string
+  created_at: string
+  is_completed: boolean
+  completed_at: string | null
+}
+
+type SummaryData = {
+  total_images?: number
+  pending_images?: number
+  labeling_images?: number
+  completed_images?: number
+  reviewed_images?: number
+}
+
+type HeatmapPoint = [string, number]
+
+type TrendPeriod = 'week' | 'month' | 'year'
+
 use([
   CanvasRenderer,
   LineChart,
@@ -241,35 +275,35 @@ use([
 const router = useRouter()
 const userStore = useUserStore()
 
-// 数据状态
-const tasks = ref([])
-const loading = ref(false)
-const expandedProjects = ref({})
-const trendPeriod = ref('week')
-const summary = ref(null)
-const projectStats = ref([])
+const tasks = ref<TaskItem[]>([])
+const loading = ref<boolean>(false)
+const expandedProjects = ref<Record<string, boolean>>({})
+const trendPeriod = ref<TrendPeriod>('week')
+const summary = ref<SummaryData | null>(null)
+const projectStats = ref<ProjectStatItem[]>([])
+const performanceSummary = ref<PerformanceSummary | null>(null)
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
-const normalizeStatus = (status) => {
+const normalizeStatus = (status?: string | null): TaskStatus => {
   if (status === 'labeling' || status === 'annotating') return 'annotating'
   if (status === 'done' || status === 'completed') return 'completed'
   if (status === 'reviewed') return 'reviewed'
   return 'pending'
 }
 
-const toTime = (value) => {
+const toTime = (value?: string | null): number | null => {
   if (!value) return null
   const ts = new Date(value).getTime()
   return Number.isFinite(ts) ? ts : null
 }
 
-const calcTrendPercent = (current, previous) => {
+const calcTrendPercent = (current: number, previous: number): number => {
   if (previous <= 0) return current > 0 ? 100 : 0
   return Number((((current - previous) / previous) * 100).toFixed(1))
 }
 
-const buildPerformanceMetrics = (taskList) => {
+const buildPerformanceMetrics = (taskList: TaskItem[]): number[] => {
   const total = taskList.length || 1
   const reviewedCount = taskList.filter((t) => t.status === 'reviewed').length
   const completedOrReviewed = taskList.filter((t) =>
@@ -279,7 +313,8 @@ const buildPerformanceMetrics = (taskList) => {
     taskList.map((t) => (t.created_at || '').split('T')[0]).filter(Boolean)
   ).size
   const projectCount = new Set(taskList.map((t) => t.project_name).filter(Boolean)).size || 1
-  const avgAnnotations = taskList.reduce((sum, t) => sum + (t.annotations_count || 0), 0) / total
+  const avgAnnotations =
+    taskList.reduce((sum, t) => sum + (t.annotations_count || 0), 0) / total
 
   return [
     Math.min(100, Math.round((completedOrReviewed / total) * 100)),
@@ -292,22 +327,30 @@ const buildPerformanceMetrics = (taskList) => {
 
 const trends = computed(() => {
   const now = Date.now()
+
   const totalCurrent = tasks.value.filter((task) => {
     const ts = toTime(task.created_at)
-    return ts && ts >= now - 30 * DAY_MS
+    return ts !== null && ts >= now - 30 * DAY_MS
   }).length
+
   const totalPrevious = tasks.value.filter((task) => {
     const ts = toTime(task.created_at)
-    return ts && ts >= now - 60 * DAY_MS && ts < now - 30 * DAY_MS
+    return ts !== null && ts >= now - 60 * DAY_MS && ts < now - 30 * DAY_MS
   }).length
 
   const completedCurrent = tasks.value.filter((task) => {
     const ts = toTime(task.created_at)
-    return ts && ts >= now - 30 * DAY_MS && task.status === 'completed'
+    return ts !== null && ts >= now - 30 * DAY_MS && task.status === 'completed'
   }).length
+
   const completedPrevious = tasks.value.filter((task) => {
     const ts = toTime(task.created_at)
-    return ts && ts >= now - 60 * DAY_MS && ts < now - 30 * DAY_MS && task.status === 'completed'
+    return (
+      ts !== null &&
+      ts >= now - 60 * DAY_MS &&
+      ts < now - 30 * DAY_MS &&
+      task.status === 'completed'
+    )
   }).length
 
   return {
@@ -316,59 +359,66 @@ const trends = computed(() => {
   }
 })
 
-// 计算属性
 const totalTasks = computed(() =>
   summary.value ? Number(summary.value.total_images || 0) : tasks.value.length
 )
+
 const pendingTasks = computed(() =>
   summary.value
     ? Number(summary.value.pending_images || 0)
     : tasks.value.filter((t) => t.status === 'pending').length
 )
+
 const annotatingTasks = computed(() =>
   summary.value
     ? Number(summary.value.labeling_images || 0)
     : tasks.value.filter((t) => t.status === 'annotating').length
 )
+
 const completedTasks = computed(() =>
   summary.value
     ? Number(summary.value.completed_images || 0)
     : tasks.value.filter((t) => t.status === 'completed').length
 )
+
 const completedOnlyTasks = computed(() => completedTasks.value)
+
 const reviewedTasks = computed(() =>
   summary.value
     ? Number(summary.value.reviewed_images || 0)
     : tasks.value.filter((t) => t.status === 'reviewed').length
 )
+
 const efficiency = computed(() => {
   if (totalTasks.value === 0) return 0
   return Math.round((completedTasks.value / totalTasks.value) * 100)
 })
 
-const groupedTasks = computed(() => {
-  const groups = {}
+const groupedTasks = computed<Record<string, TaskItem[]>>(() => {
+  const groups: Record<string, TaskItem[]> = {}
+
   tasks.value.forEach((task) => {
     const project = task.project_name || '未分类项目'
     if (!groups[project]) groups[project] = []
     groups[project].push(task)
   })
+
   Object.keys(groups).forEach((project) => {
-    groups[project].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+    groups[project].sort((a, b) => (toTime(b.created_at) || 0) - (toTime(a.created_at) || 0))
   })
+
   return groups
 })
 
-// 图表配置
 const trendChartOption = computed(() => {
   const days = trendPeriod.value === 'week' ? 7 : trendPeriod.value === 'month' ? 30 : 365
-  const dates = []
-  const completed = []
-  const created = []
+  const dates: string[] = []
+  const completed: number[] = []
+  const created: number[] = []
 
-  const formatDateKey = (date) => date.toISOString().split('T')[0]
-  const createdByDay = new Map()
-  const completedByDay = new Map()
+  const formatDateKey = (date: Date): string => date.toISOString().split('T')[0]
+  const createdByDay = new Map<string, number>()
+  const completedByDay = new Map<string, number>()
 
   if (projectStats.value.length) {
     projectStats.value.forEach((project) => {
@@ -377,6 +427,7 @@ const trendChartOption = computed(() => {
         const createdDayKey = formatDateKey(new Date(createdTs))
         createdByDay.set(createdDayKey, (createdByDay.get(createdDayKey) || 0) + 1)
       }
+
       if (project.is_completed) {
         const completedTs = toTime(project.completed_at || project.created_at)
         if (completedTs) {
@@ -386,7 +437,6 @@ const trendChartOption = computed(() => {
       }
     })
   } else {
-    // 兼容回退：后端未返回 project_stats 时，使用旧数据口径
     tasks.value.forEach((task) => {
       const createdTs = toTime(task.created_at)
       if (!createdTs) return
@@ -517,11 +567,7 @@ const statusChartOption = computed(() => ({
         { value: pendingTasks.value, name: '待处理', itemStyle: { color: '#faad14' } },
         { value: annotatingTasks.value, name: '标注中', itemStyle: { color: '#1890ff' } },
         { value: completedOnlyTasks.value, name: '已完成', itemStyle: { color: '#52c41a' } },
-        {
-          value: reviewedTasks.value,
-          name: '已审核',
-          itemStyle: { color: '#722ed1' },
-        },
+        { value: reviewedTasks.value, name: '已审核', itemStyle: { color: '#722ed1' } },
       ],
     },
   ],
@@ -545,7 +591,7 @@ const projectChartOption = computed(() => {
     },
     xAxis: {
       type: 'category',
-      data: projects.map((p) => (p.length > 6 ? p.slice(0, 6) + '...' : p)),
+      data: projects.map((p) => (p.length > 6 ? `${p.slice(0, 6)}...` : p)),
       axisLabel: { rotate: 30 },
     },
     yAxis: {
@@ -569,16 +615,27 @@ const projectChartOption = computed(() => {
 
 const radarChartOption = computed(() => {
   const now = Date.now()
+
   const currentTasks = tasks.value.filter((task) => {
     const ts = toTime(task.created_at)
-    return ts && ts >= now - 30 * DAY_MS
-  })
-  const previousTasks = tasks.value.filter((task) => {
-    const ts = toTime(task.created_at)
-    return ts && ts >= now - 60 * DAY_MS && ts < now - 30 * DAY_MS
+    return ts !== null && ts >= now - 30 * DAY_MS
   })
 
-  const currentPerformance = buildPerformanceMetrics(currentTasks)
+  const previousTasks = tasks.value.filter((task) => {
+    const ts = toTime(task.created_at)
+    return ts !== null && ts >= now - 60 * DAY_MS && ts < now - 30 * DAY_MS
+  })
+
+  const currentPerformance = performanceSummary.value
+    ? [
+        Number(performanceSummary.value.scores.speed || 0),
+        Number(performanceSummary.value.scores.accuracy || 0),
+        Number(performanceSummary.value.scores.activity || 0),
+        Number(performanceSummary.value.scores.collaboration || 0),
+        Number(performanceSummary.value.scores.quality || 0),
+      ]
+    : buildPerformanceMetrics(currentTasks)
+
   const previousPerformance = buildPerformanceMetrics(previousTasks)
 
   return {
@@ -620,11 +677,12 @@ const radarChartOption = computed(() => {
 })
 
 const heatmapOption = computed(() => {
-  const data = []
+  const data: HeatmapPoint[] = []
   const endDate = new Date()
   const startDate = new Date()
   startDate.setDate(startDate.getDate() - 365)
-  const createdByDay = new Map()
+
+  const createdByDay = new Map<string, number>()
   tasks.value.forEach((task) => {
     const ts = toTime(task.created_at)
     if (!ts) return
@@ -640,7 +698,7 @@ const heatmapOption = computed(() => {
   return {
     tooltip: {
       position: 'top',
-      formatter: (p) => `${p.data[0]}: ${p.data[1]} 个任务`,
+      formatter: (p: { data: [string, number] }) => `${p.data[0]}: ${p.data[1]} 个任务`,
     },
     visualMap: {
       min: 0,
@@ -678,32 +736,40 @@ const heatmapOption = computed(() => {
       {
         type: 'heatmap',
         coordinateSystem: 'calendar',
-        data: data,
+        data,
       },
     ],
   }
 })
 
-// 方法
-const changeTrendPeriod = (period) => {
+const changeTrendPeriod = (period: TrendPeriod): void => {
   trendPeriod.value = period
 }
 
-const loadTasks = async () => {
+const loadTasks = async (): Promise<void> => {
   loading.value = true
   try {
     const owner = userStore.user?.username
     if (!owner) {
       tasks.value = []
       expandedProjects.value = {}
+      performanceSummary.value = null
+      summary.value = null
+      projectStats.value = []
       return
     }
 
     const overview = await getTaskCenterOverview(owner)
+
     summary.value = overview?.summary || null
+
+    performanceSummary.value = overview?.performance_summary?.has_data
+      ? overview.performance_summary
+      : null
+
     projectStats.value = (overview?.project_stats || [])
-      .filter((item) => item?.project_id)
-      .map((item) => ({
+      .filter((item: any) => item?.project_id)
+      .map((item: any): ProjectStatItem => ({
         project_id: item.project_id,
         project_name: item.project_name || '未分类项目',
         created_at: item.created_at || new Date().toISOString(),
@@ -712,8 +778,8 @@ const loadTasks = async () => {
       }))
 
     tasks.value = (overview?.tasks || [])
-      .filter((task) => task?.id)
-      .map((task) => ({
+      .filter((task: any) => task?.id)
+      .map((task: any): TaskItem => ({
         id: task.id,
         route_task_id: task.task_id || null,
         project_name: task.project_name || '未分类项目',
@@ -722,7 +788,6 @@ const loadTasks = async () => {
         annotations_count: Number(task.annotations_count || 0),
       }))
 
-    // 默认展开第一个项目
     expandedProjects.value = {}
     const firstProject = Object.keys(groupedTasks.value)[0]
     if (firstProject) {
@@ -730,16 +795,17 @@ const loadTasks = async () => {
     }
   } catch (e) {
     console.error('加载任务失败:', e)
+    performanceSummary.value = null
   } finally {
     loading.value = false
   }
 }
 
-const toggleProject = (project) => {
+const toggleProject = (project: string): void => {
   expandedProjects.value[project] = !expandedProjects.value[project]
 }
 
-const openTask = (task) => {
+const openTask = (task: TaskItem): void => {
   const routeTaskId = task?.route_task_id
   if (!routeTaskId) {
     window.alert('该图像暂无可进入的标注任务')
@@ -748,11 +814,11 @@ const openTask = (task) => {
   router.push(`/app/annotate?task=${encodeURIComponent(routeTaskId)}`)
 }
 
-const formatTime = (timeStr) => {
+const formatTime = (timeStr?: string | null): string => {
   if (!timeStr) return ''
   const date = new Date(timeStr)
   const now = new Date()
-  const diff = now - date
+  const diff = now.getTime() - date.getTime()
   const days = Math.floor(diff / (1000 * 60 * 60 * 24))
 
   if (days === 0) return '今天'
@@ -761,8 +827,8 @@ const formatTime = (timeStr) => {
   return date.toLocaleDateString('zh-CN')
 }
 
-const statusText = (status) => {
-  const map = {
+const statusText = (status: TaskStatus): string => {
+  const map: Record<TaskStatus, string> = {
     pending: '待处理',
     annotating: '标注中',
     completed: '已完成',
@@ -771,13 +837,13 @@ const statusText = (status) => {
   return map[status] || status
 }
 
-const getStatusCount = (tasks, status) => {
-  return tasks.filter((t) => t.status === status).length
+const getStatusCount = (taskList: TaskItem[], status: TaskStatus): number => {
+  return taskList.filter((t) => t.status === status).length
 }
 
-const getStatusPercent = (tasks, status) => {
-  if (tasks.length === 0) return 0
-  return (getStatusCount(tasks, status) / tasks.length) * 100
+const getStatusPercent = (taskList: TaskItem[], status: TaskStatus): number => {
+  if (taskList.length === 0) return 0
+  return (getStatusCount(taskList, status) / taskList.length) * 100
 }
 
 onMounted(() => {

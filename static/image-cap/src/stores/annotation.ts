@@ -2,6 +2,14 @@
 import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
 import { supabase } from '@/supabase'
+import request from '@/api/request'
+import { getCurrentUserId } from '@/utils/currentUser'
+import {
+  clearTaskTracking,
+  getTaskTrackingPayload,
+  startTaskTracking,
+  touchTaskTracking,
+} from '@/utils/taskWorkTracker'
 
 // ========== 类型定义 ==========
 
@@ -131,16 +139,12 @@ export const useAnnotationStore = defineStore('annotation', () => {
     if (!currentTaskId.value || annotations.value.length === 0) return
     
     try {
-      const { error } = await supabase
-        .from('drafts')
-        .upsert({
-          task_id: currentTaskId.value,
-          user_id: userId.value || 'anonymous',
-          annotations_json: annotations.value,
-          saved_at: new Date().toISOString()
-        })
-      
-      if (error) throw error
+      await request.post(`/annotations/${currentTaskId.value}`, {
+        annotations: annotations.value,
+        is_draft: true,
+        user_id: getCurrentUserId() || userId.value || 'anonymous',
+        ...(getTaskTrackingPayload(currentTaskId.value) || {}),
+      })
       console.log('✅ 草稿已自动保存')
     } catch (error) {
       console.error('❌ 保存草稿失败:', error)
@@ -155,42 +159,14 @@ export const useAnnotationStore = defineStore('annotation', () => {
     taskStatus.value = 'submitting'
     
     try {
-      await supabase
-        .from('drafts')
-        .delete()
-        .eq('task_id', currentTaskId.value)
-      
-      const annsToInsert = annotations.value.map(ann => ({
-        id: ann.id || generateId('ann'),
-        task_id: currentTaskId.value,
-        label: ann.label,
-        x: ann.x,
-        y: ann.y,
-        width: ann.width,
-        height: ann.height,
-        confidence: ann.confidence || 1.0,
-        annotated_by: userId.value,
-        is_verified: false
-      }))
-      
-      const { error: insertError } = await supabase
-        .from('annotations')
-        .insert(annsToInsert)
-      
-      if (insertError) throw insertError
-      
-      const { error: updateError } = await supabase
-        .from('tasks')
-        .update({
-          status: 'completed',
-          annotations_count: annotations.value.length,
-          completed_at: new Date().toISOString()
-        })
-        .eq('id', currentTaskId.value)
-      
-      if (updateError) throw updateError
-      
+      await request.post(`/annotations/${currentTaskId.value}`, {
+        annotations: annotations.value,
+        is_draft: false,
+        user_id: getCurrentUserId() || userId.value || 'anonymous',
+        ...(getTaskTrackingPayload(currentTaskId.value) || {}),
+      })
       await checkTrainingTrigger()
+      clearTaskTracking(currentTaskId.value)
       
       taskStatus.value = 'idle'
       
@@ -229,6 +205,7 @@ export const useAnnotationStore = defineStore('annotation', () => {
       id,
       color: undefined
     })
+    if (currentTaskId.value) touchTaskTracking(currentTaskId.value)
     debouncedAutoSave()
   }
   
@@ -237,6 +214,7 @@ export const useAnnotationStore = defineStore('annotation', () => {
     if (selectedId.value === id) {
       selectedId.value = null
     }
+    if (currentTaskId.value) touchTaskTracking(currentTaskId.value)
     debouncedAutoSave()
   }
 
@@ -257,6 +235,7 @@ export const useAnnotationStore = defineStore('annotation', () => {
       } as Annotation
       
       console.log('✅ 更新标注:', id, cleanUpdates)
+      if (currentTaskId.value) touchTaskTracking(currentTaskId.value)
       debouncedAutoSave()
     }
   }
@@ -264,6 +243,7 @@ export const useAnnotationStore = defineStore('annotation', () => {
   const clearAnnotations = (): void => {
     annotations.value = []
     selectedId.value = null
+    if (currentTaskId.value) touchTaskTracking(currentTaskId.value)
   }
   
   const setAnnotations = (anns: Annotation[]): void => {
@@ -275,6 +255,7 @@ export const useAnnotationStore = defineStore('annotation', () => {
         id: ann.id || generateId('pred')
       }
     })
+    if (currentTaskId.value) touchTaskTracking(currentTaskId.value)
     debouncedAutoSave()
   }
   
@@ -285,10 +266,12 @@ export const useAnnotationStore = defineStore('annotation', () => {
     currentProjectName.value = task.projectName || task.project_name || null  // ✅ 存储项目名
     taskInfo.value = task
     taskStatus.value = 'annotating'
+    if (currentTaskId.value) startTaskTracking(currentTaskId.value)
   }
   
   // ✅ 修改：同时清空 projectName
   const clearCurrentTask = (): void => {
+    if (currentTaskId.value) clearTaskTracking(currentTaskId.value)
     currentTaskId.value = null
     currentProjectId.value = null
     currentProjectName.value = null  // ✅ 清空项目名

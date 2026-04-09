@@ -90,6 +90,45 @@
                 </div>
               </div>
 
+              <div class="section-block profile-score-section">
+                <div class="section-title">评分概览</div>
+                <div v-if="performanceSummary" class="score-grid">
+                  <div class="score-card score-card--primary">
+                    <div class="score-card__label">综合评分</div>
+                    <div class="score-card__value">{{ performanceSummary.scores.total }}</div>
+                    <div class="score-card__meta">
+                      等级 {{ performanceSummary.level }} · 最近 {{ performanceSummary.period_days }} 天
+                    </div>
+                  </div>
+                  <div class="score-card">
+                    <div class="score-card__label">准确率</div>
+                    <div class="score-card__value">{{ performanceSummary.scores.accuracy }}</div>
+                    <div class="score-card__meta">
+                      审核覆盖 {{ performanceSummary.mvp.review_coverage }}%
+                    </div>
+                  </div>
+                  <div class="score-card">
+                    <div class="score-card__label">效率分</div>
+                    <div class="score-card__value">{{ performanceSummary.scores.speed }}</div>
+                    <div class="score-card__meta">
+                      平均 {{ performanceSummary.mvp.avg_task_minutes }} 分钟/任务
+                    </div>
+                  </div>
+                  <div class="score-card">
+                    <div class="score-card__label">协作质量</div>
+                    <div class="score-card__value">{{ performanceSummary.scores.collaboration }}</div>
+                    <div class="score-card__meta">
+                      稳定性 {{ performanceSummary.scores.stability }}
+                    </div>
+                  </div>
+                </div>
+                <el-empty
+                  v-else
+                  description="暂无评分数据，完成标注并经过审核后会逐步生成"
+                  :image-size="72"
+                />
+              </div>
+
               <div class="double-section">
                 <div class="section-block section-half">
                   <div class="section-title">安全设置</div>
@@ -215,17 +254,21 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Search, Refresh } from '@element-plus/icons-vue'
 import { logoutApi } from '@/api/auth'
+import { getMyPerformanceSummary } from '@/api/performance'
 import { useUserStore } from '@/stores/user'
+
+const performanceSummary = ref(null)
 
 const router = useRouter()
 const userStore = useUserStore()
 const activeTab = ref('profile')
 const keyword = ref('')
+// const performanceSummary = ref<PerformanceSummary | null>(null)
 
 const user = computed(
   () =>
@@ -250,6 +293,21 @@ const filteredTeamList = computed(() => {
 const primaryOrganization = computed(() => teamList.value[0]?.organization_nickname || '-')
 const primaryOrgType = computed(() => teamList.value[0]?.organization_type || '未加入组织')
 
+const loadPerformanceSummary = async () => {
+  if (!userStore.isLogin) {
+    performanceSummary.value = null
+    return
+  }
+
+  try {
+    const response = await getMyPerformanceSummary()
+    performanceSummary.value = response?.summary?.has_data ? response.summary : null
+  } catch (error) {
+    console.error('加载评分摘要失败:', error)
+    performanceSummary.value = null
+  }
+}
+
 const handleLogout = async () => {
   try {
     await logoutApi()
@@ -263,6 +321,7 @@ const handleLogout = async () => {
 }
 const handleRefresh = () => {
   keyword.value = ''
+  loadPerformanceSummary()
   ElMessage.success('已刷新组织信息')
 }
 
@@ -270,6 +329,10 @@ const getOrgTypeTag = (type) => {
   if (type === '团队') return 'primary'
   return ''
 }
+
+onMounted(() => {
+  loadPerformanceSummary()
+})
 </script>
 
 <style scoped>
@@ -403,6 +466,40 @@ const getOrgTypeTag = (type) => {
   font-weight: 600;
   word-break: break-all;
 }
+.profile-score-section {
+  margin-top: 20px;
+}
+.score-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+.score-card {
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px solid #e2e8f0;
+  background: linear-gradient(180deg, #ffffff, #f8fafc);
+}
+.score-card--primary {
+  background: linear-gradient(135deg, #eff6ff, #f8fafc);
+  border-color: #bfdbfe;
+}
+.score-card__label {
+  color: #64748b;
+  font-size: 13px;
+}
+.score-card__value {
+  margin-top: 10px;
+  font-size: 30px;
+  line-height: 1;
+  font-weight: 700;
+  color: #0f172a;
+}
+.score-card__meta {
+  margin-top: 10px;
+  color: #475569;
+  font-size: 13px;
+}
 .double-section {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -497,6 +594,9 @@ const getOrgTypeTag = (type) => {
   .profile-layout {
     grid-template-columns: 1fr;
   }
+  .score-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
   .double-section {
     grid-template-columns: 1fr;
   }
@@ -506,6 +606,11 @@ const getOrgTypeTag = (type) => {
   }
   .search-input {
     width: 100%;
+  }
+}
+@media (max-width: 640px) {
+  .score-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

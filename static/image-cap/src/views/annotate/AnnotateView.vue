@@ -638,7 +638,7 @@
 </template>
 
 <script setup>
-import { ref, computed, reactive, onMounted, onUnmounted, watch, toRef, nextTick } from 'vue'
+import { ref, computed, reactive, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useAnnotationStore } from '@/stores/annotation'
 import { useColorManager } from '@/composables/useColorManager'
 import { useCanvasEvents } from '@/composables/useCanvasEvents'
@@ -646,7 +646,6 @@ import { useTaskFlow } from '@/composables/useTaskFlow'
 import { useAnnotationApi } from '@/composables/useAnnotationApi'
 import { confirmDialog, promptDialog, alertDialog } from '@/composables/useDialog'
 import { supabase } from '@/supabase'
-import { useAutoSave } from '@/supabase'
 import request from '@/api/request'
 import { useRouter, useRoute } from 'vue-router'
 
@@ -1081,18 +1080,6 @@ const { predicting } = useAnnotationApi(
   ensureLabelColor
 )
 
-const { save: autoSave } = useAutoSave(toRef(store, 'currentTaskId'), toRef(store, 'annotations'))
-
-watch(
-  () => store.annotations,
-  (newVal) => {
-    if (store.currentTaskId && newVal.length > 0) {
-      autoSave()
-    }
-  },
-  { deep: true }
-)
-
 const loadTaskListFromStorage = async () => {
   const projectId = routeProjectId.value
   if (!projectId) return false
@@ -1335,17 +1322,9 @@ const handleCustomSubmit = async () => {
 
     if (routeProjectId.value) {
       try {
-        const moveResponse = await fetch(`/api/project/${routeProjectId.value}/move-to-done`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            taskId: store.currentTaskId,
-          }),
+        await request.post(`/project/${routeProjectId.value}/move-to-done`, {
+          taskId: store.currentTaskId,
         })
-
-        if (!moveResponse.ok) {
-          console.warn('移动文件到已完成文件夹失败')
-        }
       } catch (e) {
         console.warn('调用 move-to-done 接口失败:', e)
       }

@@ -1,6 +1,8 @@
 // api/annotation.js
 
 import axios from 'axios'
+import { getCurrentUserId } from '@/utils/currentUser'
+import { getTaskTrackingPayload } from '@/utils/taskWorkTracker'
 
 // ✅ 确保使用相对路径，Vite代理会转发到8000端口
 const API_BASE = '/api'
@@ -90,7 +92,8 @@ export const saveAnnotations = async (taskId, annotations, isDraft = false) => {
     const response = await axios.post(`${API_BASE}/annotations/${taskId}`, {
       annotations,
       is_draft: isDraft,
-      user_id: 'anonymous'
+      user_id: getCurrentUserId() || 'anonymous',
+      ...(getTaskTrackingPayload(taskId) || {}),
     }, {
       headers: { 'Content-Type': 'application/json' },
       timeout: 30000

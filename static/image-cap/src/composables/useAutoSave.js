@@ -1,6 +1,8 @@
 // composables/useAutoSave.js
-import { ref, watch } from 'vue'
-import { supabase } from '@/supabase'
+import { ref } from 'vue'
+import request from '@/api/request'
+import { getCurrentUserId } from '@/utils/currentUser'
+import { getTaskTrackingPayload, incrementTaskSaveCount } from '@/utils/taskWorkTracker'
 
 export function useAutoSave(taskId, annotations) {
   const saving = ref(false)
@@ -12,14 +14,13 @@ export function useAutoSave(taskId, annotations) {
     
     saving.value = true
     try {
-      await supabase
-        .from('drafts')
-        .upsert({
-          task_id: taskId.value,
-          annotations_json: annotations.value,
-          saved_at: new Date().toISOString(),
-          user_id: 'current_user' // 实际应从auth获取
-        })
+      incrementTaskSaveCount(taskId.value)
+      await request.post(`/annotations/${taskId.value}`, {
+        annotations: annotations.value,
+        is_draft: true,
+        user_id: getCurrentUserId(),
+        ...(getTaskTrackingPayload(taskId.value) || {}),
+      })
       lastSaved.value = new Date()
     } catch (e) {
       console.error('自动保存失败:', e)

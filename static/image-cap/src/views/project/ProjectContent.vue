@@ -13,6 +13,7 @@
         "
       />
     </div>
+
     <!-- 1. 项目列表页 -->
     <template v-if="!currentProject">
       <div class="project-toolbar">
@@ -261,7 +262,6 @@
           <div class="project-detail-title-row">
             <div class="project-detail-title">{{ currentFolder.name }}</div>
             <div class="folder-action-buttons">
-              <!-- 待标注文件夹：原有逻辑 -->
               <template v-if="isPendingFolder">
                 <button type="button" class="file-action-btn batch" @click="selectAllFilesInFolder">
                   批量标注
@@ -271,7 +271,6 @@
                 </button>
               </template>
 
-              <!-- 标注中文件夹：继续标注 -->
               <template v-else-if="isLabelingFolder">
                 <button type="button" class="file-action-btn batch" @click="selectAllFilesInFolder">
                   批量选择
@@ -298,11 +297,14 @@
                   @click="openPendingReviewDialog"
                   :disabled="currentFolder.files.length === 0"
                 >
-                  {{ currentFolder.files.length > 0 ? `进入审核 (${currentFolder.files.length})` : '暂无待审核文件' }}
+                  {{
+                    currentFolder.files.length > 0
+                      ? `进入审核 (${currentFolder.files.length})`
+                      : '暂无待审核文件'
+                  }}
                 </button>
               </template>
 
-              <!-- 已标注/已审核文件夹：查看 -->
               <template v-else-if="isDoneFolder || isReviewedFolder">
                 <button type="button" class="file-action-btn batch" @click="selectAllFilesInFolder">
                   批量选择
@@ -430,7 +432,7 @@
       <div v-else class="empty-folder-page">{{ getEmptyFolderText }}</div>
     </template>
 
-    <!-- 工作弹窗 - 仅待标注文件夹使用 -->
+    <!-- 工作弹窗 -->
     <teleport to="body">
       <transition name="preview-fade">
         <div v-if="workVisible" class="dialog-mask" @click="closeWorkDialog">
@@ -505,7 +507,7 @@
                 </div>
               </div>
             </div>
-            <!-- 置信度阈值设置 -->
+
             <div class="confidence-section">
               <div class="confidence-header">
                 <span class="confidence-title">🎯 置信度阈值</span>
@@ -529,6 +531,7 @@
                 <span class="hint-high">高阈值 → 更精准</span>
               </div>
             </div>
+
             <div class="dialog-footer">
               <button class="dialog-btn secondary" type="button" @click="closeWorkDialog">
                 取消
@@ -596,409 +599,402 @@
         </div>
       </transition>
     </teleport>
-  </div>
 
-  <!-- 大图标注预览弹窗 -->
-  <teleport to="body">
-    <transition name="preview-fade">
-      <div
-        v-if="annotationPreviewVisible"
-        class="annotation-preview-mask"
-        @click="closeAnnotationPreview"
-        @keydown="handlePreviewKeydown"
-        tabindex="0"
-        ref="previewMaskRef"
-      >
-        <!-- 左侧切换按钮 -->
-        <button v-if="canGoPrev" class="nav-arrow nav-prev" @click.stop="goToPrevImage">‹</button>
+    <!-- 大图标注预览弹窗 -->
+    <teleport to="body">
+      <transition name="preview-fade">
+        <div
+          v-if="annotationPreviewVisible"
+          class="annotation-preview-mask"
+          @click="closeAnnotationPreview"
+          @keydown="handlePreviewKeydown"
+          tabindex="0"
+          ref="previewMaskRef"
+        >
+          <button v-if="canGoPrev" class="nav-arrow nav-prev" @click.stop="goToPrevImage">‹</button>
 
-        <div class="annotation-preview-panel" @click.stop>
-          <!-- 顶部工具栏 -->
-          <div class="preview-toolbar">
-            <div class="toolbar-info">
-              <span class="file-counter"
-                >{{ currentPreviewIndex + 1 }} / {{ previewableFiles.length }}</span
-              >
-              <span class="file-name">{{ annotationPreviewFileName }}</span>
+          <div class="annotation-preview-panel" @click.stop>
+            <div class="preview-toolbar">
+              <div class="toolbar-info">
+                <span class="file-counter"
+                  >{{ currentPreviewIndex + 1 }} / {{ previewableFiles.length }}</span
+                >
+                <span class="file-name">{{ annotationPreviewFileName }}</span>
+              </div>
+
+              <div class="toolbar-actions">
+                <button
+                  v-if="reviewWorkbenchEnabled"
+                  type="button"
+                  class="toolbar-btn btn-secondary"
+                  @click.stop="resetReviewWorkbench"
+                >
+                  重置裁决
+                </button>
+                <button
+                  v-if="canSubmitReviewDecision"
+                  type="button"
+                  class="toolbar-btn btn-review-submit"
+                  :disabled="reviewSubmitting"
+                  @click.stop="submitReviewResult"
+                >
+                  {{ reviewSubmitting ? '归档中...' : '确认裁决并归档' }}
+                </button>
+                <button
+                  v-if="isLabelingFolder && currentPreviewTask"
+                  type="button"
+                  class="toolbar-btn btn-continue"
+                  @click.stop="continueFromPreview"
+                >
+                  ✏️ 继续标注
+                </button>
+                <button
+                  type="button"
+                  class="toolbar-btn btn-close"
+                  @click.stop="closeAnnotationPreview"
+                >
+                  ✕
+                </button>
+              </div>
             </div>
 
-            <div class="toolbar-actions">
-              <button
-                v-if="reviewWorkbenchEnabled"
-                type="button"
-                class="toolbar-btn btn-secondary"
-                @click.stop="resetReviewWorkbench"
-              >
-                重置裁决
-              </button>
-              <button
-                v-if="canSubmitReviewDecision"
-                type="button"
-                class="toolbar-btn btn-review-submit"
-                :disabled="reviewSubmitting"
-                @click.stop="submitReviewResult"
-              >
-                {{ reviewSubmitting ? '归档中...' : '确认裁决并归档' }}
-              </button>
-              <button
-                v-if="isLabelingFolder && currentPreviewTask"
-                type="button"
-                class="toolbar-btn btn-continue"
-                @click.stop="continueFromPreview"
-              >
-                ✏️ 继续标注
-              </button>
-              <button
-                type="button"
-                class="toolbar-btn btn-close"
-                @click.stop="closeAnnotationPreview"
-              >
-                ✕
-              </button>
-            </div>
-          </div>
+            <div
+              class="annotation-preview-content"
+              ref="swipeAreaRef"
+              @touchstart="handleTouchStart"
+              @touchend="handleTouchEnd"
+            >
+              <div class="annotation-image-wrapper" ref="imageWrapperRef">
+                <div class="annotation-image-container" :style="imageContainerStyle">
+                  <img
+                    v-if="annotationPreviewImageUrl"
+                    :src="annotationPreviewImageUrl"
+                    :alt="annotationPreviewFileName"
+                    class="annotation-preview-image"
+                    @load="onAnnotationImageLoad"
+                    ref="previewImageRef"
+                    draggable="false"
+                  />
 
-          <!-- 图片内容区 -->
-          <div
-            class="annotation-preview-content"
-            ref="swipeAreaRef"
-            @touchstart="handleTouchStart"
-            @touchend="handleTouchEnd"
-          >
-            <div class="annotation-image-wrapper" ref="imageWrapperRef">
-              <!-- 使用计算后的尺寸容器 -->
-              <div class="annotation-image-container" :style="imageContainerStyle">
-                <img
-                  v-if="annotationPreviewImageUrl"
-                  :src="annotationPreviewImageUrl"
-                  :alt="annotationPreviewFileName"
-                  class="annotation-preview-image"
-                  @load="onAnnotationImageLoad"
-                  ref="previewImageRef"
-                  draggable="false"
-                />
+                  <svg
+                    v-if="annotationImageLoaded && currentAnnotations.length > 0"
+                    class="annotation-overlay"
+                    :viewBox="`0 0 ${annotationImageNaturalWidth} ${annotationImageNaturalHeight}`"
+                    preserveAspectRatio="none"
+                  >
+                    <g v-for="(anno, index) in currentAnnotations" :key="`box-${index}`">
+                      <rect
+                        v-for="(anno, index) in currentAnnotations"
+                        :key="`box-${index}`"
+                        :x="anno.x"
+                        :y="anno.y"
+                        :width="anno.width"
+                        :height="anno.height"
+                        fill="none"
+                        :stroke="anno.color || '#ff4444'"
+                        stroke-width="2"
+                        rx="2"
+                      />
+                    </g>
+                  </svg>
 
-                <!-- SVG 标注层 - 与容器完全重叠 -->
-                <!-- 优化后的 SVG 标签渲染 -->
-                <svg
-                  v-if="annotationImageLoaded && currentAnnotations.length > 0"
-                  class="annotation-overlay"
-                  :viewBox="`0 0 ${annotationImageNaturalWidth} ${annotationImageNaturalHeight}`"
-                  preserveAspectRatio="none"
-                >
-                  <g v-for="(anno, index) in currentAnnotations" :key="`box-${index}`">
-                    <rect
-                      v-for="(anno, index) in currentAnnotations"
-                      :key="`box-${index}`"
-                      :x="anno.x"
-                      :y="anno.y"
-                      :width="anno.width"
-                      :height="anno.height"
-                      fill="none"
-                      :stroke="anno.color || '#ff4444'"
-                      stroke-width="2"
-                      rx="2"
-                    />
-                  </g>
-                </svg>
-                <div
-                  v-if="annotationImageLoaded && currentAnnotations.length > 0"
-                  class="annotation-labels-layer"
-                >
                   <div
-                    v-for="(anno, index) in currentAnnotations"
-                    :key="`label-${index}`"
-                    class="annotation-label"
-                    :class="{ 'label-below': isLabelBelow(anno) }"
-                    :style="getLabelStyle(anno)"
+                    v-if="annotationImageLoaded && currentAnnotations.length > 0"
+                    class="annotation-labels-layer"
                   >
-                    <span class="label-text">{{ anno.label || '未命名' }}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- 底部信息栏 -->
-          <div class="annotation-preview-footer">
-            <div class="annotation-stats">
-              <span v-if="currentAnnotations.length > 0" class="stat-item">
-                📦 {{ currentAnnotations.length }} 个标注
-              </span>
-              <span v-else class="stat-item empty">暂无标注</span>
-
-              <span v-if="annotationDataSource" class="stat-item source">
-                来源: {{ annotationDataSource }}
-              </span>
-            </div>
-
-            <div v-if="reviewPreviewTabs.length > 0" class="review-preview-tabs">
-              <button
-                v-for="tab in reviewPreviewTabs"
-                :key="tab.key"
-                type="button"
-                class="review-preview-tab"
-                :class="{ active: reviewPreviewMode === tab.key }"
-                @click="switchReviewPreviewMode(tab.key)"
-              >
-                {{ tab.label }}
-              </button>
-            </div>
-
-            <div v-if="annotationLabels.length > 0" class="annotation-label-list">
-              <span v-for="label in annotationLabels" :key="label" class="annotation-label-chip">
-                🏷️ {{ label }}
-              </span>
-            </div>
-
-            <div v-if="collaborationIntegration" class="review-workbench">
-              <div class="review-workbench-header">
-                <div class="workbench-title">🧑‍⚖️ 裁决工作台</div>
-                <div class="workbench-decision">{{ integrationDecisionText }}</div>
-                <label class="conflict-switch">
-                  <input v-model="reviewConflictOnly" type="checkbox" />
-                  只看冲突框
-                </label>
-              </div>
-
-              <div v-if="displayedReviewItems.length > 0" class="workbench-body">
-                <div class="cluster-list">
-                  <button
-                    v-for="item in displayedReviewItems"
-                    :key="item.clusterKey"
-                    type="button"
-                    class="cluster-btn"
-                    :class="{ active: selectedReviewCluster?.clusterKey === item.clusterKey }"
-                    @click="pickReviewCluster(item)"
-                  >
-                    #{{ item.clusterKey }} · {{ item.differenceType }}
-                  </button>
-                </div>
-
-                <div v-if="selectedReviewCluster" class="cluster-detail">
-                  <div class="detail-line">建议：{{ selectedReviewCluster.recommendedAction }}</div>
-                  <div class="detail-line">
-                    IoU:
-                    {{
-                      selectedReviewCluster.overlay?.fused_preview?.agreement?.mean_pairwise_iou ??
-                      '-'
-                    }}
-                    · Vote:
-                    {{ selectedReviewCluster.overlay?.fused_preview?.agreement?.label_vote ?? '-' }}
-                  </div>
-                  <div class="overlay-boxes">
                     <div
-                      v-for="member in selectedReviewCluster.overlay?.member_boxes || []"
-                      :key="`${selectedReviewCluster.clusterKey}-${member.annotation_id}`"
-                      class="overlay-box-item"
+                      v-for="(anno, index) in currentAnnotations"
+                      :key="`label-${index}`"
+                      class="annotation-label"
+                      :class="{ 'label-below': isLabelBelow(anno) }"
+                      :style="getLabelStyle(anno)"
                     >
-                      <span>{{ getAnnotatorBadge(member.annotator_index) }}</span>
-                      <span>{{ member.label }}</span>
+                      <span class="label-text">{{ anno.label || '未命名' }}</span>
                     </div>
                   </div>
-                  <div class="decision-actions">
-                    <button
-                      type="button"
-                      class="mini-btn"
-                      @click="applyClusterDecision('adopt_annotator', { annotatorIndex: 0 })"
-                    >
-                      采用A
-                    </button>
-                    <button
-                      type="button"
-                      class="mini-btn"
-                      @click="applyClusterDecision('adopt_annotator', { annotatorIndex: 1 })"
-                    >
-                      采用B
-                    </button>
-                    <button
-                      type="button"
-                      class="mini-btn"
-                      @click="applyClusterDecision('adopt_annotator', { annotatorIndex: 2 })"
-                    >
-                      采用C
-                    </button>
-                    <button
-                      type="button"
-                      class="mini-btn primary"
-                      @click="applyClusterDecision('adopt_fused')"
-                    >
-                      采用融合框
-                    </button>
-                  </div>
                 </div>
               </div>
-              <div v-else class="review-workbench-empty">
-                当前图片暂未识别到可裁决的冲突簇。你仍可切换上方视图查看各标注员结果。
-              </div>
-
-              <div v-if="displayedReviewItems.length > 0" class="batch-actions">
-                <span>批量裁决：</span>
-                <button type="button" class="mini-btn" @click="applyBatchBase(0)">
-                  全图采用A为基础
-                </button>
-                <button type="button" class="mini-btn" @click="applyBatchBase(1)">
-                  全图采用B为基础
-                </button>
-                <button type="button" class="mini-btn" @click="applyBatchBase(2)">
-                  全图采用C为基础
-                </button>
-                <button type="button" class="mini-btn" @click="resetReviewWorkbench">
-                  恢复融合结果
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- 右侧切换按钮 -->
-        <button v-if="canGoNext" class="nav-arrow nav-next" @click.stop="goToNextImage">›</button>
-      </div>
-    </transition>
-  </teleport>
-
-  <PendingReviewDialog
-    :visible="pendingReviewVisible"
-    :items="pendingReviewItems"
-    @close="closePendingReviewDialog"
-    @select="openPendingReviewItem"
-  />
-  <!-- 数据导出弹窗 -->
-  <teleport to="body">
-    <transition name="preview-fade">
-      <div v-if="exportVisible" class="dialog-mask" @click="closeExportDialog">
-        <div class="dialog-panel export-dialog-panel" @click.stop>
-          <div class="export-dialog-header">
-            <div class="dialog-title">📦 导出标注数据</div>
-            <button class="export-dialog-close" type="button" @click="closeExportDialog">×</button>
-          </div>
-
-          <div class="dialog-body export-dialog-body">
-            <div class="export-summary">
-              <span class="export-count">共 {{ selectedFilesForExport.length }} 个文件待导出</span>
-              <span v-if="selectedFilesForExport.length === 0" class="export-hint"
-                >将导出文件夹内所有已标注文件</span
-              >
             </div>
 
-            <!-- 导出格式选择 -->
-            <div class="export-format-section">
-              <div class="section-title">选择导出格式</div>
-              <div class="format-options">
-                <label
-                  v-for="format in exportFormats"
-                  :key="format.id"
-                  class="format-option"
-                  :class="{ active: selectedExportFormat === format.id }"
-                  @click="selectedExportFormat = format.id"
+            <div class="annotation-preview-footer">
+              <div class="annotation-stats">
+                <span v-if="currentAnnotations.length > 0" class="stat-item">
+                  📦 {{ currentAnnotations.length }} 个标注
+                </span>
+                <span v-else class="stat-item empty">暂无标注</span>
+
+                <span v-if="annotationDataSource" class="stat-item source">
+                  来源: {{ annotationDataSource }}
+                </span>
+              </div>
+
+              <div v-if="reviewWorkbenchEnabled && reviewPreviewTabs.length > 0" class="review-preview-tabs">
+                <button
+                  v-for="tab in reviewPreviewTabs"
+                  :key="tab.key"
+                  type="button"
+                  class="review-preview-tab"
+                  :class="{ active: reviewPreviewMode === tab.key }"
+                  @click="switchReviewPreviewMode(tab.key)"
                 >
-                  <div class="format-icon">{{ format.icon }}</div>
-                  <div class="format-info">
-                    <div class="format-name">{{ format.name }}</div>
-                    <div class="format-desc">{{ format.description }}</div>
-                  </div>
-                  <div class="format-check">
-                    <span
-                      class="check-circle"
-                      :class="{ checked: selectedExportFormat === format.id }"
-                    ></span>
-                  </div>
-                </label>
+                  {{ tab.label }}
+                </button>
               </div>
-            </div>
 
-            <!-- 导出选项 -->
-            <div class="export-options-section">
-              <div class="section-title">导出选项</div>
-
-              <label class="option-item">
-                <input type="checkbox" v-model="exportOptions.includeImages" />
-                <span class="option-text">包含原始图片文件</span>
-              </label>
-
-              <label class="option-item">
-                <input type="checkbox" v-model="exportOptions.includeYaml" />
-                <span class="option-text">生成数据集配置文件 (data.yaml)</span>
-              </label>
-
-              <label class="option-item" v-if="selectedExportFormat === 'yolo'">
-                <input type="checkbox" v-model="exportOptions.normalizeCoordinates" />
-                <span class="option-text">归一化坐标 (YOLO标准格式)</span>
-              </label>
-
-              <label class="option-item">
-                <input type="checkbox" v-model="exportOptions.splitDataset" />
-                <span class="option-text">自动划分训练/验证/测试集</span>
-              </label>
-
-              <div v-if="exportOptions.splitDataset" class="split-ratio-inputs">
-                <div class="ratio-item">
-                  <label>训练集</label>
-                  <input
-                    type="number"
-                    v-model.number="exportOptions.trainRatio"
-                    min="0"
-                    max="1"
-                    step="0.1"
-                  />
-                  <span>%</span>
-                </div>
-                <div class="ratio-item">
-                  <label>验证集</label>
-                  <input
-                    type="number"
-                    v-model.number="exportOptions.valRatio"
-                    min="0"
-                    max="1"
-                    step="0.1"
-                  />
-                  <span>%</span>
-                </div>
-                <div class="ratio-item">
-                  <label>测试集</label>
-                  <input
-                    type="number"
-                    v-model.number="exportOptions.testRatio"
-                    min="0"
-                    max="1"
-                    step="0.1"
-                  />
-                  <span>%</span>
-                </div>
+              <div v-if="annotationLabels.length > 0" class="annotation-label-list">
+                <span v-for="label in annotationLabels" :key="label" class="annotation-label-chip">
+                  🏷️ {{ label }}
+                </span>
               </div>
-            </div>
 
-            <!-- 类别映射 -->
-            <div class="class-mapping-section">
-              <div class="section-title">类别映射</div>
-              <div class="class-mapping-hint">系统将自动检测标注中的类别并生成映射表</div>
-              <div v-if="detectedClasses.length > 0" class="detected-classes">
-                <div v-for="(cls, idx) in detectedClasses" :key="cls" class="class-item">
-                  <span class="class-id">{{ idx }}</span>
-                  <span class="class-name">{{ cls }}</span>
+              <div v-if="reviewWorkbenchEnabled" class="review-workbench">
+                <div class="review-workbench-header">
+                  <div class="workbench-title">🧑‍⚖️ 裁决工作台</div>
+                  <div class="workbench-decision">{{ integrationDecisionText }}</div>
+                  <label class="conflict-switch">
+                    <input v-model="reviewConflictOnly" type="checkbox" />
+                    只看冲突框
+                  </label>
+                </div>
+
+                <div v-if="displayedReviewItems.length > 0" class="workbench-body">
+                  <div class="cluster-list">
+                    <button
+                      v-for="item in displayedReviewItems"
+                      :key="item.clusterKey"
+                      type="button"
+                      class="cluster-btn"
+                      :class="{ active: selectedReviewCluster?.clusterKey === item.clusterKey }"
+                      @click="pickReviewCluster(item)"
+                    >
+                      #{{ item.clusterKey }} · {{ item.differenceType }}
+                    </button>
+                  </div>
+
+                  <div v-if="selectedReviewCluster" class="cluster-detail">
+                    <div class="detail-line">建议：{{ selectedReviewCluster.recommendedAction }}</div>
+                    <div class="detail-line">
+                      IoU:
+                      {{
+                        selectedReviewCluster.overlay?.fused_preview?.agreement?.mean_pairwise_iou ??
+                        '-'
+                      }}
+                      · Vote:
+                      {{
+                        selectedReviewCluster.overlay?.fused_preview?.agreement?.label_vote ?? '-'
+                      }}
+                    </div>
+                    <div class="overlay-boxes">
+                      <div
+                        v-for="member in selectedReviewCluster.overlay?.member_boxes || []"
+                        :key="`${selectedReviewCluster.clusterKey}-${member.annotation_id}`"
+                        class="overlay-box-item"
+                      >
+                        <span>{{ getAnnotatorBadge(member.annotator_index) }}</span>
+                        <span>{{ member.label }}</span>
+                      </div>
+                    </div>
+                    <div class="decision-actions">
+                      <button
+                        type="button"
+                        class="mini-btn"
+                        @click="applyClusterDecision('adopt_annotator', { annotatorIndex: 0 })"
+                      >
+                        采用A
+                      </button>
+                      <button
+                        type="button"
+                        class="mini-btn"
+                        @click="applyClusterDecision('adopt_annotator', { annotatorIndex: 1 })"
+                      >
+                        采用B
+                      </button>
+                      <button
+                        type="button"
+                        class="mini-btn"
+                        @click="applyClusterDecision('adopt_annotator', { annotatorIndex: 2 })"
+                      >
+                        采用C
+                      </button>
+                      <button
+                        type="button"
+                        class="mini-btn primary"
+                        @click="applyClusterDecision('adopt_fused')"
+                      >
+                        采用融合框
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <div v-else class="review-workbench-empty">
+                  当前图片暂未识别到可裁决的冲突簇。你仍可切换上方视图查看各标注员结果。
+                </div>
+
+                <div v-if="displayedReviewItems.length > 0" class="batch-actions">
+                  <span>批量裁决：</span>
+                  <button type="button" class="mini-btn" @click="applyBatchBase(0)">
+                    全图采用A为基础
+                  </button>
+                  <button type="button" class="mini-btn" @click="applyBatchBase(1)">
+                    全图采用B为基础
+                  </button>
+                  <button type="button" class="mini-btn" @click="applyBatchBase(2)">
+                    全图采用C为基础
+                  </button>
+                  <button type="button" class="mini-btn" @click="resetReviewWorkbench">
+                    恢复融合结果
+                  </button>
                 </div>
               </div>
             </div>
           </div>
 
-          <div class="dialog-footer export-footer">
-            <button class="dialog-btn secondary" type="button" @click="closeExportDialog">
-              取消
-            </button>
-            <button
-              class="dialog-btn primary export-btn"
-              type="button"
-              @click="confirmExport"
-              :disabled="isExporting"
-            >
-              <span v-if="isExporting">⏳ 正在打包...</span>
-              <span v-else>📥 确认导出</span>
-            </button>
+          <button v-if="canGoNext" class="nav-arrow nav-next" @click.stop="goToNextImage">›</button>
+        </div>
+      </transition>
+    </teleport>
+
+    <PendingReviewDialog
+      :visible="pendingReviewVisible"
+      :items="pendingReviewItems"
+      @close="closePendingReviewDialog"
+      @select="openPendingReviewItem"
+    />
+
+    <!-- 数据导出弹窗 -->
+    <teleport to="body">
+      <transition name="preview-fade">
+        <div v-if="exportVisible" class="dialog-mask" @click="closeExportDialog">
+          <div class="dialog-panel export-dialog-panel" @click.stop>
+            <div class="export-dialog-header">
+              <div class="dialog-title">📦 导出标注数据</div>
+              <button class="export-dialog-close" type="button" @click="closeExportDialog">×</button>
+            </div>
+
+            <div class="dialog-body export-dialog-body">
+              <div class="export-summary">
+                <span class="export-count">共 {{ selectedFilesForExport.length }} 个文件待导出</span>
+                <span v-if="selectedFilesForExport.length === 0" class="export-hint">
+                  将导出文件夹内所有已标注文件
+                </span>
+              </div>
+
+              <div class="export-format-section">
+                <div class="section-title">选择导出格式</div>
+                <div class="format-options">
+                  <label
+                    v-for="format in exportFormats"
+                    :key="format.id"
+                    class="format-option"
+                    :class="{ active: selectedExportFormat === format.id }"
+                    @click="selectedExportFormat = format.id"
+                  >
+                    <div class="format-icon">{{ format.icon }}</div>
+                    <div class="format-info">
+                      <div class="format-name">{{ format.name }}</div>
+                      <div class="format-desc">{{ format.description }}</div>
+                    </div>
+                    <div class="format-check">
+                      <span
+                        class="check-circle"
+                        :class="{ checked: selectedExportFormat === format.id }"
+                      ></span>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              <div class="export-options-section">
+                <div class="section-title">导出选项</div>
+
+                <label class="option-item">
+                  <input type="checkbox" v-model="exportOptions.includeImages" />
+                  <span class="option-text">包含原始图片文件</span>
+                </label>
+
+                <label class="option-item">
+                  <input type="checkbox" v-model="exportOptions.includeYaml" />
+                  <span class="option-text">生成数据集配置文件 (data.yaml)</span>
+                </label>
+
+                <label class="option-item" v-if="selectedExportFormat === 'yolo'">
+                  <input type="checkbox" v-model="exportOptions.normalizeCoordinates" />
+                  <span class="option-text">归一化坐标 (YOLO标准格式)</span>
+                </label>
+
+                <label class="option-item">
+                  <input type="checkbox" v-model="exportOptions.splitDataset" />
+                  <span class="option-text">自动划分训练/验证/测试集</span>
+                </label>
+
+                <div v-if="exportOptions.splitDataset" class="split-ratio-inputs">
+                  <div class="ratio-item">
+                    <label>训练集</label>
+                    <input
+                      type="number"
+                      v-model.number="exportOptions.trainRatio"
+                      min="0"
+                      max="1"
+                      step="0.1"
+                    />
+                    <span>%</span>
+                  </div>
+                  <div class="ratio-item">
+                    <label>验证集</label>
+                    <input
+                      type="number"
+                      v-model.number="exportOptions.valRatio"
+                      min="0"
+                      max="1"
+                      step="0.1"
+                    />
+                    <span>%</span>
+                  </div>
+                  <div class="ratio-item">
+                    <label>测试集</label>
+                    <input
+                      type="number"
+                      v-model.number="exportOptions.testRatio"
+                      min="0"
+                      max="1"
+                      step="0.1"
+                    />
+                    <span>%</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="class-mapping-section">
+                <div class="section-title">类别映射</div>
+                <div class="class-mapping-hint">系统将自动检测标注中的类别并生成映射表</div>
+                <div v-if="detectedClasses.length > 0" class="detected-classes">
+                  <div v-for="(cls, idx) in detectedClasses" :key="cls" class="class-item">
+                    <span class="class-id">{{ idx }}</span>
+                    <span class="class-name">{{ cls }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="dialog-footer export-footer">
+              <button class="dialog-btn secondary" type="button" @click="closeExportDialog">
+                取消
+              </button>
+              <button
+                class="dialog-btn primary export-btn"
+                type="button"
+                @click="confirmExport"
+                :disabled="isExporting"
+              >
+                <span v-if="isExporting">⏳ 正在打包...</span>
+                <span v-else>📥 确认导出</span>
+              </button>
+            </div>
           </div>
         </div>
-      </div>
-    </transition>
-  </teleport>
+      </transition>
+    </teleport>
+  </div>
 </template>
 
 <script setup>
@@ -1692,8 +1688,21 @@ const isPendingReviewFolder = computed(
   () => currentFolderStatus.value === 'done' && currentFolder.value?.name === '待审核'
 )
 const isReviewedFolder = computed(() => currentFolderStatus.value === 'reviewed')
-const reviewWorkbenchEnabled = computed(
-  () => Boolean(collaborationIntegration.value && reviewPreviewTabs.value.length > 0)
+const requireReviewedResultForOwnerDoneFolder = computed(() =>
+  Boolean(
+    currentProject.value &&
+      !currentProject.value.isSharedCopy &&
+      currentProject.value.reviewerId &&
+      !isReviewerWorkspace.value,
+  )
+)
+const shouldUseReviewedPreviewBase = computed(() =>
+  Boolean(
+    isReviewedFolder.value || (isDoneFolder.value && requireReviewedResultForOwnerDoneFolder.value),
+  ),
+)
+const reviewWorkbenchEnabled = computed(() =>
+  Boolean(isReviewerWorkspace.value && isPendingReviewFolder.value && currentPreviewTask.value),
 )
 const canSubmitReviewDecision = computed(
   () =>
@@ -1889,7 +1898,9 @@ const ensureProjectFilesLoaded = async (projectId, { force = false } = {}) => {
   }
 
   const loadingPromise = (async () => {
-    const fileResp = await listProjectFiles(projectId, { syncReviewStatus: false })
+    const fileResp = await listProjectFiles(projectId, {
+      syncReviewStatus: Boolean(target.isReviewerWorkspace),
+    })
     const allFiles = (fileResp || []).map(mapBackendFile)
     const pendingFiles = allFiles.filter((f) => f.status === 'pending')
     const labelingFiles = allFiles.filter((f) => f.status === 'labeling')
@@ -2030,16 +2041,25 @@ const loadFolderTasks = async () => {
         }
       }
     } else if (isDoneFolder.value || isPendingReviewFolder.value || isReviewedFolder.value) {
-      const folderStatus = isReviewedFolder.value ? 'reviewed' : 'done'
+      const folderStatus =
+        isReviewerWorkspace.value && (isPendingReviewFolder.value || isReviewedFolder.value)
+          ? 'done'
+          : isReviewedFolder.value
+            ? 'reviewed'
+            : 'done'
       console.log(`[LOAD] 加载最终任务 | project_id=${currentProject.value.id}, status=${folderStatus}`)
       const data = await getFolderTasks(currentProject.value.id, folderStatus)
 
       if (data?.tasks) {
-        // ⚠️ 同样过滤 null 元素
-        doneTasks.value = data.tasks.filter((t) => t && t.task_id && t.file_id)
+        const targetFolder = currentFolder.value
+        const targetFileIdSet = new Set((targetFolder?.files || []).map((file) => file.id))
+
+        // ⚠️ 同样过滤 null 元素；同时只保留当前文件夹内的任务，避免“待审核/已审核”串数据
+        doneTasks.value = data.tasks.filter(
+          (t) => t && t.task_id && t.file_id && targetFileIdSet.has(t.file_id),
+        )
         console.log(`[LOAD] 加载到 ${doneTasks.value.length} 个有效已完成任务`)
 
-        const targetFolder = currentProject.value.folders.find((f) => f.status === folderStatus)
         if (targetFolder) {
           targetFolder.files.forEach((file) => {
             const task = doneTasks.value.find((t) => t.file_id === file.id)
@@ -2047,6 +2067,12 @@ const loadFolderTasks = async () => {
               file.taskId = task.task_id
             }
           })
+
+          // 分享者源项目在“需要审核”场景下，只展示已产出审核结果的文件
+          if (isDoneFolder.value && requireReviewedResultForOwnerDoneFolder.value) {
+            const reviewedFileIdSet = new Set(doneTasks.value.map((task) => task.file_id))
+            targetFolder.files = targetFolder.files.filter((file) => reviewedFileIdSet.has(file.id))
+          }
         }
       }
     }
@@ -2528,8 +2554,7 @@ const switchReviewPreviewMode = (mode) => {
 
 const resetReviewWorkbench = () => {
   if (!collaborationIntegration.value) return
-  reviewBaseSource.value =
-    currentPreviewTask.value?.status === 'reviewed' || isReviewedFolder.value ? 'reviewed' : 'fused'
+  reviewBaseSource.value = shouldUseReviewedPreviewBase.value ? 'reviewed' : 'fused'
   reviewClusterDecisions.value = {}
   reviewPreviewMode.value = 'resolved'
   reviewDecisionLog.value.push({
@@ -2553,50 +2578,59 @@ const loadPreviewData = async (file) => {
   reviewBaseSource.value = 'fused'
   reviewPreviewMode.value = 'default'
 
+  const isFinalResultFolder =
+    isDoneFolder.value || isPendingReviewFolder.value || isReviewedFolder.value
+  const shouldSkipLocalFallback = isFinalResultFolder
+  const mustUseReviewedResult =
+    requireReviewedResultForOwnerDoneFolder.value && isDoneFolder.value
+
   let annotations = []
   let taskData = null
 
-  try {
-    const draftData = await loadDraftFromStorage(file.id)
-    if (draftData?.annotations?.length > 0) {
-      annotations = draftData.annotations
-      annotationDataSource.value = '草稿'
+  const tryApplyTaskAnnotations = (task, sourceLabel = '任务') => {
+    if (!task?.annotations?.length) return false
+    const taskStatus = String(task.status || '').toLowerCase()
+    if (mustUseReviewedResult && taskStatus !== 'reviewed') return false
+
+    annotations = task.annotations
+    annotationDataSource.value =
+      task.annotation_source === 'collaboration_fused' ? '协作整合' : sourceLabel
+    return true
+  }
+
+  if (!isFinalResultFolder) {
+    try {
+      const draftData = await loadDraftFromStorage(file.id)
+      if (draftData?.annotations?.length > 0) {
+        annotations = draftData.annotations
+        annotationDataSource.value = '草稿'
+      }
+    } catch (e) {
+      console.log('草稿表查询失败:', e)
     }
-  } catch (e) {
-    console.log('草稿表查询失败:', e)
   }
 
   // 标注中文件夹：优先从 labelingTasks 中查找（使用过滤后的列表）
   if (isLabelingFolder.value) {
     const validTasks = labelingTasks.value.filter((t) => t && t.file_id)
     taskData = validTasks.find((t) => t.file_id === file.id)
-    if (taskData?.annotations?.length > 0) {
-      annotations = taskData.annotations
-      annotationDataSource.value =
-        taskData.annotation_source === 'collaboration_fused' ? '协作整合' : '任务'
-    }
-  } else if (isDoneFolder.value || isPendingReviewFolder.value || isReviewedFolder.value) {
+    tryApplyTaskAnnotations(taskData, '任务')
+  } else if (isFinalResultFolder) {
     const validTasks = doneTasks.value.filter((t) => t && t.file_id)
     taskData = validTasks.find((t) => t.file_id === file.id)
-    if (taskData?.annotations?.length > 0) {
-      annotations = taskData.annotations
-      annotationDataSource.value =
-        taskData.annotation_source === 'collaboration_fused' ? '协作整合' : '任务'
-    }
+    tryApplyTaskAnnotations(taskData, '任务')
   }
 
-  // 如果没有找到 taskData，主动从后端获取
-  if (!taskData) {
+  // 最终结果文件夹必须以后端任务结果为准，避免本地草稿/缓存覆盖审核结论
+  if (!taskData || (isFinalResultFolder && annotations.length === 0)) {
     try {
       console.log(`[PREVIEW] 从后端加载任务 | file_id=${file.id}`)
       const data = await getTaskByFileId(currentProject.value.id, file.id)
       if (data?.task) {
         taskData = data.task
-        if (data.task.annotations?.length > 0) {
-          annotations = data.task.annotations
-          annotationDataSource.value =
-            data.task.annotation_source === 'collaboration_fused' ? '协作整合' : '任务(后端)'
-        } else if (data.task.pre_annotations?.length > 0) {
+
+        const appliedFromTask = tryApplyTaskAnnotations(data.task, '任务(后端)')
+        if (!appliedFromTask && !mustUseReviewedResult && !isFinalResultFolder && data.task.pre_annotations?.length > 0) {
           annotations = data.task.pre_annotations
           annotationDataSource.value = '预标注'
         }
@@ -2607,7 +2641,7 @@ const loadPreviewData = async (file) => {
   }
 
   // 其他本地缓存查找逻辑...
-  if (annotations.length === 0) {
+  if (annotations.length === 0 && !shouldSkipLocalFallback) {
     const keys = [
       `annotation_draft_${currentProject.value?.id}_${file.id}`,
       `draft_${file.id}`,
@@ -2639,8 +2673,7 @@ const loadPreviewData = async (file) => {
     reviewConflictOnly.value =
       taskData.collaboration_integration.review_workbench?.conflict_only_mode_default ?? true
     selectedReviewCluster.value = displayedReviewItems.value[0] || null
-    reviewBaseSource.value =
-      taskData.status === 'reviewed' || isReviewedFolder.value ? 'reviewed' : 'fused'
+    reviewBaseSource.value = shouldUseReviewedPreviewBase.value ? 'reviewed' : 'fused'
     reviewPreviewMode.value = 'resolved'
   }
 
@@ -2716,6 +2749,7 @@ const submitReviewResult = async () => {
 
     const activeProjectId = currentProject.value.id
     await loadProjects()
+    await ensureProjectFilesLoaded(activeProjectId, { force: true })
     currentProjectId.value = activeProjectId
 
     await nextTick()

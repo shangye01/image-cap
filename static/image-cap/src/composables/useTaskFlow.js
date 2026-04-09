@@ -2,6 +2,13 @@
 import { ref } from 'vue'
 import { supabase } from '@/supabase'
 import request from '@/api/request'
+import { getCurrentUserId } from '@/utils/currentUser'
+import {
+  clearTaskTracking,
+  getTaskTrackingPayload,
+  incrementTaskSaveCount,
+  startTaskTracking,
+} from '@/utils/taskWorkTracker'
 
 export function useTaskFlow(store, imageObj, labelColorMap) {
   const taskLoading = ref(false)
@@ -25,6 +32,7 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
           imageStoragePath: task.storage_path || task.image_storage_path || task.imageStoragePath,
           yoloVersion: task.yolo_version || task.yoloVersion,
         })
+        startTaskTracking(task.task_id || task.id)
         resolve(img)
       }
 
@@ -236,8 +244,10 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
       const data = await request.post(`/annotations/${store.currentTaskId}`, {
         annotations: store.annotations,
         is_draft: false,
-        user_id: store.userId || 'anonymous',
+        user_id: getCurrentUserId(),
+        ...(getTaskTrackingPayload(store.currentTaskId) || {}),
       })
+      clearTaskTracking(store.currentTaskId)
 
       taskSuccess.value = data?.message || '✅ 提交成功！'
       setTimeout(() => {
@@ -262,10 +272,12 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
     taskError.value = ''
 
     try {
+      incrementTaskSaveCount(store.currentTaskId)
       await request.post(`/annotations/${store.currentTaskId}`, {
         annotations: store.annotations,
         is_draft: true,
-        user_id: store.userId || 'anonymous',
+        user_id: getCurrentUserId(),
+        ...(getTaskTrackingPayload(store.currentTaskId) || {}),
       })
 
       taskSuccess.value = '💾 草稿已保存'

@@ -15,6 +15,7 @@ from app.config import SUPABASE_PROJECT_FILES_BUCKET, SUPABASE_PROJECT_FILES_PUB
 from app.db.session import get_db
 from app.models import Organization, Project, ProjectFile, User, UserOrganization
 from app.schemas.project_storage import FileOut, ProjectCreate, ProjectOut, ProjectShareCreate
+from app.services.user_performance import build_user_performance_summary
 from app.utils.jwt import ALGORITHM, SECRET_KEY
 from jose import jwt
 
@@ -277,6 +278,7 @@ def get_task_center_overview(owner_id: str, db: Session = Depends(get_db)):
                 "reviewed_images": 0,
             },
             "project_stats": [],
+            "performance_summary": None,
         }
     if supabase is None:
         return {
@@ -290,6 +292,7 @@ def get_task_center_overview(owner_id: str, db: Session = Depends(get_db)):
                 "reviewed_images": 0,
             },
             "project_stats": [],
+            "performance_summary": None,
         }
 
     project_id_list = [str(project.id) for project in projects]
@@ -457,6 +460,11 @@ def get_task_center_overview(owner_id: str, db: Session = Depends(get_db)):
             "reviewed_images": reviewed_images,
         },
         "project_stats": project_stats,
+        "performance_summary": (
+            build_user_performance_summary(db, current_user_id)
+            if current_user_id
+            else None
+        ),
     }
 
 

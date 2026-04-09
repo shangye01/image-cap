@@ -1,5 +1,6 @@
 // src/api/projectStorage.ts
 import request from './request'
+import type { PerformanceSummary } from './performance'
 
 export interface BackendProject {
   id: string
@@ -106,6 +107,7 @@ export const getTaskCenterOverview = (ownerId: string) =>
     total: number
     summary?: TaskCenterSummary
     project_stats?: TaskCenterProjectStat[]
+    performance_summary?: PerformanceSummary | null
   }>('/projects/task-center/overview', {
     params: { owner_id: ownerId },
   })
