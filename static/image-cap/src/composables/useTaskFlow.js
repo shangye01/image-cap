@@ -226,14 +226,14 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
   }
 
   // 提交标注
-  const submitAnnotations = async () => {
+ const submitAnnotations = async () => {
     if (!store.currentTaskId) {
-      taskError.value = '没有正在进行的任务'
+      taskError.value = 'No active task'
       return
     }
 
     if (store.annotations.length === 0) {
-      taskError.value = '请先完成标注'
+      taskError.value = 'Please add annotations first'
       return
     }
 
@@ -241,15 +241,20 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
     taskError.value = ''
 
     try {
-      const data = await request.post(`/annotations/${store.currentTaskId}`, {
-        annotations: store.annotations,
-        is_draft: false,
-        user_id: getCurrentUserId(),
-        ...(getTaskTrackingPayload(store.currentTaskId) || {}),
-      })
-      clearTaskTracking(store.currentTaskId)
+      const data = await request.post(
+        `/annotations/${store.currentTaskId}`,
+        {
+          annotations: store.annotations,
+          is_draft: false,
+          user_id: getCurrentUserId(),
+          ...(getTaskTrackingPayload(store.currentTaskId) || {}),
+        },
+        { timeout: 30000 }
+      )
 
-      taskSuccess.value = data?.message || '✅ 提交成功！'
+      clearTaskTracking(store.currentTaskId)
+      taskSuccess.value = data?.message || 'Submitted successfully'
+
       setTimeout(() => {
         store.clearCurrentTask()
         imageObj.value = null
@@ -258,14 +263,13 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
 
       return data
     } catch (e) {
-      taskError.value = `提交失败: ${e?.response?.data?.detail || e.message}`
+      taskError.value = `Submit failed: ${e?.response?.data?.detail || e.message}`
       throw e
     } finally {
       submitLoading.value = false
     }
   }
 
-  // 保存草稿
   const saveDraftHandler = async () => {
     if (!store.currentTaskId || store.annotations.length === 0) return
 

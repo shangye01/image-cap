@@ -4,7 +4,7 @@
       <h2>登录账号</h2>
       <form @submit.prevent="submit">
         <div>
-          <label>用户名称</label>
+          <label>用户名</label>
           <input v-model.trim="form.username" type="text" required />
         </div>
 
@@ -27,7 +27,7 @@
     </div>
   </div>
 </template>
-    
+
 <script setup lang="ts">
 defineOptions({ name: 'AuthLogin' })
 import { computed, ref } from 'vue'
@@ -52,6 +52,20 @@ const registerLink = computed(() => ({
   query: route.query.redirect ? { redirect: redirectTarget.value } : {},
 }))
 
+const getLoginErrorMessage = (err: unknown) => {
+  if (typeof err === 'object' && err !== null) {
+    const response = (err as { response?: { data?: { detail?: string; message?: string } } }).response
+    const detail = response?.data?.detail || response?.data?.message
+    if (detail) return detail
+  }
+
+  if (err instanceof Error && err.message) {
+    return err.message
+  }
+
+  return '登录失败'
+}
+
 const submit = async () => {
   error.value = ''
   loading.value = true
@@ -60,8 +74,7 @@ const submit = async () => {
     store.login(result.user, result.access_token)
     router.push(redirectTarget.value)
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : ''
-    error.value = message || '登录失败'
+    error.value = getLoginErrorMessage(err)
   } finally {
     loading.value = false
   }

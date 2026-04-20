@@ -34,3 +34,12 @@ coverage
 
 # Vitest
 __screenshots__/
+
+# Playwright
+playwright-report/
+test-results/
+
+# Python tests
+.pytest_cache/
+.coverage
+htmlcov/

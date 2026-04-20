@@ -1,6 +1,6 @@
 <template>
   <div class="annotation-workspace">
-  
+
     <aside class="toolbar-panel">
    <section class="tool-section model-section-v2" :class="{ collapsed: collapsedSections.model }">
   <div class="section-header-v2" @click="collapsedSections.model = !collapsedSections.model">
@@ -18,7 +18,7 @@
     </div>
     <span class="collapse-arrow" :class="{ collapsed: collapsedSections.model }">▼</span>
   </div>
-  
+
   <div class="model-content-v2" v-show="!collapsedSections.model">
     <!-- 当前模型卡片 -->
     <div v-if="currentModel" class="current-model-card-v2">
@@ -38,7 +38,7 @@
         <span class="model-name-text">未选择模型</span>
       </div>
     </div>
-    
+
     <!-- 模型选择器 - 使用 modelList -->
     <div v-if="modelList?.length" class="model-selector">
       <div class="selector-header">
@@ -46,8 +46,8 @@
         <span class="model-count">{{ modelList.length }} 个可用</span>
       </div>
       <div class="model-options">
-        <div 
-          v-for="model in modelList" 
+        <div
+          v-for="model in modelList"
           :key="model.name"
           class="model-option"
           :class="{ active: currentModel === model.name }"
@@ -71,7 +71,7 @@
         </div>
       </div>
     </div>
-    
+
     <!-- 空状态 -->
     <div v-else class="empty-model-v2">
       <div class="empty-icon">📭</div>
@@ -157,10 +157,10 @@
           <div v-if="taskError" class="message error">⚠️ {{ taskError }}</div>
           <div v-if="taskSuccess" class="message success">✅ {{ taskSuccess }}</div>
 
-       
+
 <button
   v-if="totalTasks === 0"
-  @click="loadNextTask(routeProjectId.value)"  
+  @click="loadNextTask(routeProjectId.value)"
   class="btn btn-primary"
   :disabled="taskLoading || submitLoading"
 >
@@ -672,13 +672,13 @@ const newLabel = ref('')
 const selectedColor = ref('#ff0000')
 const currentLabel = ref('object')
 const collapsedSections = reactive({
-  image: false,
-  label: false,
-  stats: false,
-  selected: false,
-  zoom: false,
-  model: false, 
-  task:false // 添加模型折叠状态
+  image: true,
+  label: true,
+  stats: true,
+  selected: true,
+  zoom: true,
+  model:true,
+  task:true,
 })
 
 const editingLabel = ref(null)
@@ -798,19 +798,19 @@ const actualSize = () => {
   // 获取画布容器尺寸（可视区域）
   const container = canvasContainer.value
   if (!container || !imageObj.value) return
-  
+
   // 使用容器的实际尺寸（不是 baseContainerSize）
   const containerWidth = container.clientWidth - 40  // 减去 padding
   const containerHeight = container.clientHeight - 40
-  
+
   // 图片原始尺寸
   const imgWidth = imageObj.value.width
   const imgHeight = imageObj.value.height
-  
+
   // 计算画布中心
   const canvasCenterX = containerWidth / 2
   const canvasCenterY = containerHeight / 2
-  
+
   // 计算 stageX/Y，使得图片居中
   // 在基础坐标系中，图片宽度 = imgWidth * baseScale
   // 要让图片中心对准画布中心：
@@ -989,7 +989,7 @@ const executeSmartAnnotation = async () => {
     if (data.annotations && data.annotations.length > 0) {
       // ========== 使用新的统一处理方法 ==========
       const processedNewAnnotations = await processAIAnnotations(data.annotations, 'smart-annotate')
-      
+
       const currentAnnotations = store.annotations || []
       store.setAnnotations([...currentAnnotations, ...processedNewAnnotations])
       // ========== 结束修改 ==========
@@ -1420,7 +1420,7 @@ const saveLabelToBackend = async (name, color) => {
           return { success: true }
         }
       }
-      
+
       throw new Error(errorData.detail || '保存失败')
     } catch (error) {
       console.error('保存标签失败:', error)
@@ -1624,7 +1624,7 @@ const scaledImageConfig = computed(() => {
 const getModelColor = (modelName) => {
   const name = modelName.toLowerCase()
   let gradient = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
-  
+
   if (name.includes('yolo')) {
     gradient = 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)'
   } else if (name.includes('rcnn')) {
@@ -1636,7 +1636,7 @@ const getModelColor = (modelName) => {
   } else if (name.includes('vit')) {
     gradient = 'linear-gradient(135deg, #10b981 0%, #059669 100%)'
   }
-  
+
   return { background: gradient }
 }
 
@@ -1756,7 +1756,8 @@ const handleFileUpload = async (event) => {
       body: formData,
     })
 
-    const data = await response.json()
+      const data = await response.json()
+    console.log('📦 后端返回数据:', data)  // 添加这行
 
     if (!response.ok) {
       throw new Error(data.detail || '上传失败')
@@ -1766,15 +1767,24 @@ const handleFileUpload = async (event) => {
     window.history.replaceState({}, '', `?task=${data.task_id}`)
 
     store.clearAnnotations()
+     // 安全检查：确保有图片 URL
+    const imageUrl = data.image_url || data.imageUrl || data.url || data.file_url
+    const taskId = data.task_id || data.taskId || data.id || `upload_${Date.now()}`
+
+    if (!imageUrl) {
+      console.error('后端返回数据:', data)
+      throw new Error('上传成功但未返回图片URL，请检查后端接口')
+    }
+
     store.setCurrentTask({
-      id: data.task_id,
-      imageUrl: data.image_url,
-      imageStoragePath: data.image_storage_path,
+      id: taskId,
+      imageUrl: imageUrl,
+      imageStoragePath: data.image_storage_path || data.storage_path || '',
     })
 
     const img = new Image()
     img.crossOrigin = 'anonymous'
-    img.src = data.image_url
+    img.src = imageUrl
 
     img.onload = async () => {
       imageObj.value = img
@@ -1824,9 +1834,10 @@ const handleFileUpload = async (event) => {
       setTimeout(() => (taskSuccess.value = ''), 3000)
     }
 
-    img.onerror = () => {
+        img.onerror = () => {
       taskError.value = '❌ 图片加载失败'
-      console.error('图片加载失败:', data.image_url)
+      console.error('图片加载失败，URL:', imageUrl, '任务ID:', taskId)
+    
     }
   } catch (error) {
     console.error('上传失败:', error)
@@ -2126,15 +2137,15 @@ const getModelBadgeStyle = (modelName) => {
 const loadModelList = async () => {
   try {
     console.log('🔄 开始加载模型列表...')
-    
+
     const models = []
-    
+
     // 1. 从 training/status 获取本地模型
     try {
       const res = await fetch('/api/training/status')
       const data = await res.json()
       console.log('本地训练状态 API 返回:', data)
-      
+
       if (data.local_models && Array.isArray(data.local_models)) {
         data.local_models.forEach(model => {
           models.push({
@@ -2148,7 +2159,7 @@ const loadModelList = async () => {
           })
         })
       }
-      
+
       // 设置当前使用的模型
       if (data.current_model) {
         currentModel.value = data.current_model
@@ -2156,7 +2167,7 @@ const loadModelList = async () => {
     } catch (e) {
       console.warn('获取本地模型失败:', e)
     }
-    
+
     // 2. 从 Supabase 数据库获取云端模型
     try {
       console.log('☁️ 从 Supabase 获取云端模型...')
@@ -2164,16 +2175,16 @@ const loadModelList = async () => {
         .from('model_versions')
         .select('*')
         .order('created_at', { ascending: false })
-      
+
       if (error) {
         console.error('Supabase 查询失败:', error)
       } else if (cloudModels && cloudModels.length > 0) {
         console.log(`✅ 从数据库获取 ${cloudModels.length} 个云端模型:`, cloudModels)
-        
+
         cloudModels.forEach(model => {
           // 避免重复添加（如果本地和云端有同名模型，优先显示云端版本）
           const existingIndex = models.findIndex(m => m.name === model.version_name)
-          
+
           const cloudModel = {
             id: model.id,
             name: model.version_name,
@@ -2185,7 +2196,7 @@ const loadModelList = async () => {
             updated_at: model.updated_at,
             isCloud: true
           }
-          
+
           if (existingIndex >= 0) {
             // 替换本地模型为云端模型（云端优先）
             models[existingIndex] = cloudModel
@@ -2200,10 +2211,10 @@ const loadModelList = async () => {
     } catch (e) {
       console.error('获取云端模型失败:', e)
     }
-    
+
     modelList.value = models
     console.log(`✅ 共加载了 ${modelList.value.length} 个模型（本地+云端）:`, modelList.value)
-    
+
   } catch (e) {
     console.error('加载模型列表失败:', e)
     modelList.value = []
@@ -2215,20 +2226,20 @@ const switchModel = async (model) => {
   try {
     // 根据模型来源使用不同的API
     const endpoint = model.isCloud ? '/api/models/switch-cloud' : '/api/models/switch'
-    
+
     const res = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        path: model.path, 
+      body: JSON.stringify({
+        path: model.path,
         name: model.name,
         id: model.id,
-        isCloud: model.isCloud 
+        isCloud: model.isCloud
       }),
     })
-    
+
     const data = await res.json()
-    
+
     if (data.success) {
       currentModel.value = model.name
       taskSuccess.value = `✅ 已切换到${model.source}模型: ${model.name}`
@@ -2405,7 +2416,7 @@ const loadSavedLabels = async () => {
     if (data.labels && data.labels.length > 0) {
       // 清空并重新加载，避免重复
       labelColorMap.clear()
-      
+
       for (const label of data.labels) {
         const name = label.name || label.label_name
         const color = label.color || label.label_color
@@ -2413,7 +2424,7 @@ const loadSavedLabels = async () => {
           labelColorMap.set(name, color || ensureLabelColor(name))
         }
       }
-      
+
       syncLabelsFromMap()
       console.log(`📋 从后端加载 ${labels.value.length} 个标签`)
     }

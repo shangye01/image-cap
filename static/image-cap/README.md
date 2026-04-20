@@ -59,6 +59,44 @@ npm --prefix ./static/image-cap run dev -- --host 0.0.0.0 --port 5173
 npm run build
 ```
 
+## Testing Setup
+
+This project now uses a layered frontend testing stack that matches common Vue hiring expectations:
+
+- `Vitest` for unit and component tests
+- `@testing-library/vue` and `@vue/test-utils` for component behavior
+- `Playwright` for end-to-end browser tests
+- `@vitest/coverage-v8` for coverage reports
+
+Recommended commands:
+
+```sh
+npm run test:unit
+npm run test:coverage
+npm run test:e2e
+```
+
+Test directories:
+
+- `tests/unit`: store and logic-focused tests
+- `tests/component`: Vue component rendering and interaction tests
+- `tests/e2e`: browser-level user journey smoke tests
+
+## Python Backend Tests
+
+The repo also contains a FastAPI backend, and this frontend workspace now includes a `pytest` setup for backend-focused functional tests with coverage.
+
+Run with the project virtual environment:
+
+```sh
+E:\E\image-cap\.venv\Scripts\python.exe -m pytest
+```
+
+Coverage reports:
+
+- terminal summary: missing lines shown after the run
+- HTML report: `htmlcov/index.html`
+
 ### Lint with [ESLint](https://eslint.org/)
 
 ```sh

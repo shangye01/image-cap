@@ -111,6 +111,8 @@ body::after {
     inset 0 1px 0 rgba(255, 255, 255, 0.6);
   position: relative;
   padding: 16px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(24, 144, 255, 0.3) transparent;
 }
 
 /* 顶部光条 */
@@ -141,19 +143,18 @@ body::after {
 }
 
 .toolbar-panel::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, 
-    rgba(24, 144, 255, 0.2), 
-    rgba(54, 207, 201, 0.2)
+   background: linear-gradient(180deg, 
+    rgba(24, 144, 255, 0.3), 
+    rgba(54, 207, 201, 0.3)
   );
-  border-radius: 3px;
-  border: 2px solid transparent;
-  background-clip: padding-box;
+  border-radius: 4px;
+  border: none;
 }
 
 .toolbar-panel::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(180deg, 
-    rgba(24, 144, 255, 0.35), 
-    rgba(54, 207, 201, 0.35)
+   background: linear-gradient(180deg, 
+    rgba(24, 144, 255, 0.5), 
+    rgba(54, 207, 201, 0.5)
   );
 }
 

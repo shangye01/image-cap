@@ -310,12 +310,21 @@
                   批量选择
                 </button>
                 <button
+                  v-if="isDoneFolder"
+                  type="button"
+                  class="file-action-btn work export-btn"
+                  @click="saveSelectedAnnotationsToDataset"
+                  :disabled="currentFolder.files.length === 0 || isSavingDataset"
+                >
+                  {{ isSavingDataset ? '保存中...' : '保存数据库' }}
+                </button>
+                <button
                   type="button"
                   class="file-action-btn work export-btn"
                   @click="openExportDialog"
                   :disabled="currentFolder.files.length === 0"
                 >
-                  📥 数据导出
+                  导出数据
                 </button>
               </template>
             </div>
@@ -1016,6 +1025,7 @@ import {
   getTaskByFileId,
   confirmReviewDecision,
 } from '@/api/projectStorage'
+import request from '@/api/request'
 import { useUserStore } from '@/stores/user'
 import JSZip from 'jszip' // 需要安装: npm install jszip
 import { saveAs } from 'file-saver' // 需要安装: npm install file-saver
@@ -1163,22 +1173,23 @@ const doneTasks = ref([])
 const scenes = ref([
   {
     id: 1,
-    name: '场景1',
+    name: '🚗 交通场景',
     tags: [
       { id: 1, name: 'person', color: '#d9c2f2' },
       { id: 2, name: 'car', color: '#f4b4af' },
-      { id: 3, name: 'dog', color: '#b8c9f6' },
-      { id: 4, name: 'cat', color: '#ecd68d' },
-      { id: 5, name: 'cow', color: '#a9cf96' },
+      { id: 3, name: 'truck', color: '#b8c9f6' },
+      { id: 4, name: 'traffic light', color: '#ecd68d' },
+
     ],
   },
   {
     id: 2,
-    name: '场景2',
+    name: '📦 通用物体',
     tags: [
-      { id: 6, name: 'horse', color: '#aee9ec' },
-      { id: 7, name: 'tag2', color: '#f2d562' },
-      { id: 8, name: 'tag3', color: '#eea2ca' },
+      { id: 5, name: 'chair', color: '#aee9ec' },
+      { id: 6, name: 'dog', color: '#f2d562' },
+      { id: 7, name: 'cat', color: '#eea2ca' },
+      { id: 8, name: 'book', color: '#fab1a0' },
     ],
   },
 ])
@@ -1187,6 +1198,7 @@ const scenes = ref([
 const exportVisible = ref(false)
 const selectedExportFormat = ref('yolo')
 const isExporting = ref(false)
+const isSavingDataset = ref(false)
 const detectedClasses = ref([])
 
 // 导出格式配置
@@ -1227,6 +1239,14 @@ const exportOptions = reactive({
 
 // 待导出的文件列表（优先使用选中的，否则使用全部）
 const selectedFilesForExport = computed(() => {
+  if (selectedFileIds.value.length > 0) {
+    return currentFolder.value?.files.filter((f) => selectedFileIds.value.includes(f.id)) || []
+  }
+  return currentFolder.value?.files || []
+})
+
+const selectedDoneFilesForDataset = computed(() => {
+  if (!isDoneFolder.value) return []
   if (selectedFileIds.value.length > 0) {
     return currentFolder.value?.files.filter((f) => selectedFileIds.value.includes(f.id)) || []
   }
@@ -1310,6 +1330,135 @@ const confirmExport = async () => {
     window.alert('导出失败: ' + error.message)
   } finally {
     isExporting.value = false
+  }
+}
+
+const buildDatasetLabelMap = (annotations = []) =>
+  annotations.reduce((map, ann) => {
+    if (!ann?.label || map[ann.label]) return map
+    map[ann.label] = ann.color || '#3b82f6'
+    return map
+  }, {})
+
+const normalizeDatasetAnnotation = (annotation) => ({
+  x: Number(annotation?.x || 0),
+  y: Number(annotation?.y || 0),
+  width: Number(annotation?.width || 0),
+  height: Number(annotation?.height || 0),
+  label: annotation?.label || annotation?.category || 'unknown',
+  confidence: annotation?.confidence ?? 1,
+})
+
+const resolveDoneTaskForDataset = async (file) => {
+  const cachedTask = doneTasks.value.find((task) => task?.file_id === file.id && task?.task_id)
+  if (cachedTask?.annotations?.length && cachedTask?.image_url) {
+    return cachedTask
+  }
+
+  const data = await getTaskByFileId(currentProject.value.id, file.id)
+  return data?.task || null
+}
+
+const postDatasetApi = async (primaryPath, legacyPath, payload, timeout = 60000) => {
+  try {
+    return await request.post(primaryPath, payload, { timeout })
+  } catch (error) {
+    const status = error?.response?.status
+    if (status !== 404 || !legacyPath) {
+      throw error
+    }
+
+    console.warn(`[DATASET] fallback to legacy endpoint: ${legacyPath}`)
+
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => controller.abort(), timeout)
+
+    try {
+      const response = await fetch(`http://127.0.0.1:8000${legacyPath}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      })
+
+      const result = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(result?.detail || result?.message || `Request failed with ${response.status}`)
+      }
+
+      return result
+    } finally {
+      window.clearTimeout(timer)
+    }
+  }
+}
+
+const saveSelectedAnnotationsToDataset = async () => {
+  if (!currentProject.value?.id) return
+
+  const files = selectedDoneFilesForDataset.value
+  if (files.length === 0) {
+    window.alert('No completed files available for dataset save')
+    return
+  }
+
+  isSavingDataset.value = true
+
+  try {
+    const uploadedTaskIds = []
+
+    for (const file of files) {
+      const task = await resolveDoneTaskForDataset(file)
+      const annotations = (task?.annotations || task?.pre_annotations || []).map(
+        normalizeDatasetAnnotation,
+      )
+
+      if (!task?.task_id || !task?.image_url || annotations.length === 0) {
+        console.warn('[DATASET] skip invalid task', { fileId: file.id, taskId: task?.task_id })
+        continue
+      }
+
+      await postDatasetApi(
+        '/dataset/upload-annotations',
+        '/upload-annotations',
+        {
+          task_id: task.task_id,
+          image_url: task.image_url,
+          image_storage_path: task.image_storage_path || task.storage_path || null,
+          annotations,
+          label_map: buildDatasetLabelMap(annotations),
+        },
+        60000,
+      )
+
+      uploadedTaskIds.push(task.task_id)
+    }
+
+    if (uploadedTaskIds.length === 0) {
+      throw new Error('Selected files do not contain valid annotations for dataset save')
+    }
+
+    const today = new Date().toISOString().slice(0, 10)
+    const result = await postDatasetApi(
+      '/dataset/merge-and-prepare',
+      '/merge-and-prepare',
+      {
+        project_id: currentProject.value.id,
+        dataset_name: `${currentProject.value.projectName || 'project'}_${today}`,
+        description: `manual save ${uploadedTaskIds.length} annotated tasks`,
+        annotation_tasks: uploadedTaskIds,
+      },
+      120000,
+    )
+
+    window.alert(result?.message || `Saved ${uploadedTaskIds.length} annotated files into dataset`)
+  } catch (error) {
+    console.error('save dataset failed:', error)
+    window.alert(error?.response?.data?.detail || error.message || 'Failed to save dataset')
+  } finally {
+    isSavingDataset.value = false
   }
 }
 

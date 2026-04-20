@@ -14,6 +14,7 @@ import time
 import shutil
 import io
 import threading
+import re
 from collections import Counter
 from pathlib import Path
 from datetime import datetime
@@ -22,7 +23,7 @@ from urllib.parse import quote
 import numpy as np
 import urllib.request
 import torch
-
+from pydantic import BaseModel
 from typing import Optional
 from PIL import Image
 from ultralytics import YOLO
@@ -49,6 +50,7 @@ import uuid
 from datetime import datetime
 import logging
 from fastapi.concurrency import run_in_threadpool
+from app.api.dataset_routes import router as dataset_router
 from app.models import User
 from app.db.session import SessionLocal
 from app.utils.jwt import ALGORITHM, SECRET_KEY
@@ -61,12 +63,14 @@ from app.services.user_performance import (
     record_task_submission,
 )
 from jose import jwt
+from postgrest.exceptions import APIError
 
 logger = logging.getLogger(__name__)
 print(f"SUPABASE_URL: {SUPABASE_URL}")  # 加上这行看输出
 app = FastAPI()
 
 # 注册路由
+app.include_router(dataset_router)
 app.include_router(auth.router)
 app.include_router(performance.router)
 app.include_router(project_storage.router)
@@ -75,7 +79,8 @@ app.include_router(collaboration.router)
 print("MAIN FILE:", __file__)
 print("PROJECT_STORAGE FILE:", project_storage.__file__)
 
-
+class ModelSwitchRequest(BaseModel):
+    name: str
 class ProgressConnectionManager:
     """按用户名维度维护 websocket 连接，推送项目进度变化。"""
 
@@ -132,11 +137,13 @@ def _load_task_annotations(task: dict[str, Any]) -> list[dict[str, Any]]:
 
     if task.get("status") in {"completed", "reviewed"}:
         anns_result = supabase.table("annotations").select("*").eq("task_id", task_id).execute()
-        return anns_result.data or [] if anns_result else []
+        anns = anns_result.data or [] if anns_result else []
+        return [_normalize_annotation_box(ann) for ann in anns]
 
     draft_result = supabase.table("drafts").select("*").eq("task_id", task_id).maybe_single().execute()
     if draft_result and draft_result.data:
-        return draft_result.data.get("annotations_json", [])
+        draft_annotations = draft_result.data.get("annotations_json", [])
+        return [_normalize_annotation_box(ann) for ann in draft_annotations]
     return []
 
 
@@ -597,6 +604,7 @@ CATEGORY_COLORS = {
     'train': '#ff00ff', 'chair': '#ffaa00'
 }
 DEFAULT_COLOR = '#3b82f6'
+ANNOTATIONS_OPTIONAL_COLUMNS = {"annotated_by", "color", "created_at", "confidence"}
 
 
 # ========== 工具函数 ==========
@@ -609,6 +617,60 @@ def get_label_color(label: str) -> str:
         if keyword in label_lower:
             return color
     return DEFAULT_COLOR
+
+
+def _is_missing_schema_column(error: Exception, column_name: str) -> bool:
+    message = str(error)
+    return column_name in message and 'schema cache' in message
+
+
+def _extract_missing_schema_column(error: Exception) -> Optional[str]:
+    match = re.search(r"Could not find the '([^']+)' column", str(error))
+    if match:
+        return match.group(1)
+    return None
+
+
+def _strip_optional_annotation_columns(rows: List[Dict[str, Any]], columns: set[str] | None = None) -> List[Dict[str, Any]]:
+    blocked_columns = columns or ANNOTATIONS_OPTIONAL_COLUMNS
+    return [{key: value for key, value in row.items() if key not in blocked_columns} for row in rows]
+
+
+def _insert_annotations_rows(rows: List[Dict[str, Any]]) -> None:
+    if not rows:
+        return
+
+    current_rows = rows
+    stripped_columns = set()
+
+    while True:
+        try:
+            supabase.table("annotations").insert(current_rows).execute()
+            if stripped_columns:
+                logger.warning("annotations 表兼容模式写入成功，已跳过字段: %s", sorted(stripped_columns))
+            return
+        except APIError as error:
+            missing_column = _extract_missing_schema_column(error)
+            if not missing_column or missing_column not in ANNOTATIONS_OPTIONAL_COLUMNS:
+                raise
+
+            if missing_column in stripped_columns:
+                raise
+
+            logger.warning("annotations 表缺少 %s 字段，使用兼容模式重试写入", missing_column)
+            stripped_columns.add(missing_column)
+            current_rows = _strip_optional_annotation_columns(current_rows, {missing_column})
+
+
+def _delete_auto_fusion_annotations(task_id: str) -> None:
+    try:
+        supabase.table("annotations").delete().eq("task_id", task_id).eq("annotated_by", "auto_fusion").execute()
+    except APIError as error:
+        if _is_missing_schema_column(error, "annotated_by"):
+            logger.warning("annotations 表缺少 annotated_by 字段，兼容模式下删除 task_id=%s 的已有整合标注", task_id)
+            supabase.table("annotations").delete().eq("task_id", task_id).execute()
+            return
+        raise
 
 
 def calculate_iou(box1: Dict[str, float], box2: Dict[str, float]) -> float:
@@ -1194,6 +1256,202 @@ model_manager = ModelManager()
 
 
 # ========== 训练相关函数 ==========
+def run_training(
+    epochs: int,
+    batch: int,
+    model_size: str,
+    use_aug: bool,
+    # 新增高级参数
+    optimizer: str = 'AdamW',
+    lr0: float = 0.001,
+    imgsz: int = 640,
+    patience: int = 20,
+    weight_decay: float = 0.0005,
+    dropout: float = 0.0,
+    label_smoothing: float = 0.0,
+    freeze: int = 0,
+    warmup_epochs: int = 3,
+    # 数据增强参数
+    mosaic: float = 1.0,
+    mixup: float = 0.1,
+    copy_paste: float = 0.0,
+    degrees: float = 15.0,
+    scale: float = 0.5,
+    shear: float = 5.0
+):
+    """执行训练（后台任务）- 支持高级训练参数"""
+    global latest_training_result
+    start_time = time.time()
+
+    try:
+        logger.info("=" * 60)
+        logger.info(f"🚀 开始训练 | 轮数: {epochs} | 批次: {batch} | 图片尺寸: {imgsz}")
+        logger.info(f"⚙️  优化器: {optimizer} | 学习率: {lr0} | 冻结层: {freeze}")
+        logger.info(f"🎨 数据增强: Mosaic={mosaic}, MixUp={mixup}, Copy-Paste={copy_paste}")
+
+        yaml_path = prepare_yaml()
+        train_count = len(list((DATASET_DIR / "train" / "images").glob("*")))
+
+        base_model = find_latest_custom_model() or ModelManager.MODEL_SIZES.get(model_size, 'yolov8n.pt')
+
+        if base_model != ModelManager.MODEL_SIZES.get(model_size, 'yolov8n.pt'):
+            logger.info(f"🔄 使用上次训练的模型继续训练: {Path(base_model).name}")
+        else:
+            logger.info(f"🆕 使用预训练模型开始新训练: {base_model}")
+
+        version = generate_version_name()
+        logger.info(f"📋 模型版本: {version}")
+
+        model = YOLO(base_model)
+
+        # 构建训练参数
+        args = {
+            "data": yaml_path,
+            "epochs": epochs,
+            "batch": batch,
+            "imgsz": imgsz,
+            "name": version,
+            "project": "runs/train",
+            "exist_ok": True,
+            "patience": patience,
+            "save": True,
+            "amp": True,
+            # 优化器和学习率
+            "optimizer": optimizer,
+            "lr0": lr0,
+            "lrf": 0.01,  # 最终学习率 = lr0 * lrf
+            "momentum": 0.937,
+            "weight_decay": weight_decay,
+            "warmup_epochs": warmup_epochs,
+            # 正则化
+            "dropout": dropout,
+            "label_smoothing": label_smoothing,
+        }
+
+        # 冻结层数
+        if freeze > 0:
+            args["freeze"] = freeze
+            logger.info(f"🧊 冻结前 {freeze} 层网络")
+
+        # 数据增强配置
+        if use_aug:
+            args.update({
+                # 基础增强
+                "degrees": degrees,
+                "translate": 0.1,
+                "scale": scale,
+                "shear": shear,
+                "flipud": 0.5,
+                "fliplr": 0.5,
+                "hsv_h": 0.015,
+                "hsv_s": 0.7,
+                "hsv_v": 0.4,
+                # 高级混合增强
+                "mosaic": mosaic,
+                "mixup": mixup,
+                "copy_paste": copy_paste,
+            })
+            logger.info(f"✅ 启用数据增强: 旋转{degrees}°, 缩放{scale}, 剪切{shear}")
+
+        # 数据量少的特殊处理：两阶段训练
+        if train_count < 200 and epochs > 20 and base_model.endswith('.pt') and 'custom' not in base_model:
+            if freeze == 0:
+                logger.info("🔒 阶段1: 冻结主干网络预热...")
+                model.train(**{**args, "epochs": min(10, epochs // 5), "freeze": 10, "lr0": lr0 * 0.5})
+                logger.info("🔓 解冻继续训练...")
+                # 移除 freeze 参数，使用完整配置
+                args.pop("freeze", None)
+
+        # 执行主训练
+        results = model.train(**args)
+
+        # 保存模型
+        best_pt = Path(f"runs/train/{version}/weights/best.pt")
+        if not best_pt.exists():
+            raise FileNotFoundError("未找到训练好的模型文件")
+
+        target = MODEL_DIR / f"{version}.pt"
+        shutil.copy(best_pt, target)
+        logger.info(f"✅ 模型已保存到本地: {target}")
+
+        # 更新 best.pt 链接
+        best_link = MODEL_DIR / "best.pt"
+        shutil.copy(best_pt, best_link)
+        logger.info(f"✅ 已更新 best.pt")
+
+        # 保存训练信息
+        save_training_info(version, target, results, base_model)
+
+        # 提取指标
+        metrics = {
+            "map50": float(results.results_dict.get('metrics/mAP50(B)', 0)),
+            "map75": float(results.results_dict.get('metrics/mAP75(B)', 0)),
+            "map50_95": float(results.results_dict.get('metrics/mAP50-95(B)', 0)),
+            "precision": float(results.results_dict.get('metrics/precision(B)', 0)),
+            "recall": float(results.results_dict.get('metrics/recall(B)', 0)),
+        }
+
+        # 保存到数据库
+        try:
+            supabase.table("model_versions").update({"is_active": False}).neq("id", 0).execute()
+
+            db_result = supabase.table("model_versions").insert({
+                "version_name": version,
+                "training_data_count": train_count,
+                "model_size": model_size,
+                "imgsz": imgsz,
+                "optimizer": optimizer,
+                "lr0": lr0,
+                "batch": batch,
+                "epochs": epochs,
+                **metrics,
+                "model_path": None,
+                "local_path": str(target.absolute()),
+                "is_active": True,
+                "training_status": "completed",
+                "completed_at": datetime.now().isoformat()
+            }).execute()
+
+            db_id = db_result.data[0]["id"] if db_result.data else None
+
+        except Exception as db_err:
+            logger.warning(f"数据库更新失败: {db_err}")
+            db_id = None
+
+        # 切换当前模型
+        model_manager.switch(str(target), version)
+
+        training_duration = (time.time() - start_time) / 3600
+
+        latest_training_result = {
+            "id": db_id,
+            "version_name": version,
+            "local_path": str(target.absolute()),
+            "metrics": metrics,
+            "uploaded": False,
+            "completed_at": datetime.now().isoformat(),
+            "duration_hours": training_duration,
+            "config": {
+                "epochs": epochs,
+                "batch": batch,
+                "imgsz": imgsz,
+                "optimizer": optimizer,
+                "lr0": lr0,
+                "model_size": model_size
+            }
+        }
+
+        logger.info("=" * 60)
+        logger.info(f"✅ 训练完成: {version}")
+        logger.info(f"📊 mAP50: {metrics['map50']:.4f}")
+        logger.info(f"⏱️  耗时: {training_duration:.2f} 小时")
+        logger.info("=" * 60)
+
+    except Exception as e:
+        logger.error(f"训练失败: {e}")
+        logger.error(traceback.format_exc())
+        latest_training_result = None
+
 def find_latest_custom_model():
     """查找最新的自定义训练模型"""
     if not MODEL_DIR.exists():
@@ -1306,140 +1564,6 @@ names: {names}
     return str(yaml_path)
 
 
-def run_training(epochs: int, batch: int, model_size: str, use_aug: bool):
-    """执行训练（后台任务）"""
-    global latest_training_result
-    start_time = time.time()
-
-    try:
-        logger.info("=" * 60)
-        logger.info(f"🚀 开始训练 | 轮数: {epochs} | 批次: {batch}")
-
-        yaml_path = prepare_yaml()
-        train_count = len(list((DATASET_DIR / "train" / "images").glob("*")))
-
-        base_model = find_latest_custom_model() or ModelManager.MODEL_SIZES.get(model_size, 'yolov8n.pt')
-
-        if base_model != ModelManager.MODEL_SIZES.get(model_size, 'yolov8n.pt'):
-            logger.info(f"🔄 使用上次训练的模型继续训练: {Path(base_model).name}")
-        else:
-            logger.info(f"🆕 使用预训练模型开始新训练: {base_model}")
-
-        version = generate_version_name()
-        logger.info(f"📋 模型版本: {version}")
-
-        model = YOLO(base_model)
-
-        args = {
-            "data": yaml_path,
-            "epochs": epochs,
-            "batch": batch,
-            "imgsz": 640,
-            "name": version,
-            "project": "runs/train",
-            "exist_ok": True,
-            "patience": 20,
-            "save": True,
-            "amp": True,
-            "optimizer": "AdamW",
-            "lr0": 0.001,
-            "lrf": 0.01,
-            "momentum": 0.937,
-            "weight_decay": 0.0005,
-            "warmup_epochs": 3,
-        }
-
-        if use_aug:
-            args.update({
-                "degrees": 15.0,
-                "translate": 0.2,
-                "scale": 0.5,
-                "shear": 5.0,
-                "flipud": 0.3,
-                "fliplr": 0.5,
-                "hsv_h": 0.015,
-                "hsv_s": 0.7,
-                "hsv_v": 0.4,
-                "mosaic": 1.0,
-                "mixup": 0.1,
-            })
-            logger.info("✅ 启用数据增强")
-
-        if train_count < 200 and epochs > 20 and base_model.endswith('.pt') and 'custom' not in base_model:
-            logger.info("🔒 阶段1: 冻结主干网络预热...")
-            model.train(**{**args, "epochs": min(10, epochs // 5), "freeze": 10, "lr0": 0.0005})
-            logger.info("🔓 解冻继续训练...")
-
-        results = model.train(**args)
-
-        best_pt = Path(f"runs/train/{version}/weights/best.pt")
-        if not best_pt.exists():
-            raise FileNotFoundError("未找到训练好的模型文件")
-
-        target = MODEL_DIR / f"{version}.pt"
-        shutil.copy(best_pt, target)
-        logger.info(f"✅ 模型已保存到本地: {target}")
-
-        best_link = MODEL_DIR / "best.pt"
-        last_link = MODEL_DIR / "last.pt"
-        shutil.copy(best_pt, best_link)
-        logger.info(f"✅ 已更新 best.pt")
-
-        save_training_info(version, target, results, base_model)
-
-        metrics = {
-            "map50": float(results.results_dict.get('metrics/mAP50(B)', 0)),
-            "map75": float(results.results_dict.get('metrics/mAP75(B)', 0)),
-            "map50_95": float(results.results_dict.get('metrics/mAP50-95(B)', 0)),
-            "precision": float(results.results_dict.get('metrics/precision(B)', 0)),
-            "recall": float(results.results_dict.get('metrics/recall(B)', 0)),
-        }
-
-        try:
-            supabase.table("model_versions").update({"is_active": False}).neq("id", 0).execute()
-
-            db_result = supabase.table("model_versions").insert({
-                "version_name": version,
-                "training_data_count": train_count,
-                "model_size": model_size,
-                **metrics,
-                "model_path": None,
-                "local_path": str(target.absolute()),
-                "is_active": True,
-                "training_status": "completed",
-                "completed_at": datetime.now().isoformat()
-            }).execute()
-
-            db_id = db_result.data[0]["id"] if db_result.data else None
-
-        except Exception as db_err:
-            logger.warning(f"数据库更新失败: {db_err}")
-            db_id = None
-
-        model_manager.switch(str(target), version)
-
-        training_duration = (time.time() - start_time) / 3600
-
-        latest_training_result = {
-            "id": db_id,
-            "version_name": version,
-            "local_path": str(target.absolute()),
-            "metrics": metrics,
-            "uploaded": False,
-            "completed_at": datetime.now().isoformat(),
-            "duration_hours": training_duration
-        }
-
-        logger.info("=" * 60)
-        logger.info(f"✅ 训练完成: {version}")
-        logger.info(f"📊 mAP50: {metrics['map50']:.4f}")
-        logger.info(f"⏱️  耗时: {training_duration:.2f} 小时")
-        logger.info("=" * 60)
-
-    except Exception as e:
-        logger.error(f"训练失败: {e}")
-        logger.error(traceback.format_exc())
-        latest_training_result = None
 
 
 # ========== API 路由 ==========
@@ -1789,7 +1913,8 @@ def index():
 @app.post("/api/predict")
 async def predict_image(
         file: UploadFile = File(...),
-        keywords: Optional[str] = Form(None)
+        keywords: Optional[str] = Form(None),
+        confidence_threshold: float = Form(0.25)
 ):
     """通用图片预测端点（用于测试图片模式）"""
     try:
@@ -1807,9 +1932,9 @@ async def predict_image(
         image_data = await file.read()
         image = Image.open(io.BytesIO(image_data)).convert("RGB")
 
-        # 运行模型
+        # 运行模型，使用传入的置信度阈值
         model, version = model_manager.get()
-        results = model(image, conf=0.25, iou=0.45)
+        results = model(image, conf=confidence_threshold, iou=0.45)
 
         # 解析结果
         raw_annotations = []
@@ -1841,8 +1966,23 @@ async def predict_image(
         annotations = remove_duplicate_annotations(raw_annotations, iou_threshold=0.85)
         removed_count = len(raw_annotations) - len(annotations)
 
+        # 生成任务ID并保存图片
+        task_id = f"upload_{uuid.uuid4().hex[:12]}"
+
+        # 保存上传的图片到本地
+        filename = f"{task_id}.jpg"
+        local_path = UPLOAD_DIR / filename
+        with open(local_path, "wb") as f:
+            f.write(image_data)
+
+        # 构建图片URL
+        image_url = f"{LOCAL_UPLOADS_BASE_URL}/local-uploads/{filename}"
+
         return {
             "success": True,
+            "task_id": task_id,
+            "image_url": image_url,
+            "image_storage_path": str(local_path),
             "annotations": annotations,
             "model_version": version,
             "stats": {
@@ -1871,6 +2011,7 @@ async def create_annotation_session(
     """创建标注会话，生成项目名_序号格式的任务ID，防止重复创建
     对于已有标注的文件，直接返回已有标注，不再进行AI预测"""
     target_keywords = [k.strip().lower() for k in payload.keywords] if payload.keywords else []
+    confidence_threshold = getattr(payload, 'confidence_threshold', 0.25)  # 默认置信度阈值 0.25
     bucket = supabase.storage.from_("project-files")
     current_user = _get_current_user_if_available(db, authorization)
 
@@ -2000,7 +2141,8 @@ async def create_annotation_session(
                 image_data=file_bytes,
                 keywords=target_keywords if payload.use_keywords else None,
                 save_draft=False,
-                task_id=None
+                task_id=None,
+                confidence_threshold=confidence_threshold
             )
             annotations = result["annotations"]
             logger.info(f"【SESSION-021】AI预测完成 | task_id={task_id}, annotations_count={len(annotations)}")
@@ -2113,6 +2255,19 @@ async def create_annotation_session(
     return response
 
 
+# 云端模型切换接口示例
+@app.post("/api/models/switch-cloud")
+async def switch_cloud_model(request: ModelSwitchRequest):
+    # 从 Supabase 获取模型信息
+    model = supabase.table('model_versions') \
+        .select('*') \
+        .eq('version_name', request.name) \
+        .single() \
+        .execute()
+
+    # 下载模型文件（如果需要）
+    # 或直接使用云端模型路径
+    return {"success": True, "model": model.data}
 @app.post("/api/tasks/{task_id}/smart-annotate")
 async def smart_annotate_incremental(
         task_id: str,
@@ -2592,7 +2747,7 @@ async def confirm_review_result(
                 "created_at": now_iso,
             })
         if annotation_rows:
-            supabase.table("annotations").insert(annotation_rows).execute()
+            _insert_annotations_rows(annotation_rows)
 
         root_project_id = current_project.source_project_id or current_project.id
         related_projects = (
@@ -2684,7 +2839,8 @@ async def run_prediction(
         image_data: bytes,
         keywords: Optional[List[str]] = None,
         save_draft: bool = False,
-        task_id: Optional[str] = None
+        task_id: Optional[str] = None,
+        confidence_threshold: float = 0.25
 ) -> Dict[str, Any]:
     """
     运行AI预测，返回标注结果
@@ -2694,9 +2850,9 @@ async def run_prediction(
         # 加载图片
         image = Image.open(io.BytesIO(image_data)).convert("RGB")
 
-        # 运行模型
+        # 运行模型，使用传入的置信度阈值
         model, version = model_manager.get()
-        results = model(image, conf=0.25, iou=0.45)
+        results = model(image, conf=confidence_threshold, iou=0.45)
 
         # 关键词过滤
         target_keywords = [k.strip().lower() for k in keywords] if keywords else []
@@ -2776,9 +2932,9 @@ async def run_prediction(
             image = Image.open(io.BytesIO(image_data)).convert("RGB")
             img_width, img_height = image.size
 
-            # 运行模型
+            # 运行模型，使用传入的置信度阈值
             model, version = model_manager.get()
-            results = model(image, conf=0.25, iou=0.45)
+            results = model(image, conf=confidence_threshold, iou=0.45)
 
             # 关键词过滤
             target_keywords = [k.strip().lower() for k in keywords] if keywords else []
@@ -2956,7 +3112,7 @@ async def complete_task(task_id: str, payload: dict):
                 "annotated_by": ann.get("annotated_by", "human"),
                 "created_at": datetime.now().isoformat()
             }
-            supabase.table("annotations").insert(ann_data).execute()
+            _insert_annotations_rows([ann_data])
 
         return {
             "success": True,
@@ -2997,15 +3153,16 @@ async def get_task(task_id: str):
             logger.warning(f"查询草稿失败: {e}")
 
         if draft and draft.get("annotations_json"):
+            draft_annotations = [_normalize_annotation_box(ann) for ann in draft["annotations_json"]]
             return {
                 "task": task,
-                "annotations": draft["annotations_json"],
+                "annotations": draft_annotations,
                 "source": "draft"
             }
 
         # 查询已提交标注
         anns_result = supabase.table("annotations").select("*").eq("task_id", task_id).execute()
-        anns = anns_result.data or []
+        anns = [_normalize_annotation_box(ann) for ann in (anns_result.data or [])]
 
         return {
             "task": task,
@@ -3153,13 +3310,30 @@ async def training_status():
 
 @app.post("/api/training/start")
 async def start_training(
-        epochs: int = Query(default=100, ge=10, le=500),
-        batch: int = Query(default=16, ge=1, le=64),
-        model_size: str = Query(default="auto", pattern="^(auto|n|s|m|l|x)$"),
-        augmentation: bool = Query(default=True),
-        background_tasks: BackgroundTasks = None
+    epochs: int = Query(default=100, ge=10, le=500),
+    batch: int = Query(default=16, ge=1, le=64),
+    model_size: str = Query(default="auto", pattern="^(auto|n|s|m|l|x)$"),
+    augmentation: bool = Query(default=True),
+    # 新增高级参数
+    optimizer: str = Query(default="AdamW", pattern="^(AdamW|Adam|SGD)$"),
+    lr0: float = Query(default=0.001, ge=0.0001, le=0.01),
+    imgsz: int = Query(default=640, ge=640, le=1280),
+    patience: int = Query(default=20, ge=10, le=50),
+    weight_decay: float = Query(default=0.0005, ge=0, le=0.001),
+    dropout: float = Query(default=0.0, ge=0, le=0.5),
+    label_smoothing: float = Query(default=0.0, ge=0, le=0.1),
+    freeze: int = Query(default=0, ge=0, le=24),
+    warmup_epochs: int = Query(default=3, ge=0, le=10),
+    # 数据增强参数
+    mosaic: float = Query(default=1.0, ge=0, le=1.0),
+    mixup: float = Query(default=0.1, ge=0, le=1.0),
+    copy_paste: float = Query(default=0.0, ge=0, le=1.0),
+    degrees: float = Query(default=15.0, ge=0, le=45),
+    scale: float = Query(default=0.5, ge=0, le=1.0),
+    shear: float = Query(default=5.0, ge=0, le=20),
+    background_tasks: BackgroundTasks = None
 ):
-    """启动训练"""
+    """启动训练 - 支持完整高级参数"""
     try:
         is_valid, msg, details = DatasetValidator.validate()
         if not is_valid:
@@ -3170,12 +3344,33 @@ async def start_training(
         if model_size == "auto":
             model_size = model_manager.select_size(train_count)
 
+        # 记录完整配置
+        logger.info(f"训练配置: epochs={epochs}, batch={batch}, imgsz={imgsz}, optimizer={optimizer}, lr0={lr0}")
+        logger.info(f"增强配置: mosaic={mosaic}, mixup={mixup}, copy_paste={copy_paste}, degrees={degrees}")
+
         background_tasks.add_task(
             run_training,
             epochs=epochs,
             batch=batch,
             model_size=model_size,
-            use_aug=augmentation
+            use_aug=augmentation,
+            # 高级参数
+            optimizer=optimizer,
+            lr0=lr0,
+            imgsz=imgsz,
+            patience=patience,
+            weight_decay=weight_decay,
+            dropout=dropout,
+            label_smoothing=label_smoothing,
+            freeze=freeze,
+            warmup_epochs=warmup_epochs,
+            # 增强参数
+            mosaic=mosaic,
+            mixup=mixup,
+            copy_paste=copy_paste,
+            degrees=degrees,
+            scale=scale,
+            shear=shear
         )
 
         return {
@@ -3185,7 +3380,10 @@ async def start_training(
                 "epochs": epochs,
                 "batch": batch,
                 "model_size": model_size,
-                "train_count": train_count
+                "imgsz": imgsz,
+                "optimizer": optimizer,
+                "lr0": lr0,
+                "augmentation": augmentation
             }
         }
 
@@ -3382,7 +3580,7 @@ async def save_annotations(
                     })
 
                 # 批量插入
-                supabase.table("annotations").insert(annotations_data).execute()
+                _insert_annotations_rows(annotations_data)
 
             # 更新任务状态为已完成
             supabase.table("tasks").update({
@@ -3412,8 +3610,7 @@ async def save_annotations(
             )
             if integration_result.get("auto_integrated") and integration_result.get("fused_annotations"):
                 final_task_id = (integration_result.get("source_task_ids") or [task_id])[0]
-                supabase.table("annotations").delete().eq("task_id", final_task_id).eq("annotated_by",
-                                                                                       "auto_fusion").execute()
+                _delete_auto_fusion_annotations(final_task_id)
                 auto_rows = []
                 for ann in integration_result["fused_annotations"]:
                     auto_rows.append({
@@ -3430,7 +3627,7 @@ async def save_annotations(
                         "created_at": datetime.now().isoformat()
                     })
                 if auto_rows:
-                    supabase.table("annotations").insert(auto_rows).execute()
+                    _insert_annotations_rows(auto_rows)
                     integration_result["final_result_saved_to_task_id"] = final_task_id
 
             return {
