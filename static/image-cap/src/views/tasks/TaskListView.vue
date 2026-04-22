@@ -1,6 +1,7 @@
 <!-- views/TaskListView.vue -->
 <template>
   <div class="task-list-view">
+     <GradientBackground />
     <!-- 页面标题 -->
     <div class="page-header">
       <h1>📋 任务数据中心</h1>
@@ -224,7 +225,7 @@ import VChart from 'vue-echarts'
 import { useUserStore } from '@/stores/user'
 import { getTaskCenterOverview } from '@/api/projectStorage'
 import type { PerformanceSummary } from '@/api/performance'
-
+import GradientBackground from '@/components/GradientBackground.vue'
 type TaskStatus = 'pending' | 'annotating' | 'completed' | 'reviewed'
 
 type TaskItem = {
@@ -1382,5 +1383,11 @@ onMounted(() => {
   .stats-row {
     grid-template-columns: repeat(2, 1fr);
   }
+}
+/* 关键：内容层必须在背景之上 */
+.content-wrapper {
+  position: relative;
+  z-index: 1;  /* 确保内容在背景装饰之上 */
+  padding: 40px 20px;
 }
 </style>

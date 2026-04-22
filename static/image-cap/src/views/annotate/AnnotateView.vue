@@ -1,6 +1,6 @@
-<template>
+﻿<template>
   <div class="annotation-workspace">
-
+ <GradientBackground />
     <aside class="toolbar-panel">
    <section class="tool-section model-section-v2" :class="{ collapsed: collapsedSections.model }">
   <div class="section-header-v2" @click="collapsedSections.model = !collapsedSections.model">
@@ -552,65 +552,138 @@
             <div class="work-file-summary">
               {{ smartAnnotateSummaryText }}
             </div>
-
-            <div class="mode-row">
-              <label class="radio-item" @click="smartAnnotateMode = 'keyword'">
-                <span class="radio-dot" :class="{ active: smartAnnotateMode === 'keyword' }"></span>
-                <span class="radio-text" :class="{ strong: smartAnnotateMode === 'keyword' }">
-                  关键词模型
-                </span>
-              </label>
-
-              <label class="radio-item" @click="smartAnnotateMode = 'nonKeyword'">
-                <span
-                  class="radio-dot"
-                  :class="{ active: smartAnnotateMode === 'nonKeyword' }"
-                ></span>
-                <span class="radio-text" :class="{ strong: smartAnnotateMode === 'nonKeyword' }">
-                  非关键词模型
-                </span>
-              </label>
-            </div>
-
-            <div v-if="smartAnnotateMode === 'keyword'" class="tag-panel">
-              <div class="selected-title">已选择的标签</div>
-
-              <div class="selected-box">
-                <template v-if="selectedSmartKeywords.length">
-                  <div
-                    v-for="tag in selectedSmartKeywords"
-                    :key="tag"
-                    class="tag-chip selected"
-                    :style="{ backgroundColor: labelColorMap.get(tag) || '#f56c6c' }"
-                  >
-                    <span>{{ tag }}</span>
-                    <button class="tag-remove" type="button" @click="removeSmartKeyword(tag)">
-                      ×
-                    </button>
-                  </div>
-                </template>
-                <div v-else class="empty-text">请选择下方标签</div>
-              </div>
-
-              <div v-for="scene in scenes" :key="scene.id" class="scene-block">
-                <div class="scene-title">{{ scene.name }}</div>
-                <div class="scene-tags">
-                  <button
-                    v-for="tag in scene.tags"
-                    :key="tag.id"
-                    type="button"
-                    class="tag-chip scene-chip"
-                    :class="{ active: selectedSmartKeywords.includes(tag.name) }"
-                    :style="{ backgroundColor: tag.color }"
-                    @click="toggleSmartKeyword(tag.name)"
-                  >
-                    <span>{{ tag.name }}</span>
-                    <span v-if="selectedSmartKeywords.includes(tag.name)" class="tag-remove small">
-                      ×
+            <div class="work-dialog-layout">
+              <div class="work-dialog-main">
+                <div class="mode-row">
+                  <label class="radio-item" @click="smartAnnotateMode = 'keyword'">
+                    <span class="radio-dot" :class="{ active: smartAnnotateMode === 'keyword' }"></span>
+                    <span class="radio-text" :class="{ strong: smartAnnotateMode === 'keyword' }">
+                      关键词模型
                     </span>
-                  </button>
+                  </label>
+
+                  <label class="radio-item" @click="smartAnnotateMode = 'nonKeyword'">
+                    <span
+                      class="radio-dot"
+                      :class="{ active: smartAnnotateMode === 'nonKeyword' }"
+                    ></span>
+                    <span class="radio-text" :class="{ strong: smartAnnotateMode === 'nonKeyword' }">
+                      非关键词模型
+                    </span>
+                  </label>
+                </div>
+
+                <div v-if="smartAnnotateMode === 'keyword'" class="tag-panel">
+                  <div class="selected-title">已选择的标签</div>
+
+                  <div class="selected-box">
+                    <template v-if="selectedSmartKeywords.length">
+                      <div
+                        v-for="tag in selectedSmartKeywords"
+                        :key="tag"
+                        class="tag-chip selected"
+                        :style="{ backgroundColor: labelColorMap.get(tag) || '#f56c6c' }"
+                      >
+                        <span>{{ tag }}</span>
+                        <button class="tag-remove" type="button" @click="removeSmartKeyword(tag)">
+                          ×
+                        </button>
+                      </div>
+                    </template>
+                    <div v-else class="empty-text">请选择下方标签</div>
+                  </div>
+
+                  <div class="scene-grid">
+                    <div v-for="scene in scenes" :key="scene.id" class="scene-block">
+                      <div class="scene-title">{{ scene.name }}</div>
+                      <div class="scene-tags">
+                        <button
+                          v-for="tag in scene.tags"
+                          :key="tag.id"
+                          type="button"
+                          class="tag-chip scene-chip"
+                          :class="{ active: selectedSmartKeywords.includes(tag.name) }"
+                          :style="{ backgroundColor: tag.color }"
+                          @click="toggleSmartKeyword(tag.name)"
+                        >
+                          <span>{{ tag.name }}</span>
+                          <span v-if="selectedSmartKeywords.includes(tag.name)" class="tag-remove small">
+                            ×
+                          </span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div v-else class="dialog-side-card soft inline-mode-tip">
+                  <div class="side-card-title">使用建议</div>
+                  <ul class="side-tip-list">
+                    <li>非关键词模式会直接基于当前模型做整图检测，适合先快速看整体结果。</li>
+                    <li>阈值可以先保持在 25% 到 40%，拿到更多候选框后再人工筛选。</li>
+                    <li>如果当前图片目标比较单一，可以适当提高阈值来减少噪声框。</li>
+                  </ul>
                 </div>
               </div>
+
+              <div class="work-side-stack">
+                <div class="confidence-section">
+                  <div class="confidence-header">
+                    <span class="confidence-title">🎯 置信度阈值</span>
+                    <span class="confidence-value">{{ Math.round(smartAnnotateConfidence * 100) }}%</span>
+                  </div>
+                  <div class="confidence-desc">只保留置信度高于此值的目标检测结果</div>
+                  <div class="slider-container">
+                    <el-slider
+                      v-model="smartAnnotateConfidence"
+                      :min="0.05"
+                      :max="0.95"
+                      :step="0.05"
+                      :show-tooltip="false"
+                      :marks="{ 0.25: '25%', 0.5: '50%', 0.75: '75%' }"
+                    />
+                  </div>
+                  <div class="confidence-hint">
+                    <span class="hint-low">低阈值 → 更多结果</span>
+                    <span class="hint-high">高阈值 → 更精准</span>
+                  </div>
+                </div>
+
+                <div class="dialog-side-card">
+                  <div class="side-card-title">当前配置</div>
+                  <div class="side-metric-list">
+                    <div class="side-metric-item">
+                      <span class="side-metric-label">识别模式</span>
+                      <strong class="side-metric-value">
+                        {{ smartAnnotateMode === 'keyword' ? '关键词' : '非关键词' }}
+                      </strong>
+                    </div>
+                    <div class="side-metric-item">
+                      <span class="side-metric-label">已选标签</span>
+                      <strong class="side-metric-value">
+                        {{ smartAnnotateMode === 'keyword' ? selectedSmartKeywords.length : 0 }}
+                      </strong>
+                    </div>
+                    <div class="side-metric-item">
+                      <span class="side-metric-label">标签总数</span>
+                      <strong class="side-metric-value">{{ smartAnnotateTagCount }}</strong>
+                    </div>
+                    <div class="side-metric-item">
+                      <span class="side-metric-label">场景分类</span>
+                      <strong class="side-metric-value">{{ scenes.length }}</strong>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="smartAnnotateMode === 'keyword'" class="dialog-side-card soft dialog-bottom-tip">
+              <div class="side-card-title">使用建议</div>
+              <ul class="side-tip-list">
+                <li>先限定标签范围，再做预标注，结果会更聚焦。</li>
+                <li>低阈值适合先生成更多候选框，再人工快速筛掉误检。</li>
+                <li>高阈值更适合目标边界明显、希望减少噪声的图片。</li>
+              </ul>
             </div>
           </div>
 
@@ -648,7 +721,7 @@ import { confirmDialog, promptDialog, alertDialog } from '@/composables/useDialo
 import { supabase } from '@/supabase'
 import request from '@/api/request'
 import { useRouter, useRoute } from 'vue-router'
-
+import GradientBackground from '@/components/GradientBackground.vue'
 const route = useRoute()
 const router = useRouter()
 const store = useAnnotationStore()
@@ -671,6 +744,7 @@ const stage = ref(null)
 const newLabel = ref('')
 const selectedColor = ref('#ff0000')
 const currentLabel = ref('object')
+const smartAnnotateConfidence = ref(0.25)
 const collapsedSections = reactive({
   image: true,
   label: true,
@@ -893,6 +967,10 @@ const smartAnnotateSummaryText = computed(() => {
   return `当前图片：${store.currentTaskId || '测试图片'}`
 })
 
+const smartAnnotateTagCount = computed(() =>
+  scenes.value.reduce((total, scene) => total + (scene.tags?.length || 0), 0)
+)
+
 const openSmartAnnotateDialog = () => {
   if (!imageObj.value) {
     alert('请先上传或加载图片')
@@ -944,6 +1022,7 @@ const executeSmartAnnotation = async () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           keywords,
+          confidence_threshold: smartAnnotateConfidence.value,
           iou_threshold: 0.5,
         }),
       })
@@ -968,6 +1047,7 @@ const executeSmartAnnotation = async () => {
       if (keywords.length > 0) {
         formData.append('keywords', JSON.stringify(keywords))
       }
+      formData.append('confidence_threshold', String(smartAnnotateConfidence.value))
 
       const response = await fetch('/api/predict', {
         method: 'POST',

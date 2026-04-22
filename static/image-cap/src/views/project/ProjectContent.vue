@@ -1,6 +1,8 @@
 <template>
   <div class="project-content-page">
+    <GradientBackground />
     <div class="page-top-actions">
+      
       <TeamCollaborationActions
         :project-id="currentProject?.id || ''"
         :project-name="currentProject?.projectName || ''"
@@ -456,88 +458,149 @@
                 {{ workSummaryText }}
               </div>
 
-              <div class="mode-row">
-                <label class="radio-item" @click="workForm.mode = 'keyword'">
-                  <span class="radio-dot" :class="{ active: workForm.mode === 'keyword' }"></span>
-                  <span class="radio-text" :class="{ strong: workForm.mode === 'keyword' }">
-                    关键词模型
-                  </span>
-                </label>
+              <div class="work-dialog-layout">
+                <div class="work-dialog-main">
+                  <div class="mode-row">
+                    <label class="radio-item" @click="workForm.mode = 'keyword'">
+                      <span class="radio-dot" :class="{ active: workForm.mode === 'keyword' }"></span>
+                      <span class="radio-text" :class="{ strong: workForm.mode === 'keyword' }">
+                        关键词模型
+                      </span>
+                    </label>
 
-                <label class="radio-item" @click="workForm.mode = 'nonKeyword'">
-                  <span
-                    class="radio-dot"
-                    :class="{ active: workForm.mode === 'nonKeyword' }"
-                  ></span>
-                  <span class="radio-text" :class="{ strong: workForm.mode === 'nonKeyword' }">
-                    非关键词模型
-                  </span>
-                </label>
-              </div>
+                    <label class="radio-item" @click="workForm.mode = 'nonKeyword'">
+                      <span
+                        class="radio-dot"
+                        :class="{ active: workForm.mode === 'nonKeyword' }"
+                      ></span>
+                      <span class="radio-text" :class="{ strong: workForm.mode === 'nonKeyword' }">
+                        非关键词模型
+                      </span>
+                    </label>
+                  </div>
 
-              <div v-if="workForm.mode === 'keyword'" class="tag-panel">
-                <div class="selected-title">已选择的标签</div>
+                  <div v-if="workForm.mode === 'keyword'" class="tag-panel">
+                    <div class="selected-title">已选择的标签</div>
 
-                <div class="selected-box">
-                  <template v-if="workSelectedTags.length">
-                    <div
-                      v-for="tag in workSelectedTags"
-                      :key="tag.id"
-                      class="tag-chip selected"
-                      :style="{ backgroundColor: tag.color }"
-                    >
-                      <span>{{ tag.name }}</span>
-                      <button class="tag-remove" type="button" @click="removeWorkTag(tag.id)">
-                        ×
-                      </button>
+                    <div class="selected-box">
+                      <template v-if="workSelectedTags.length">
+                        <div
+                          v-for="tag in workSelectedTags"
+                          :key="tag.id"
+                          class="tag-chip selected"
+                          :style="{ backgroundColor: tag.color }"
+                        >
+                          <span>{{ tag.name }}</span>
+                          <button class="tag-remove" type="button" @click="removeWorkTag(tag.id)">
+                            ×
+                          </button>
+                        </div>
+                      </template>
+
+                      <div v-else class="empty-text">请选择下方标签</div>
                     </div>
-                  </template>
 
-                  <div v-else class="empty-text">请选择下方标签</div>
+                    <div class="scene-grid">
+                      <div v-for="scene in scenes" :key="scene.id" class="scene-block">
+                        <div class="scene-title">{{ scene.name }}</div>
+
+                        <div class="scene-tags">
+                          <button
+                            v-for="tag in scene.tags"
+                            :key="tag.id"
+                            type="button"
+                            class="tag-chip scene-chip"
+                            :class="{ active: isWorkSelected(tag.id) }"
+                            :style="{ backgroundColor: tag.color }"
+                            @click="toggleWorkTag(tag)"
+                          >
+                            <span>{{ tag.name }}</span>
+                            <span v-if="isWorkSelected(tag.id)" class="tag-remove small">×</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div v-else class="dialog-side-card soft inline-mode-tip">
+                    <div class="side-card-title">使用建议</div>
+                    <ul class="side-tip-list">
+                      <li>非关键词模式会直接基于当前模型做整图检测，适合先快速看整体结果。</li>
+                      <li>阈值可以先保持在 25% 到 40%，拿到更多候选框后再人工筛选。</li>
+                      <li>如果当前图片目标比较单一，可以适当提高阈值来减少噪声框。</li>
+                    </ul>
+                  </div>
                 </div>
 
-                <div v-for="scene in scenes" :key="scene.id" class="scene-block">
-                  <div class="scene-title">{{ scene.name }}</div>
+                <div class="work-side-stack">
+                  <div class="confidence-section">
+                    <div class="confidence-header">
+                      <span class="confidence-title">🎯 置信度阈值</span>
+                      <span class="confidence-value"
+                        >{{ Math.round(workForm.confidenceThreshold * 100) }}%</span
+                      >
+                    </div>
+                    <div class="confidence-desc">只保留置信度高于此值的目标检测结果</div>
+                    <div class="slider-container">
+                      <el-slider
+                        v-model="workForm.confidenceThreshold"
+                        :min="0.05"
+                        :max="0.95"
+                        :step="0.05"
+                        :show-tooltip="false"
+                        :marks="{ 0.25: '25%', 0.5: '50%', 0.75: '75%' }"
+                      />
+                    </div>
+                    <div class="confidence-hint">
+                      <span class="hint-low">低阈值 → 更多结果</span>
+                      <span class="hint-high">高阈值 → 更精准</span>
+                    </div>
+                  </div>
 
-                  <div class="scene-tags">
-                    <button
-                      v-for="tag in scene.tags"
-                      :key="tag.id"
-                      type="button"
-                      class="tag-chip scene-chip"
-                      :class="{ active: isWorkSelected(tag.id) }"
-                      :style="{ backgroundColor: tag.color }"
-                      @click="toggleWorkTag(tag)"
-                    >
-                      <span>{{ tag.name }}</span>
-                      <span v-if="isWorkSelected(tag.id)" class="tag-remove small">×</span>
-                    </button>
+                  <div class="dialog-side-card">
+                    <div class="side-card-title">当前配置</div>
+                    <div class="side-metric-list">
+                      <div class="side-metric-item">
+                        <span class="side-metric-label">标注模式</span>
+                        <strong class="side-metric-value">
+                          {{ workForm.mode === 'keyword' ? '关键词' : '非关键词' }}
+                        </strong>
+                      </div>
+                      <div class="side-metric-item">
+                        <span class="side-metric-label">已选标签</span>
+                        <strong class="side-metric-value">
+                          {{ workForm.mode === 'keyword' ? workSelectedTags.length : 0 }}
+                        </strong>
+                      </div>
+                      <div class="side-metric-item">
+                        <span class="side-metric-label">标签总数</span>
+                        <strong class="side-metric-value">{{ allTags.length }}</strong>
+                      </div>
+                      <div class="side-metric-item">
+                        <span class="side-metric-label">场景分类</span>
+                        <strong class="side-metric-value">{{ scenes.length }}</strong>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="dialog-side-card soft">
+                    <div class="side-card-title">使用建议</div>
+                    <ul class="side-tip-list">
+                      <li>先选关键词模式再勾选标签，结果会更聚焦。</li>
+                      <li>阈值偏低时结果更全，适合先粗筛再人工修正。</li>
+                      <li>阈值偏高时更干净，适合追求更少误检的场景。</li>
+                    </ul>
                   </div>
                 </div>
               </div>
-            </div>
 
-            <div class="confidence-section">
-              <div class="confidence-header">
-                <span class="confidence-title">🎯 置信度阈值</span>
-                <span class="confidence-value"
-                  >{{ Math.round(workForm.confidenceThreshold * 100) }}%</span
-                >
-              </div>
-              <div class="confidence-desc">只保留置信度高于此值的目标检测结果</div>
-              <div class="slider-container">
-                <el-slider
-                  v-model="workForm.confidenceThreshold"
-                  :min="0.05"
-                  :max="0.95"
-                  :step="0.05"
-                  :show-tooltip="false"
-                  :marks="{ 0.25: '25%', 0.5: '50%', 0.75: '75%' }"
-                />
-              </div>
-              <div class="confidence-hint">
-                <span class="hint-low">低阈值 → 更多结果</span>
-                <span class="hint-high">高阈值 → 更精准</span>
+              <div v-if="workForm.mode === 'keyword'" class="dialog-side-card soft dialog-bottom-tip">
+                <div class="side-card-title">使用建议</div>
+                <ul class="side-tip-list">
+                  <li>先选关键词模型再勾选标签，结果会更聚焦。</li>
+                  <li>阈值偏低时结果更全，适合先粗筛再人工修正。</li>
+                  <li>阈值偏高时更干净，适合追求更少误检的场景。</li>
+                </ul>
               </div>
             </div>
 
@@ -1029,7 +1092,7 @@ import request from '@/api/request'
 import { useUserStore } from '@/stores/user'
 import JSZip from 'jszip' // 需要安装: npm install jszip
 import { saveAs } from 'file-saver' // 需要安装: npm install file-saver
-
+import GradientBackground from '@/components/GradientBackground.vue'
 // ============ 基础状态 ============
 
 const projectList = ref([])
@@ -4773,9 +4836,29 @@ onBeforeUnmount(() => {
   overflow-y: auto;
 }
 
+.work-dialog-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 320px);
+  gap: 18px;
+  align-items: start;
+}
+
+.work-dialog-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.work-side-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 .work-file-summary {
-  margin-bottom: 16px;
-  font-size: 14px;
+  margin-bottom: 10px;
+  font-size: 13px;
   color: #6b7280;
   word-break: break-all;
 }
@@ -4789,8 +4872,12 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 48px;
-  margin: 8px 0 18px;
+  margin: 0;
   flex-wrap: wrap;
+  padding: 10px 14px;
+  background: #f8fafc;
+  border: 1px solid #e8eef5;
+  border-radius: 12px;
 }
 
 .radio-item {
@@ -4838,56 +4925,63 @@ onBeforeUnmount(() => {
 }
 
 .tag-panel {
-  background: #fafafa;
-  border-radius: 10px;
-  padding: 16px;
+  background: linear-gradient(180deg, #fbfdff 0%, #f7fafc 100%);
+  border-radius: 14px;
+  padding: 14px;
+  border: 1px solid #e8eef5;
 }
 
 .selected-title {
-  font-size: 15px;
+  font-size: 14px;
   color: #2b2f36;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
   font-weight: 600;
 }
 
 .selected-box {
-  min-height: 76px;
+  min-height: 64px;
   border: 2px solid #b8b8b8;
   border-radius: 14px;
   background: #fff;
-  padding: 14px;
+  padding: 12px;
   box-sizing: border-box;
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
-  gap: 10px;
+  gap: 8px;
+}
+
+.scene-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
 }
 
 .scene-block {
-  padding-top: 18px;
-  margin-top: 18px;
+  padding-top: 14px;
+  margin-top: 0;
   border-top: 1px solid #dddddd;
 }
 
 .scene-title {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
   color: #2b2f36;
-  margin-bottom: 14px;
+  margin-bottom: 10px;
 }
 
 .scene-tags {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 8px;
 }
 
 .tag-chip {
   position: relative;
   border: none;
   border-radius: 14px;
-  padding: 10px 14px;
-  font-size: 14px;
+  padding: 8px 12px;
+  font-size: 13px;
   color: #2d3748;
   cursor: pointer;
   line-height: 1;
@@ -4966,8 +5060,9 @@ onBeforeUnmount(() => {
 
 .work-dialog-panel .dialog-footer {
   margin-top: 0;
-  padding: 20px 32px 28px;
+  padding: 14px 20px 18px;
   justify-content: flex-end;
+  border-top: 1px solid #eef2f7;
 }
 
 .dialog-btn {
@@ -5654,11 +5749,116 @@ onBeforeUnmount(() => {
 
 /* 置信度阈值设置样式 */
 .confidence-section {
-  margin-top: 20px;
-  padding: 16px;
+  margin-top: 0;
+  padding: 18px;
   background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
-  border-radius: 12px;
+  border-radius: 16px;
   border: 1px solid #bae6fd;
+  position: sticky;
+  top: 4px;
+  box-shadow: 0 10px 30px rgba(2, 132, 199, 0.08);
+}
+
+.dialog-side-card {
+  padding: 14px;
+  border-radius: 14px;
+  background: #ffffff;
+  border: 1px solid #e8eef5;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
+}
+
+.dialog-side-card.soft {
+  background: linear-gradient(180deg, #fbfdff 0%, #f8fbff 100%);
+}
+
+.work-side-stack > .dialog-side-card.soft {
+  display: none;
+}
+
+.inline-mode-tip {
+  min-height: 280px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.inline-mode-tip .side-tip-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  padding-left: 0;
+}
+
+.dialog-bottom-tip {
+  margin-top: 12px;
+  padding: 14px 16px;
+}
+
+.dialog-bottom-tip .side-tip-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px 18px;
+  padding-left: 0;
+  align-items: start;
+}
+
+.side-card-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1f2937;
+  margin-bottom: 10px;
+}
+
+.side-metric-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.side-metric-item {
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: #f8fafc;
+  border: 1px solid #edf2f7;
+}
+
+.side-metric-label {
+  display: block;
+  font-size: 12px;
+  color: #64748b;
+  margin-bottom: 4px;
+}
+
+.side-metric-value {
+  font-size: 14px;
+  color: #0f172a;
+}
+
+.side-tip-list {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+  color: #5b6778;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.side-tip-list li {
+  position: relative;
+  margin: 0;
+  padding-left: 16px;
+}
+
+.side-tip-list li::before {
+  content: '•';
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: #64748b;
+}
+
+.side-tip-list li + li {
+  margin-top: 6px;
 }
 
 .confidence-header {
@@ -5735,6 +5935,24 @@ onBeforeUnmount(() => {
 .hint-high {
   color: #dc2626;
   font-weight: 500;
+}
+
+@media (max-width: 960px) {
+  .work-dialog-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .scene-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .dialog-bottom-tip .side-tip-list {
+    grid-template-columns: 1fr;
+  }
+
+  .confidence-section {
+    position: static;
+  }
 }
 
 /* 数据导出按钮样式 */
@@ -6037,5 +6255,11 @@ onBeforeUnmount(() => {
 .dialog-btn.export-btn:disabled {
   background: #9ca3af;
   cursor: not-allowed;
+}
+/* 关键：内容层必须在背景之上 */
+.content-wrapper {
+  position: relative;
+  z-index: 1;  /* 确保内容在背景装饰之上 */
+  padding: 40px 20px;
 }
 </style>

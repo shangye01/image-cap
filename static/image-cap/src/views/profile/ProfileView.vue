@@ -1,5 +1,6 @@
 <template>
   <div class="profile-page">
+     <GradientBackground />
     <div class="profile-header">
       <div>
         <h1 class="page-title">个人中心</h1>
@@ -261,7 +262,7 @@ import { Search, Refresh } from '@element-plus/icons-vue'
 import { logoutApi } from '@/api/auth'
 import { getMyPerformanceSummary } from '@/api/performance'
 import { useUserStore } from '@/stores/user'
-
+import GradientBackground from '@/components/GradientBackground.vue'
 const performanceSummary = ref(null)
 
 const router = useRouter()
@@ -612,5 +613,13 @@ onMounted(() => {
   .score-grid {
     grid-template-columns: 1fr;
   }
+}
+/* 关键：内容层必须在背景之上 */
+.content-wrapper {
+  position: relative;
+  z-index: 1;  /* 确保内容在背景装饰之上 */
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 40px 20px;
 }
 </style>

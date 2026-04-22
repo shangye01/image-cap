@@ -1,5 +1,6 @@
 <template>
   <div class="training-view">
+      <GradientBackground />
     <!-- 背景装饰 -->
     <div class="bg-decoration">
       <div class="gradient-orb orb-1"></div>
@@ -7,10 +8,10 @@
       <div class="gradient-orb orb-3"></div>
     </div>
 
-   
+    <div class="content-wrapper">
 
       <!-- 数据集状态卡片 -->
-      <div class="glass-card status-card" :class="{ '': datasetStatus.valid, 'error': !datasetStatus.valid }">
+       <div class="glass-card status-card" :class="{ 'ready': datasetStatus.valid, 'error': !datasetStatus.valid }">
         <div class="card-header">
           <div class="icon-wrapper">
             <svg v-if="datasetStatus.valid" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -230,7 +231,7 @@
           </button>
         </div>
       </div>
-      </div>
+      
 
   </div>
       <!-- 训练配置 -->
@@ -683,6 +684,8 @@
             </div>
           </div>
         </div>
+        </div>
+        </div>
       </div>
    
  
@@ -693,7 +696,7 @@
 import { useRoute } from 'vue-router'
 import { createClient } from '@supabase/supabase-js'
 import { ref, reactive, nextTick, onMounted } from 'vue'
-
+import GradientBackground from '@/components/GradientBackground.vue'
 
 const route = useRoute()
 
@@ -1641,13 +1644,7 @@ onMounted(() => {
   animation: float 12s ease-in-out infinite;
 }
 
-.content-wrapper {
-  position: relative;
-  z-index: 1;
-  max-width: 900px;
-  margin: 0 auto;
-  padding: 40px 20px;
-}
+
 
 /* ===== 页面标题 ===== */
 .page-header {
@@ -3034,8 +3031,8 @@ input:checked + .toggle-slider::before {
 
 .btn-upload {
   flex: 1;
-  padding: 12px 20px;
-  font-size: 0.88rem;
+  padding: 14px 24px;
+  font-size: 0.95rem;
 }
 
 .btn-cancel {
@@ -3192,13 +3189,7 @@ input:checked + .toggle-slider::before {
   animation: float 12s ease-in-out infinite;
 }
 
-.content-wrapper {
-  position: relative;
-  z-index: 1;
-  max-width: 900px;
-  margin: 0 auto;
-  padding: 40px 20px;
-}
+
 
 /* ===== 页面标题 ===== */
 .page-header {
@@ -3454,8 +3445,8 @@ input:checked + .toggle-slider::before {
 
 /* ===== 进度面板 ===== */
 .progress-panel {
-  margin-top: 16px;
-  padding: 18px;
+  margin-top: 24px;
+  padding: 24px;
   background: linear-gradient(135deg, rgba(248, 250, 252, 0.9), rgba(241, 245, 249, 0.9));
   border-radius: 16px;
   border: 1px solid rgba(226, 232, 240, 0.6);
@@ -3464,18 +3455,18 @@ input:checked + .toggle-slider::before {
 .progress-header {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 14px;
+  gap: 16px;
+  margin-bottom: 20px;
 }
 
 .progress-icon {
-  width: 40px;
-  height: 40px;
+  width: 48px;
+  height: 48px;
   border-radius: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.2rem;
+  font-size: 1.5rem;
   flex-shrink: 0;
 }
 
@@ -3509,12 +3500,12 @@ input:checked + .toggle-slider::before {
 
 .progress-subtitle {
   margin: 0;
-  font-size: 0.78rem;
+  font-size: 0.85rem;
   color: #64748b;
 }
 
 .progress-percentage {
-  font-size: 1.2rem;
+  font-size: 1.5rem;
   font-weight: 700;
   color: #6366f1;
 }
@@ -3807,7 +3798,7 @@ input:checked + .toggle-slider::before {
 
 .btn-upload {
   flex: 1;
-  padding: 12px 20px;
+  padding: 14px 24px;
 }
 
 .btn-cancel {
@@ -3849,4 +3840,34 @@ input:checked + .toggle-slider::before {
     margin-top: 8px;
   }
 }
+/* ===== 页面根容器 ===== */
+.training-view {
+  min-height: 100vh;
+  background: linear-gradient(135deg, #fafbfc 0%, #f0f4f8 100%);
+  position: relative;        /* 创建定位上下文 */
+  overflow-x: hidden;
+  color: #2c3e50;
+}
+
+/* ===== 内容包装器 - 必须在背景之上 ===== */
+.content-wrapper {
+  position: relative;      /* 启用 z-index */
+  z-index: 1;              /* 确保在背景组件之上 */
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 40px 20px;
+}
+
+/* ===== 玻璃卡片样式 ===== */
+.glass-card {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  border-radius: 20px;
+  padding: 28px;
+  margin-bottom: 16px;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.06);
+}
+
 </style>
