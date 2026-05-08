@@ -1,6 +1,6 @@
 # api/dataset_routes.py
 import supabase
-from fastapi import APIRouter, HTTPException, BackgroundTasks, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, BackgroundTasks, UploadFile, File, Form, Header
 from pydantic import BaseModel, Field
 from typing import List, Optional, Annotated
 import os
@@ -200,9 +200,11 @@ def analyze_local_dataset(directory: str) -> dict:
 
 
 # ===== 后台处理任务 =====
+
 async def recalculate_stats(storage_path: str, bucket: str = "datasets") -> dict:
     """
     从 Storage 文件夹重新计算数据集统计信息（支持分页）
+    修复：正确使用 Supabase Python 客户端的 limit/offset 参数 [^4^]
     """
     try:
         supabase_client = get_supabase_client()
@@ -221,54 +223,44 @@ async def recalculate_stats(storage_path: str, bucket: str = "datasets") -> dict
         base_path = f"{folder_name}/" if folder_name else ""
         logger.info(f"开始统计: folder_name='{folder_name}', base_path='{base_path}'")
 
-        # 辅助函数：安全列出文件夹（支持分页）
+        # ========== 修复：正确的分页参数传递方式 ==========
         async def list_all_files(path: str) -> list:
-            """获取文件夹下所有文件，处理分页"""
+            """获取文件夹下所有文件，处理分页（修正参数传递）"""
             all_files = []
             path = path.lstrip("/")
+            offset = 0
+            limit = 100  # Supabase 默认最大 100
 
-            try:
-                # 先获取第一页
-                result = supabase_client.storage.from_(bucket).list(path)
+            while True:
+                try:
+                    # 正确方式：第二个参数是 options 字典
+                    result = supabase_client.storage.from_(bucket).list(
+                        path,
+                        {
+                            "limit": limit,
+                            "offset": offset,
+                            "sortBy": {"column": "name", "order": "asc"}
+                        }
+                    )
 
-                if not result:
-                    return all_files
-
-                all_files.extend(result)
-
-                # 检查是否有更多（通过数量判断是否可能还有）
-                # Supabase 默认 limit 是 100，如果返回 100 可能有更多
-                while len(result) == 100:
-                    # 获取最后一条作为 offset
-                    last_item = result[-1]
-                    # 使用 prefix 和 limit/offset 参数获取更多
-                    # 注意：Supabase Python 客户端可能不支持 offset，需要检查版本
-                    # 这里使用 name 作为偏移
-                    last_name = last_item.get('name', '')
-                    logger.info(f"检测到分页，最后一条: {last_name}，尝试获取更多...")
-
-                    # 尝试列出更多（某些版本支持 limit/offset）
-                    try:
-                        # 尝试使用不同的参数获取下一页
-                        next_result = supabase_client.storage.from_(bucket).list(
-                            path,
-                            {"limit": 100, "offset": len(all_files)}
-                        )
-                        if next_result and len(next_result) > 0:
-                            result = next_result
-                            all_files.extend(result)
-                        else:
-                            break
-                    except Exception as e:
-                        logger.warning(f"分页获取失败: {e}，当前已获取 {len(all_files)} 条")
+                    if not result:
                         break
 
-                logger.info(f"路径 '{path}' 总共列出 {len(all_files)} 项")
-                return all_files
+                    all_files.extend(result)
 
-            except Exception as e:
-                logger.warning(f"列出 '{path}' 失败: {e}")
-                return []
+                    # 如果返回数量小于 limit，说明已经取完
+                    if len(result) < limit:
+                        break
+
+                    offset += limit
+                    logger.info(f"分页获取: path='{path}', offset={offset}, 已获取 {len(all_files)} 条")
+
+                except Exception as e:
+                    logger.warning(f"列出 '{path}' 失败: {e}")
+                    break
+
+            logger.info(f"路径 '{path}' 总共列出 {len(all_files)} 项")
+            return all_files
 
         # 判断是否是文件夹
         def is_folder(item: dict) -> bool:
@@ -1622,3 +1614,345 @@ names: {class_list}
         if 'temp_dir' in locals() and os.path.exists(temp_dir):
             shutil.rmtree(temp_dir, ignore_errors=True)
         raise HTTPException(status_code=500, detail=f"合并失败: {str(e)}")
+
+
+# ===== 在 dataset_routes.py 文件末尾添加以下内容 =====
+
+import asyncio
+from fastapi import WebSocket
+from app.core.ws_manager import progress_ws_manager
+
+# 独立缓存目录
+CACHE_DIR = Path("./cache/datasets")
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+class DatasetCacheManager:
+    """数据集缓存管理器：负责临时下载和清理"""
+
+    def __init__(self):
+        self.cache_dir = CACHE_DIR
+        self.active_downloads: Dict[str, dict] = {}  # 跟踪下载进度
+
+    def get_cache_path(self, dataset_id: str) -> Path:
+        """获取缓存路径"""
+        return self.cache_dir / dataset_id
+
+    def is_cached(self, dataset_id: str) -> bool:
+        """检查是否已缓存"""
+        cache_path = self.get_cache_path(dataset_id)
+        yaml_file = cache_path / "data.yaml"
+        return cache_path.exists() and yaml_file.exists()
+
+    async def download_with_progress(
+            self,
+            dataset_id: str,
+            storage_path: str,
+            bucket: str = "datasets",
+            username: str = None
+    ) -> Path:
+        """
+        带进度跟踪的下载
+        """
+        cache_path = self.get_cache_path(dataset_id)
+        cache_path.mkdir(parents=True, exist_ok=True)
+
+        self.active_downloads[dataset_id] = {
+            "status": "downloading",
+            "percent": 0,
+            "message": "开始下载...",
+            "detail": ""
+        }
+
+        try:
+            supabase_client = get_supabase_client()
+
+            # 1. 获取文件信息
+            self.active_downloads[dataset_id]["message"] = "获取文件信息..."
+            self.active_downloads[dataset_id]["percent"] = 5
+
+            # 2. 下载 ZIP 到临时文件
+            temp_zip = cache_path / "dataset.zip"
+            self.active_downloads[dataset_id]["message"] = "下载数据集文件..."
+            self.active_downloads[dataset_id]["percent"] = 10
+
+            # 使用流式下载
+            response = supabase_client.storage.from_(bucket).download(storage_path)
+
+            if isinstance(response, bytes):
+                total_size = len(response)
+                # 模拟进度（因为 Supabase Python 客户端不支持流式进度回调）
+                chunk_size = max(1, total_size // 10)
+                downloaded = 0
+
+                with open(temp_zip, "wb") as f:
+                    for i in range(0, total_size, chunk_size):
+                        chunk = response[i:i + chunk_size]
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        percent = 10 + int((downloaded / total_size) * 40)  # 10-50%
+                        self.active_downloads[dataset_id]["percent"] = percent
+                        self.active_downloads[dataset_id][
+                            "detail"] = f"{format_file_size(downloaded)} / {format_file_size(total_size)}"
+
+                        # 发送 WebSocket 进度
+                        if username:
+                            await progress_ws_manager.emit_to_users(
+                                [username],
+                                {
+                                    "type": "DATASET_DOWNLOAD_PROGRESS",
+                                    "dataset_id": dataset_id,
+                                    "percent": percent,
+                                    "message": self.active_downloads[dataset_id]["message"],
+                                    "detail": self.active_downloads[dataset_id]["detail"]
+                                }
+                            )
+                        await asyncio.sleep(0.05)  # 模拟网络延迟，让前端看到动画
+
+            # 3. 解压
+            self.active_downloads[dataset_id]["message"] = "解压数据集..."
+            self.active_downloads[dataset_id]["percent"] = 55
+
+            with zipfile.ZipFile(temp_zip, 'r') as zip_ref:
+                zip_ref.extractall(cache_path)
+
+            # 4. 查找数据集根目录
+            self.active_downloads[dataset_id]["message"] = "查找数据集结构..."
+            self.active_downloads[dataset_id]["percent"] = 70
+
+            dataset_root = find_dataset_root(str(cache_path))
+            if dataset_root and dataset_root != str(cache_path):
+                # 如果解压到了子目录，移动文件到根目录
+                for item in os.listdir(dataset_root):
+                    shutil.move(os.path.join(dataset_root, item), str(cache_path))
+
+            # 5. 验证结构
+            self.active_downloads[dataset_id]["message"] = "验证数据集结构..."
+            self.active_downloads[dataset_id]["percent"] = 85
+
+            train_images = cache_path / "train" / "images"
+            val_images = cache_path / "val" / "images"
+
+            if not train_images.exists() or not val_images.exists():
+                raise Exception("数据集结构不完整，缺少 train/images 或 val/images")
+
+            # 6. 生成 data.yaml
+            self.active_downloads[dataset_id]["message"] = "生成配置文件..."
+            self.active_downloads[dataset_id]["percent"] = 95
+
+            classes_file = cache_path / "classes.txt"
+            if classes_file.exists():
+                with open(classes_file, 'r') as f:
+                    names = [l.strip() for l in f if l.strip()]
+            else:
+                # 从 labels 推断
+                labels_dir = cache_path / "train" / "labels"
+                class_ids = set()
+                if labels_dir.exists():
+                    for f in labels_dir.glob("*.txt"):
+                        with open(f) as file:
+                            for line in file:
+                                parts = line.strip().split()
+                                if parts:
+                                    class_ids.add(int(parts[0]))
+                names = [f"class_{i}" for i in sorted(class_ids)] if class_ids else ["object"]
+
+            yaml_content = f"""path: {cache_path.absolute()}
+train: train/images
+val: val/images
+nc: {len(names)}
+names: {names}
+"""
+            yaml_path = cache_path / "data.yaml"
+            with open(yaml_path, "w") as f:
+                f.write(yaml_content)
+
+            # 7. 清理 ZIP 文件
+            if temp_zip.exists():
+                temp_zip.unlink()
+
+            self.active_downloads[dataset_id]["status"] = "completed"
+            self.active_downloads[dataset_id]["percent"] = 100
+            self.active_downloads[dataset_id]["message"] = "下载完成"
+
+            # 发送完成通知
+            if username:
+                await progress_ws_manager.emit_to_users(
+                    [username],
+                    {
+                        "type": "DATASET_DOWNLOAD_PROGRESS",
+                        "dataset_id": dataset_id,
+                        "percent": 100,
+                        "message": "下载完成",
+                        "detail": f"缓存路径: {cache_path}",
+                        "status": "completed"
+                    }
+                )
+
+            return cache_path
+
+        except Exception as e:
+            self.active_downloads[dataset_id]["status"] = "error"
+            self.active_downloads[dataset_id]["message"] = f"下载失败: {str(e)}"
+
+            # 清理失败的缓存
+            if cache_path.exists():
+                shutil.rmtree(cache_path, ignore_errors=True)
+
+            if username:
+                await progress_ws_manager.emit_to_users(
+                    [username],
+                    {
+                        "type": "DATASET_DOWNLOAD_PROGRESS",
+                        "dataset_id": dataset_id,
+                        "percent": 0,
+                        "message": "下载失败",
+                        "detail": str(e),
+                        "status": "error"
+                    }
+                )
+
+            raise
+
+    def get_progress(self, dataset_id: str) -> dict:
+        """获取下载进度"""
+        return self.active_downloads.get(dataset_id, {
+            "status": "unknown",
+            "percent": 0,
+            "message": "未开始下载"
+        })
+
+    def cleanup(self, dataset_id: str = None):
+        """清理缓存"""
+        if dataset_id:
+            cache_path = self.get_cache_path(dataset_id)
+            if cache_path.exists():
+                shutil.rmtree(cache_path, ignore_errors=True)
+            self.active_downloads.pop(dataset_id, None)
+        else:
+            # 清理所有缓存（谨慎使用）
+            if self.cache_dir.exists():
+                shutil.rmtree(self.cache_dir, ignore_errors=True)
+                self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+
+# 全局缓存管理器
+dataset_cache_manager = DatasetCacheManager()
+
+
+# ===== 新 API 路由 =====
+
+@router.get("/cache-status/{dataset_id}")
+async def get_cache_status(dataset_id: str):
+    """获取数据集缓存状态"""
+    is_cached = dataset_cache_manager.is_cached(dataset_id)
+    progress = dataset_cache_manager.get_progress(dataset_id)
+
+    return {
+        "dataset_id": dataset_id,
+        "cached": is_cached,
+        "cache_path": str(dataset_cache_manager.get_cache_path(dataset_id)) if is_cached else None,
+        "progress": progress
+    }
+
+
+@router.post("/prepare-for-training/{project_id}")
+async def prepare_dataset_for_training(
+        project_id: str,
+        background_tasks: BackgroundTasks,
+        authorization: str = Header(default=None)
+):
+    """
+    准备训练：临时下载数据集到缓存目录
+    前端点击"开始训练"时调用
+    """
+    try:
+        # 1. 获取当前用户
+        from app.core.auth_utils import _resolve_user_id_from_token
+        from app.db.session import SessionLocal
+        from app.models import User
+
+        username = None
+        if authorization:
+            user_id = _resolve_user_id_from_token(authorization)
+            if user_id:
+                db = SessionLocal()
+                try:
+                    user = db.query(User).filter(User.id == user_id).first()
+                    if user:
+                        username = user.username
+                finally:
+                    db.close()
+
+        # 2. 查询数据集信息（只查元数据，不下载）
+        response = supabase.table("datasets") \
+            .select("*") \
+            .eq("project_id", project_id) \
+            .eq("status", "ready") \
+            .order("created_at", desc=True) \
+            .limit(1) \
+            .execute()
+
+        if not response.data:
+            raise HTTPException(404, detail="未找到就绪的数据集")
+
+        dataset = response.data[0]
+        dataset_id = dataset["dataset_id"]
+        storage_path = dataset["storage_path"]
+        bucket = dataset.get("bucket", "datasets")
+
+        # 3. 检查是否已缓存
+        if dataset_cache_manager.is_cached(dataset_id):
+            cache_path = dataset_cache_manager.get_cache_path(dataset_id)
+            return {
+                "success": True,
+                "dataset_id": dataset_id,
+                "cached": True,
+                "cache_path": str(cache_path),
+                "message": "数据集已缓存，可直接开始训练"
+            }
+
+        # 4. 开始下载（后台任务）
+        async def download_task():
+            try:
+                await dataset_cache_manager.download_with_progress(
+                    dataset_id=dataset_id,
+                    storage_path=storage_path,
+                    bucket=bucket,
+                    username=username
+                )
+            except Exception as e:
+                logger.error(f"数据集下载失败: {e}")
+
+        # 立即启动下载
+        asyncio.create_task(download_task())
+
+        return {
+            "success": True,
+            "dataset_id": dataset_id,
+            "cached": False,
+            "message": "开始下载数据集到缓存...",
+            "progress": dataset_cache_manager.get_progress(dataset_id)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"准备训练失败: {e}")
+        raise HTTPException(500, detail=str(e))
+
+
+@router.post("/cleanup-cache/{dataset_id}")
+async def cleanup_dataset_cache(dataset_id: str):
+    """清理数据集缓存"""
+    dataset_cache_manager.cleanup(dataset_id)
+    return {
+        "success": True,
+        "message": f"已清理数据集 {dataset_id} 的缓存"
+    }
+
+
+@router.get("/download-progress/{dataset_id}")
+async def get_download_progress(dataset_id: str):
+    """获取下载进度（轮询用）"""
+    return dataset_cache_manager.get_progress(dataset_id)

@@ -1,0 +1,39 @@
+:root {
+  /* 主色调 - 紫色系 */
+  --primary-purple: #667eea;
+  --secondary-purple: #764ba2;
+  
+  /* 粉色系 */
+  --primary-pink: #f093fb;
+  --secondary-pink: #f5576c;
+  
+  /* 蓝色系（辅助） */
+  --primary-blue: #4facfe;
+  --secondary-blue: #00f2fe;
+  
+  /* 常用渐变组合 */
+  --gradient-purple: linear-gradient(135deg, var(--primary-purple) 0%, var(--secondary-purple) 100%);
+  --gradient-pink: linear-gradient(135deg, var(--primary-pink) 0%, var(--secondary-pink) 100%);
+  --gradient-blue: linear-gradient(135deg, var(--primary-blue) 0%, var(--secondary-blue) 100%);
+  --gradient-mixed: linear-gradient(135deg, var(--primary-purple) 0%, var(--secondary-pink) 100%);
+  
+  /* 背景色 */
+  --bg-primary: #fafbfc;
+  --bg-secondary: #f0f4f8;
+  --bg-white: #ffffff;
+  
+  /* 文字色 */
+  --text-primary: #1a202c;
+  --text-secondary: #4a5568;
+  --text-muted: #718096;
+  
+  /* 玻璃拟态效果 */
+  --glass-bg: rgba(255, 255, 255, 0.7);
+  --glass-border: rgba(255, 255, 255, 0.8);
+  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
+  
+  /* 阴影 */
+  --shadow-sm: 0 4px 20px rgba(102, 126, 234, 0.15);
+  --shadow-md: 0 12px 40px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.1);
+}
