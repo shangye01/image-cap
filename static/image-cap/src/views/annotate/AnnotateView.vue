@@ -1396,7 +1396,7 @@ const handleCustomSubmit = async () => {
 
   try {
     const submitResult = await submitAnnotations()
-    if (submitResult === false) {
+    if (!submitResult) {
       throw new Error('标注提交失败')
     }
 

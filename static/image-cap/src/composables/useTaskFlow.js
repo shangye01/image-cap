@@ -16,6 +16,43 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
   const taskError = ref('')
   const taskSuccess = ref('')
 
+  const validateAnnotationsBeforeSubmit = () => {
+    const anns = store.annotations || []
+    if (!anns.length) {
+      return 'Please add annotations first'
+    }
+
+    const imageWidth = Number(imageObj.value?.width || 0)
+    const imageHeight = Number(imageObj.value?.height || 0)
+
+    for (const ann of anns) {
+      const label = String(ann?.label || '').trim()
+      if (!label) {
+        return '存在未设置标签的标注'
+      }
+
+      const x = Number(ann?.x)
+      const y = Number(ann?.y)
+      const width = Number(ann?.width)
+      const height = Number(ann?.height)
+
+      const hasInvalidNumber = [x, y, width, height].some((value) => !Number.isFinite(value))
+      if (hasInvalidNumber || width <= 0 || height <= 0 || x < 0 || y < 0) {
+        return '存在异常标注框坐标'
+      }
+
+      if (
+        imageWidth > 0 &&
+        imageHeight > 0 &&
+        (x + width > imageWidth || y + height > imageHeight)
+      ) {
+        return '存在超出图像范围的标注框'
+      }
+    }
+
+    return ''
+  }
+
   const loadTaskImage = async (task) => {
     return await new Promise((resolve, reject) => {
       const img = new Image()
@@ -232,9 +269,10 @@ export function useTaskFlow(store, imageObj, labelColorMap) {
       return
     }
 
-    if (store.annotations.length === 0) {
-      taskError.value = 'Please add annotations first'
-      return
+    const validationError = validateAnnotationsBeforeSubmit()
+    if (validationError) {
+      taskError.value = validationError
+      throw new Error(validationError)
     }
 
     submitLoading.value = true

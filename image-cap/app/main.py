@@ -23,6 +23,9 @@ from urllib.parse import quote
 import numpy as np
 import urllib.request
 import torch
+import hashlib
+from redis import Redis
+
 from pydantic import BaseModel
 from typing import Optional
 from PIL import Image
@@ -32,21 +35,24 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse
 from sqlalchemy.orm import Session
-
+from app.core.dataset_manager import dataset_manager
 from .api import auth
 from .api import performance
 from .api import project_storage
 from .api import collaboration
 from .db.base import init_db
-
+from app.core.dataset_manager import dataset_manager, DatasetManager, DatasetInfo
 from .config import supabase, SUPABASE_URL, TRAINING_CONFIG
-
+# 在 main.py 顶部添加
+from app.core.auth_utils import _resolve_user_id_from_token, _resolve_ws_username
 from app.schemas.project_storage import AnnotationSessionCreate, AnnotationSessionResponse, AnnotationSessionTask
 from app.models import ProjectFile, Project
 from sqlalchemy.orm import Session
 from app.db.session import get_db
+from app.api.dataset_routes import get_supabase_client, dataset_cache_manager
 from app.api.project_storage import router as project_router
 import uuid
+from app.core.ws_manager import progress_ws_manager
 from datetime import datetime
 import logging
 from fastapi.concurrency import run_in_threadpool
@@ -81,53 +87,60 @@ print("PROJECT_STORAGE FILE:", project_storage.__file__)
 
 class ModelSwitchRequest(BaseModel):
     name: str
-class ProgressConnectionManager:
-    """按用户名维度维护 websocket 连接，推送项目进度变化。"""
-
-    def __init__(self) -> None:
-        self._connections: dict[str, set[WebSocket]] = {}
-        self._lock = threading.Lock()
-
-    async def connect(self, username: str, websocket: WebSocket) -> None:
-        # 不再 accept，假设外面已经 accept 过了
-        with self._lock:
-            self._connections.setdefault(username, set()).add(websocket)
-
-    def disconnect(self, username: str, websocket: WebSocket) -> None:
-        with self._lock:
-            sockets = self._connections.get(username)
-            if not sockets:
-                return
-            sockets.discard(websocket)
-            if not sockets:
-                self._connections.pop(username, None)
-
-    async def emit_to_users(self, usernames: list[str], payload: dict[str, Any]) -> None:
-        targets: list[WebSocket] = []
-        with self._lock:
-            for username in set(usernames):
-                targets.extend(list(self._connections.get(username, set())))
-
-        dead_connections: list[tuple[str, WebSocket]] = []
-        for websocket in targets:
-            try:
-                await websocket.send_json(payload)
-            except Exception:
-                # 记录是哪个用户的连接死了
-                dead_connections.append((payload.get("owner"), websocket))
-
-        if dead_connections:
-            with self._lock:
-                for _, ws in dead_connections:
-                    for name, sockets in list(self._connections.items()):
-                        if ws in sockets:
-                            sockets.discard(ws)
-                            if not sockets:
-                                self._connections.pop(name, None)
 
 
-progress_ws_manager = ProgressConnectionManager()
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
+try:
+    redis_client = Redis.from_url(
+        REDIS_URL,
+        decode_responses=True,
+        socket_connect_timeout=1,
+        socket_timeout=1,
+    )
+    redis_client.ping()
+    logger.info("Redis 缓存连接成功")
+except Exception as exc:
+    redis_client = None
+    logger.warning(f"Redis 不可用，将跳过缓存: {exc}")
+
+
+def _cache_get_json(key: str):
+    if not redis_client:
+        return None
+    try:
+        value = redis_client.get(key)
+        if not value:
+            return None
+        return json.loads(value)
+    except Exception as exc:
+        logger.warning(f"读取 Redis 缓存失败 | key={key} | err={exc}")
+        return None
+
+
+def _cache_set_json(key: str, value: dict, ttl: int = 300):
+    if not redis_client:
+        return
+    try:
+        redis_client.setex(key, ttl, json.dumps(value, ensure_ascii=False))
+    except Exception as exc:
+        logger.warning(f"写入 Redis 缓存失败 | key={key} | err={exc}")
+
+
+def _cache_delete_pattern(pattern: str):
+    if not redis_client:
+        return
+    try:
+        for key in redis_client.scan_iter(pattern):
+            redis_client.delete(key)
+    except Exception as exc:
+        logger.warning(f"删除 Redis 缓存失败 | pattern={pattern} | err={exc}")
+
+
+def _make_cache_key(prefix: str, *parts) -> str:
+    raw = ":".join(str(p) for p in parts)
+    digest = hashlib.md5(raw.encode("utf-8")).hexdigest()
+    return f"{prefix}:{digest}"
 
 def _load_task_annotations(task: dict[str, Any]) -> list[dict[str, Any]]:
     """统一读取任务标注（优先草稿，其次已提交标注）。"""
@@ -514,7 +527,10 @@ def _resolve_ws_username(token: str | None) -> str | None:
 @app.on_event("startup")
 def _startup() -> None:
     init_db()
-    auth.ensure_auth_resources()
+    try:
+        auth.ensure_auth_resources()
+    except Exception as exc:
+        logger.warning(f"startup skipped auth storage bootstrap: {exc}")
 
 
 @app.websocket("/api/ws/progress")
@@ -589,6 +605,9 @@ DATASET_DIR.mkdir(parents=True, exist_ok=True)
 LOCAL_UPLOADS_BASE_URL = os.getenv("PUBLIC_BACKEND_URL", "http://localhost:8000").rstrip("/")
 
 # 全局变量：存储最新训练结果
+# 数据集注册表（用于内存缓存数据集状态，避免重复查询 Storage）
+dataset_registry: dict[str, Any] = {}
+
 latest_training_result = None
 
 # ========== 颜色配置 ==========
@@ -1178,12 +1197,15 @@ class DatasetValidator:
     """数据集验证器"""
 
     @staticmethod
-    def validate() -> Tuple[bool, str, Dict]:
+    def validate(dataset_dir: Path = None) -> Tuple[bool, str, Dict]:
         """验证数据集"""
-        train_images = DATASET_DIR / "train" / "images"
-        train_labels = DATASET_DIR / "train" / "labels"
-        val_images = DATASET_DIR / "val" / "images"
-        val_labels = DATASET_DIR / "val" / "labels"
+        # 如果传入路径，使用传入路径；否则使用默认路径
+        base_dir = dataset_dir or DATASET_DIR
+
+        train_images = base_dir / "train" / "images"
+        train_labels = base_dir / "train" / "labels"
+        val_images = base_dir / "val" / "images"
+        val_labels = base_dir / "val" / "labels"
 
         errors = []
         stats = {}
@@ -1257,40 +1279,49 @@ model_manager = ModelManager()
 
 # ========== 训练相关函数 ==========
 def run_training(
-    epochs: int,
-    batch: int,
-    model_size: str,
-    use_aug: bool,
-    # 新增高级参数
-    optimizer: str = 'AdamW',
-    lr0: float = 0.001,
-    imgsz: int = 640,
-    patience: int = 20,
-    weight_decay: float = 0.0005,
-    dropout: float = 0.0,
-    label_smoothing: float = 0.0,
-    freeze: int = 0,
-    warmup_epochs: int = 3,
-    # 数据增强参数
-    mosaic: float = 1.0,
-    mixup: float = 0.1,
-    copy_paste: float = 0.0,
-    degrees: float = 15.0,
-    scale: float = 0.5,
-    shear: float = 5.0
+        project_id: str,
+        dataset_id: str,
+        epochs: int,
+        batch: int,
+        model_size: str,
+        use_aug: bool,
+        optimizer: str = 'AdamW',
+        lr0: float = 0.001,
+        imgsz: int = 640,
+        patience: int = 20,
+        weight_decay: float = 0.0005,
+        dropout: float = 0.0,
+        label_smoothing: float = 0.0,
+        freeze: int = 0,
+        warmup_epochs: int = 3,
+        mosaic: float = 1.0,
+        mixup: float = 0.1,
+        copy_paste: float = 0.0,
+        degrees: float = 15.0,
+        scale: float = 0.5,
+        shear: float = 5.0
 ):
-    """执行训练（后台任务）- 支持高级训练参数"""
+    """执行训练（后台任务）"""
     global latest_training_result
     start_time = time.time()
 
+    # 获取数据集路径
+    cache_path = dataset_manager.get_cache_path(dataset_id)
+
+    if not cache_path or not cache_path.exists():
+        logger.error(f"数据集缓存不存在: {dataset_id}")
+        latest_training_result = None
+        return
+
     try:
         logger.info("=" * 60)
-        logger.info(f"🚀 开始训练 | 轮数: {epochs} | 批次: {batch} | 图片尺寸: {imgsz}")
+        logger.info(f"🚀 开始训练 | 数据集: {dataset_id} | 轮数: {epochs} | 批次: {batch} | 图片尺寸: {imgsz}")
         logger.info(f"⚙️  优化器: {optimizer} | 学习率: {lr0} | 冻结层: {freeze}")
-        logger.info(f"🎨 数据增强: Mosaic={mosaic}, MixUp={mixup}, Copy-Paste={copy_paste}")
+        logger.info(f"📁 数据集路径: {cache_path}")
 
-        yaml_path = prepare_yaml()
-        train_count = len(list((DATASET_DIR / "train" / "images").glob("*")))
+        # 使用数据集目录生成 yaml
+        yaml_path = prepare_yaml(cache_path)
+        train_count = len(list((cache_path / "train" / "images").glob("*")))
 
         base_model = find_latest_custom_model() or ModelManager.MODEL_SIZES.get(model_size, 'yolov8n.pt')
 
@@ -1316,27 +1347,22 @@ def run_training(
             "patience": patience,
             "save": True,
             "amp": True,
-            # 优化器和学习率
             "optimizer": optimizer,
             "lr0": lr0,
-            "lrf": 0.01,  # 最终学习率 = lr0 * lrf
+            "lrf": 0.01,
             "momentum": 0.937,
             "weight_decay": weight_decay,
             "warmup_epochs": warmup_epochs,
-            # 正则化
             "dropout": dropout,
             "label_smoothing": label_smoothing,
         }
 
-        # 冻结层数
         if freeze > 0:
             args["freeze"] = freeze
             logger.info(f"🧊 冻结前 {freeze} 层网络")
 
-        # 数据增强配置
         if use_aug:
             args.update({
-                # 基础增强
                 "degrees": degrees,
                 "translate": 0.1,
                 "scale": scale,
@@ -1346,26 +1372,23 @@ def run_training(
                 "hsv_h": 0.015,
                 "hsv_s": 0.7,
                 "hsv_v": 0.4,
-                # 高级混合增强
                 "mosaic": mosaic,
                 "mixup": mixup,
                 "copy_paste": copy_paste,
             })
-            logger.info(f"✅ 启用数据增强: 旋转{degrees}°, 缩放{scale}, 剪切{shear}")
 
-        # 数据量少的特殊处理：两阶段训练
+        # 数据量少的特殊处理
         if train_count < 200 and epochs > 20 and base_model.endswith('.pt') and 'custom' not in base_model:
             if freeze == 0:
                 logger.info("🔒 阶段1: 冻结主干网络预热...")
                 model.train(**{**args, "epochs": min(10, epochs // 5), "freeze": 10, "lr0": lr0 * 0.5})
                 logger.info("🔓 解冻继续训练...")
-                # 移除 freeze 参数，使用完整配置
                 args.pop("freeze", None)
 
         # 执行主训练
         results = model.train(**args)
 
-        # 保存模型
+        # 保存模型（与之前相同）
         best_pt = Path(f"runs/train/{version}/weights/best.pt")
         if not best_pt.exists():
             raise FileNotFoundError("未找到训练好的模型文件")
@@ -1374,15 +1397,12 @@ def run_training(
         shutil.copy(best_pt, target)
         logger.info(f"✅ 模型已保存到本地: {target}")
 
-        # 更新 best.pt 链接
         best_link = MODEL_DIR / "best.pt"
         shutil.copy(best_pt, best_link)
         logger.info(f"✅ 已更新 best.pt")
 
-        # 保存训练信息
         save_training_info(version, target, results, base_model)
 
-        # 提取指标
         metrics = {
             "map50": float(results.results_dict.get('metrics/mAP50(B)', 0)),
             "map75": float(results.results_dict.get('metrics/mAP75(B)', 0)),
@@ -1398,6 +1418,7 @@ def run_training(
             db_result = supabase.table("model_versions").insert({
                 "version_name": version,
                 "training_data_count": train_count,
+                "dataset_id": dataset_id,
                 "model_size": model_size,
                 "imgsz": imgsz,
                 "optimizer": optimizer,
@@ -1418,7 +1439,6 @@ def run_training(
             logger.warning(f"数据库更新失败: {db_err}")
             db_id = None
 
-        # 切换当前模型
         model_manager.switch(str(target), version)
 
         training_duration = (time.time() - start_time) / 3600
@@ -1426,6 +1446,7 @@ def run_training(
         latest_training_result = {
             "id": db_id,
             "version_name": version,
+            "dataset_id": dataset_id,
             "local_path": str(target.absolute()),
             "metrics": metrics,
             "uploaded": False,
@@ -1532,13 +1553,14 @@ def save_training_info(version, model_path, results, base_model):
     logger.info(f"✅ 训练信息已保存: {info_file}")
 
 
-def prepare_yaml():
+def prepare_yaml(dataset_dir: Path = None) -> str:
     """生成data.yaml"""
-    base = DATASET_DIR.absolute()
+    base = (dataset_dir or DATASET_DIR).absolute()
 
     classes_file = base / "classes.txt"
     if classes_file.exists():
-        names = [l.strip() for l in open(classes_file) if l.strip()]
+        with open(classes_file, 'r') as f:
+            names = [l.strip() for l in f if l.strip()]
     else:
         labels_dir = base / "train" / "labels"
         class_ids = set()
@@ -3310,51 +3332,64 @@ async def training_status():
 
 @app.post("/api/training/start")
 async def start_training(
-    epochs: int = Query(default=100, ge=10, le=500),
-    batch: int = Query(default=16, ge=1, le=64),
-    model_size: str = Query(default="auto", pattern="^(auto|n|s|m|l|x)$"),
-    augmentation: bool = Query(default=True),
-    # 新增高级参数
-    optimizer: str = Query(default="AdamW", pattern="^(AdamW|Adam|SGD)$"),
-    lr0: float = Query(default=0.001, ge=0.0001, le=0.01),
-    imgsz: int = Query(default=640, ge=640, le=1280),
-    patience: int = Query(default=20, ge=10, le=50),
-    weight_decay: float = Query(default=0.0005, ge=0, le=0.001),
-    dropout: float = Query(default=0.0, ge=0, le=0.5),
-    label_smoothing: float = Query(default=0.0, ge=0, le=0.1),
-    freeze: int = Query(default=0, ge=0, le=24),
-    warmup_epochs: int = Query(default=3, ge=0, le=10),
-    # 数据增强参数
-    mosaic: float = Query(default=1.0, ge=0, le=1.0),
-    mixup: float = Query(default=0.1, ge=0, le=1.0),
-    copy_paste: float = Query(default=0.0, ge=0, le=1.0),
-    degrees: float = Query(default=15.0, ge=0, le=45),
-    scale: float = Query(default=0.5, ge=0, le=1.0),
-    shear: float = Query(default=5.0, ge=0, le=20),
-    background_tasks: BackgroundTasks = None
+        background_tasks: BackgroundTasks,
+        dataset_id: str = Query(default=None, description="指定数据集ID，不指定则使用活动数据集"),
+        epochs: int = Query(default=50, ge=1, le=500, description="训练轮数"),
+        batch: int = Query(default=16, ge=1, le=128, description="批次大小"),
+        model_size: str = Query(default='n', regex='^[nsmlx]$', description="模型大小: n/s/m/l/x"),
+        use_aug: bool = Query(default=True, description="是否使用数据增强"),
+        optimizer: str = Query(default='AdamW', description="优化器"),
+        lr0: float = Query(default=0.001, ge=0.0001, le=0.1, description="初始学习率"),
+        imgsz: int = Query(default=640, ge=320, le=1280, description="输入图片尺寸"),
+        patience: int = Query(default=20, ge=5, le=100, description="早停耐心值"),
+        weight_decay: float = Query(default=0.0005, ge=0.0, le=0.01, description="权重衰减"),
+        dropout: float = Query(default=0.0, ge=0.0, le=0.5, description="Dropout比率"),
+        label_smoothing: float = Query(default=0.0, ge=0.0, le=0.1, description="标签平滑"),
+        freeze: int = Query(default=0, ge=0, le=24, description="冻结层数"),
+        warmup_epochs: int = Query(default=3, ge=0, le=10, description="预热轮数"),
+        mosaic: float = Query(default=1.0, ge=0.0, le=1.0, description="Mosaic增强概率"),
+        mixup: float = Query(default=0.1, ge=0.0, le=1.0, description="MixUp增强概率"),
+        copy_paste: float = Query(default=0.0, ge=0.0, le=1.0, description="CopyPaste增强概率"),
+        degrees: float = Query(default=15.0, ge=0.0, le=90.0, description="旋转角度"),
+        scale: float = Query(default=0.5, ge=0.0, le=1.0, description="缩放比例"),
+        shear: float = Query(default=5.0, ge=0.0, le=20.0, description="剪切角度"),
 ):
-    """启动训练 - 支持完整高级参数"""
+    """启动训练"""
     try:
-        is_valid, msg, details = DatasetValidator.validate()
-        if not is_valid:
-            raise HTTPException(400, detail=f"数据集未准备好: {msg}")
+        target_dataset_id = dataset_id or dataset_manager.active_dataset_id or "default"
 
-        train_count = details["stats"]["train"]
+        # 处理基础数据集：从 Storage 下载到本地
+        if target_dataset_id == "default":
+            cache_path = await _download_base_dataset_to_cache()
+            if not cache_path:
+                raise HTTPException(400, detail="基础数据集下载失败")
 
-        if model_size == "auto":
-            model_size = model_manager.select_size(train_count)
+            # 验证下载的数据集
+            is_valid, msg, details = DatasetValidator.validate(cache_path)
+            if not is_valid:
+                raise HTTPException(400, detail=f"数据集未准备好: {msg}")
 
-        # 记录完整配置
-        logger.info(f"训练配置: epochs={epochs}, batch={batch}, imgsz={imgsz}, optimizer={optimizer}, lr0={lr0}")
-        logger.info(f"增强配置: mosaic={mosaic}, mixup={mixup}, copy_paste={copy_paste}, degrees={degrees}")
+            train_count = details["stats"]["train"]
+            # ... 继续训练逻辑
 
+        else:
+            # 原有逻辑...
+            if not dataset_manager.is_cached(target_dataset_id):
+                path = dataset_manager.get_dataset_path(target_dataset_id)
+                if not path:
+                    raise HTTPException(400, detail=f"数据集 {target_dataset_id} 不存在")
+            cache_path = dataset_manager.get_cache_path(target_dataset_id)
+            # ... 原有验证和训练逻辑
+
+        # 启动训练任务
         background_tasks.add_task(
             run_training,
+            project_id=target_dataset_id,
+            dataset_id=target_dataset_id,
             epochs=epochs,
             batch=batch,
             model_size=model_size,
-            use_aug=augmentation,
-            # 高级参数
+            use_aug=use_aug,
             optimizer=optimizer,
             lr0=lr0,
             imgsz=imgsz,
@@ -3364,34 +3399,107 @@ async def start_training(
             label_smoothing=label_smoothing,
             freeze=freeze,
             warmup_epochs=warmup_epochs,
-            # 增强参数
             mosaic=mosaic,
             mixup=mixup,
             copy_paste=copy_paste,
             degrees=degrees,
             scale=scale,
-            shear=shear
+            shear=shear,
         )
-
-        return {
-            "success": True,
-            "message": "训练已启动",
-            "config": {
-                "epochs": epochs,
-                "batch": batch,
-                "model_size": model_size,
-                "imgsz": imgsz,
-                "optimizer": optimizer,
-                "lr0": lr0,
-                "augmentation": augmentation
-            }
-        }
 
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(500, detail=str(e))
 
+
+async def _download_base_dataset_to_cache() -> Path | None:
+    """将基础数据集从 Storage 下载到本地缓存"""
+    cache_dir = Path("./cache/datasets/default")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # 检查是否已缓存
+    if (cache_dir / "data.yaml").exists():
+        train_dir = cache_dir / "train" / "images"
+        if train_dir.exists() and len(list(train_dir.glob("*"))) > 0:
+            logger.info("基础数据集已缓存")
+            return cache_dir
+
+    try:
+        supabase_client = get_supabase_client()
+        bucket = "datasets"
+
+        # 下载 classes.txt, data.yaml
+        for filename in ["classes.txt", "data.yaml"]:
+            try:
+                data = supabase_client.storage.from_(bucket).download(filename)
+                if data:
+                    with open(cache_dir / filename, "wb") as f:
+                        f.write(data if isinstance(data, bytes) else data.encode())
+            except Exception as e:
+                logger.warning(f"下载 {filename} 失败: {e}")
+
+        # 下载 train/images 和 train/labels
+        await _download_folder_from_storage(supabase_client, bucket, "train/images", cache_dir / "train" / "images")
+        await _download_folder_from_storage(supabase_client, bucket, "train/labels", cache_dir / "train" / "labels")
+
+        # 下载 val/images 和 val/labels
+        await _download_folder_from_storage(supabase_client, bucket, "val/images", cache_dir / "val" / "images")
+        await _download_folder_from_storage(supabase_client, bucket, "val/labels", cache_dir / "val" / "labels")
+
+        # 生成 data.yaml（如果没有）
+        if not (cache_dir / "data.yaml").exists():
+            classes_file = cache_dir / "classes.txt"
+            if classes_file.exists():
+                with open(classes_file) as f:
+                    names = [l.strip() for l in f if l.strip()]
+            else:
+                names = ["object"]
+
+            yaml_content = f"""path: {cache_dir.absolute()}
+train: train/images
+val: val/images
+nc: {len(names)}
+names: {names}
+"""
+            with open(cache_dir / "data.yaml", "w") as f:
+                f.write(yaml_content)
+
+        logger.info(f"基础数据集下载完成: {cache_dir}")
+        return cache_dir
+
+    except Exception as e:
+        logger.error(f"下载基础数据集失败: {e}")
+        return None
+
+
+async def _download_folder_from_storage(client, bucket: str, remote_path: str, local_path: Path):
+    """从 Storage 下载整个文件夹"""
+    local_path.mkdir(parents=True, exist_ok=True)
+
+    try:
+        files = client.storage.from_(bucket).list(remote_path)
+        if not files:
+            return
+
+        for file_info in files:
+            filename = file_info.get('name')
+            if not filename:
+                continue
+
+            remote_file_path = f"{remote_path}/{filename}"
+            local_file_path = local_path / filename
+
+            try:
+                data = client.storage.from_(bucket).download(remote_file_path)
+                if data:
+                    with open(local_file_path, "wb") as f:
+                        f.write(data if isinstance(data, bytes) else data.encode())
+            except Exception as e:
+                logger.warning(f"下载文件 {remote_file_path} 失败: {e}")
+
+    except Exception as e:
+        logger.warning(f"列出文件夹 {remote_path} 失败: {e}")
 
 @app.post("/api/models/upload")
 async def upload_model_to_cloud():
@@ -3811,7 +3919,708 @@ async def upload_specific_model(model_name: str):
         raise HTTPException(500, detail=f"上传失败: {str(e)}")
 
 
+# ========== 数据集管理 API ==========
 
+
+def _count_storage_images_exact(
+        supabase_client: Any,
+        bucket: str,
+        folder_path: str,
+        page_size: int = 100,
+) -> int:
+    total_count = 0
+    offset = 0
+    image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.webp', '.gif', '.tiff', '.tif'}
+
+    while True:
+        items = supabase_client.storage.from_(bucket).list(
+            folder_path,
+            {
+                "limit": page_size,
+                "offset": offset,
+                "sortBy": {"column": "name", "order": "asc"},
+            },
+        )
+        if not items:
+            break
+
+        for item in items:
+            name = str(item.get("name", "")).lower()
+            if any(name.endswith(ext) for ext in image_extensions):
+                total_count += 1
+
+        if len(items) < page_size:
+            break
+        offset += page_size
+
+    return total_count
+
+
+def _read_storage_classes(supabase_client: Any, bucket: str, path: str) -> list[str]:
+
+    try:
+        file_response = supabase_client.storage.from_(bucket).download(path)
+        if not file_response:
+            return []
+        content = file_response.decode("utf-8") if isinstance(file_response, bytes) else file_response
+        return [line.strip() for line in content.splitlines() if line.strip()]
+    except Exception as exc:
+        logger.warning(f"read storage classes failed | path={path} | err={exc}")
+        return []
+
+
+async def _get_storage_dataset_status(
+        dataset_id: str,
+        storage_prefix: str,
+        dataset_name: str,
+) -> dict[str, Any]:
+    """
+    从 Supabase Storage 获取数据集状态。
+    已加 Redis 缓存，避免每次打开训练页面都重复 list Storage 文件。
+    """
+    bucket = "datasets"
+    normalized_prefix = storage_prefix.strip("/")
+
+    cache_key = f"dataset:storage-status:{dataset_id}:{normalized_prefix or 'root'}"
+    cached = _cache_get_json(cache_key)
+    if cached:
+        cached["is_active"] = dataset_manager.active_dataset_id == dataset_id
+        cached["cache_hit"] = True
+        return cached
+
+    supabase_client = get_supabase_client()
+
+    train_count = _count_storage_images_exact(
+        supabase_client,
+        bucket,
+        f"{normalized_prefix}/train/images"
+    )
+    val_count = _count_storage_images_exact(
+        supabase_client,
+        bucket,
+        f"{normalized_prefix}/val/images"
+    )
+    classes = _read_storage_classes(
+        supabase_client,
+        bucket,
+        f"{normalized_prefix}/classes.txt"
+    )
+
+    total = train_count + val_count
+
+    result = {
+        "dataset_id": dataset_id,
+        "dataset_name": dataset_name,
+        "exists": total > 0,
+        "cached": False,
+        "cache_path": f"storage://{bucket}/{normalized_prefix}",
+        "stats": {
+            "train": train_count,
+            "val": val_count,
+            "total": total,
+            "classes": len(classes),
+            "class_names": classes,
+            "train_has_more": False,
+            "val_has_more": False,
+            "max_counted": total,
+        },
+        "is_active": dataset_manager.active_dataset_id == dataset_id,
+        "storage_mode": True,
+        "cache_hit": False,
+    }
+
+    # 数据集文件数量不需要秒级实时，缓存 5 分钟
+    _cache_set_json(cache_key, result, ttl=300)
+
+    return result
+
+
+def _load_cloud_zip_datasets() -> list[dict[str, Any]]:
+    try:
+        response = (
+            supabase.table("datasets")
+            .select("*")
+            .eq("status", "ready")
+            .order("created_at", desc=True)
+            .execute()
+        )
+    except Exception as exc:
+        logger.warning(f"load cloud zip datasets failed: {exc}")
+        return []
+
+    datasets: list[dict[str, Any]] = []
+    for row in response.data or []:
+        storage_path = str(row.get("storage_path") or "")
+        if not storage_path.endswith(".zip"):
+            continue
+
+        dataset_id = str(row.get("dataset_id") or "")
+        if not dataset_id:
+            continue
+
+        cache_path = dataset_cache_manager.get_cache_path(dataset_id)
+        cached = dataset_cache_manager.is_cached(dataset_id)
+        stats = row.get("stats") or {}
+        datasets.append({
+            "dataset_id": dataset_id,
+            "id": dataset_id,
+            "name": row.get("name") or dataset_id,
+            "storage_prefix": "",
+            "storage_path": storage_path,
+            "bucket": row.get("bucket") or "datasets",
+            "is_local": cached,
+            "local_path": str(cache_path) if cached else None,
+            "stats": stats,
+            "is_zip_dataset": True,
+            "is_active": dataset_manager.active_dataset_id == dataset_id,
+        })
+
+    return datasets
+
+
+@app.get("/api/datasets")
+async def list_datasets(
+    limit: int = Query(20, ge=1, le=100, description="每页数量"),
+    offset: int = Query(0, ge=0, description="偏移量"),
+    search: Optional[str] = Query(None, description="搜索关键词")
+):
+    cache_key = _make_cache_key(
+        "dataset:list",
+        limit,
+        offset,
+        search or "",
+        dataset_manager.active_dataset_id or "default"
+    )
+
+    cached = _cache_get_json(cache_key)
+    if cached:
+        cached["cache_hit"] = True
+        return cached
+
+
+    """
+    获取数据集列表，支持分页和搜索
+    解决基础数据集文件过多导致前端展示不下的问题
+    """
+    datasets = []
+
+    # 1. 从 dataset_manager 获取
+    manager_datasets = dataset_manager.list_available_datasets()
+    datasets.extend(manager_datasets)
+    datasets.extend(_load_cloud_zip_datasets())
+
+    # 2. 添加基础数据集（从 Storage 检查）- 限制只检查结构，不列出所有文件
+    try:
+        bucket = "datasets"
+
+        # 检查基础数据集是否存在（只检查关键目录，不遍历所有文件）
+        train_exists = False
+        try:
+            # 只检查 train/images 目录是否存在，不列出所有文件
+            train_list = supabase.storage.from_(bucket).list("train")
+            train_exists = any(f.get('name') == 'images' for f in train_list)
+        except Exception as e:
+            logger.debug(f"检查 train 目录失败: {e}")
+            pass
+
+        if train_exists:
+            # 只获取统计信息，不获取完整文件列表
+            base_status = await _get_base_dataset_status_from_storage()
+            datasets.insert(0, {
+                "dataset_id": "default",
+                "name": "基础数据集",
+                "path": f"storage://{bucket}/",
+                "stats": base_status["stats"],
+                "cached": True,
+                "is_active": dataset_manager.active_dataset_id == "default" or dataset_manager.active_dataset_id is None,
+                "is_base": True  # 标记为基础数据集
+            })
+    except Exception as e:
+        logger.warning(f"添加基础数据集到列表失败: {e}")
+
+    # 3. 搜索过滤
+    deduped_datasets: dict[str, dict[str, Any]] = {}
+    for dataset in datasets:
+        dataset_key = str(dataset.get("dataset_id") or dataset.get("id") or "")
+        if dataset_key:
+            deduped_datasets[dataset_key] = dataset
+    datasets = list(deduped_datasets.values())
+
+    for dataset in datasets:
+        dataset_key = str(dataset.get("dataset_id") or dataset.get("id") or "")
+        if dataset_key == "base":
+            try:
+                base_status = await _get_base_dataset_status_from_storage()
+                dataset["stats"] = base_status["stats"]
+                dataset["is_active"] = dataset_manager.active_dataset_id == "base"
+            except Exception as exc:
+                logger.warning(f"refresh base dataset stats failed: {exc}")
+
+    if search:
+        search_lower = search.lower()
+        datasets = [
+            d for d in datasets
+            if search_lower in d.get("name", "").lower()
+            or search_lower in d.get("dataset_id", "").lower()
+        ]
+
+    # 4. 分页
+    total = len(datasets)
+    paginated_datasets = datasets[offset:offset + limit]
+
+    result = {
+        "datasets": paginated_datasets,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + limit < total,
+        "active_dataset_id": dataset_manager.active_dataset_id or "default",
+        "cache_hit": False,
+    }
+
+    _cache_set_json(cache_key, result, ttl=60)
+
+    return result
+
+
+
+@app.post("/api/datasets/{dataset_id}/switch")
+async def switch_dataset(dataset_id: str):
+    """切换训练数据集"""
+    # 处理前端传来的 undefined 或空值
+    if not dataset_id or dataset_id.lower() in ("undefined", "null", "none", ""):
+        dataset_id = "default"
+        logger.info(f"数据集ID为 undefined，自动回退到 default")
+
+    # 如果是 default，确保基础数据集可用
+    if dataset_id == "default":
+        # 检查基础数据集是否存在
+        try:
+            train_list = supabase.storage.from_("datasets").list("train")
+            train_exists = any(f.get('name') == 'images' for f in train_list)
+            if not train_exists:
+                raise HTTPException(400, detail="基础数据集不存在，请检查 Storage 中的 datasets bucket")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning(f"检查基础数据集失败: {e}")
+
+    success = dataset_manager.switch_dataset(dataset_id)
+    if not success:
+        try:
+            db_dataset_result = supabase.table("datasets").select("*").eq("dataset_id", dataset_id).maybe_single().execute()
+            db_dataset = db_dataset_result.data if db_dataset_result else None
+        except Exception as db_lookup_err:
+            logger.warning(f"lookup cloud dataset failed | dataset_id={dataset_id} | err={db_lookup_err}")
+            db_dataset = None
+
+        if db_dataset and str(db_dataset.get("storage_path") or "").endswith(".zip"):
+            if not dataset_cache_manager.is_cached(dataset_id):
+                await dataset_cache_manager.download_with_progress(
+                    dataset_id=dataset_id,
+                    storage_path=db_dataset.get("storage_path"),
+                    bucket=db_dataset.get("bucket") or "datasets",
+                )
+
+            cache_path = dataset_cache_manager.get_cache_path(dataset_id)
+            if cache_path.exists():
+                info = DatasetInfo(
+                    id=dataset_id,
+                    name=db_dataset.get("name") or dataset_id,
+                    storage_prefix="",
+                    is_local=True,
+                )
+                info.local_path = cache_path
+                info.stats = db_dataset.get("stats") or {}
+                dataset_manager.datasets[dataset_id] = info
+                dataset_manager.active_dataset_id = dataset_id
+                _cache_delete_pattern("dataset:list:*")
+                return {
+                    "success": True,
+                    "dataset_id": dataset_id,
+                    "dataset_name": info.name,
+                    "local_path": str(cache_path),
+                    "stats": info.stats,
+                    "message": f"已切换到数据集: {dataset_id}"
+                }
+        # 如果切换失败且是 default，尝试初始化
+        if dataset_id == "default":
+            logger.info("尝试初始化默认数据集...")
+            # 触发基础数据集状态检查，可能会自动创建缓存
+            try:
+                base_status = await _get_base_dataset_status_from_storage()
+                if base_status.get("stats", {}).get("total", 0) > 0:
+                    # 数据集存在，强制设置 active
+                    dataset_manager.active_dataset_id = "default"
+                    return {
+                        "success": True,
+                        "dataset_id": "default",
+                        "dataset_name": "基础数据集",
+                        "local_path": None,
+                        "stats": base_status["stats"],
+                        "message": "已切换到基础数据集（Storage 模式）"
+                    }
+            except Exception as init_err:
+                logger.error(f"初始化默认数据集失败: {init_err}")
+
+        raise HTTPException(400, detail=f"无法切换到数据集: {dataset_id}，可能不存在或未准备好")
+
+    path = dataset_manager.get_active_dataset_path()
+    info = dataset_manager.datasets.get(dataset_id)
+    _cache_delete_pattern("dataset:list:*")
+    return {
+        "success": True,
+        "dataset_id": dataset_id,
+        "dataset_name": info.name if info else dataset_id,
+        "local_path": str(path) if path else None,
+        "stats": info.stats if info else {},
+        "message": f"已切换到数据集: {dataset_id}"
+    }
+
+
+@app.get("/api/datasets/active")
+async def get_active_dataset():
+    """获取当前活动数据集信息"""
+    # 如果 active_dataset_id 是 default 或 None 或 undefined，返回基础数据集信息
+    active_id = dataset_manager.active_dataset_id
+    if active_id in (None, "default", "undefined", "", "null"):
+        try:
+            base_status = await _get_base_dataset_status_from_storage()
+            if base_status["stats"]["total"] > 0:
+                return {
+                    "active": True,
+                    "dataset_id": "default",
+                    "dataset_name": "基础数据集",
+                    "local_path": None,
+                    "storage_path": "storage://datasets/",
+                    "config": {
+                        "path": ".",
+                        "train": "train/images",
+                        "val": "val/images",
+                        "nc": base_status["stats"]["classes"],
+                        "names": base_status["stats"]["class_names"]
+                    },
+                    "classes": base_status["stats"]["class_names"],
+                    "stats": base_status["stats"],
+                    "storage_mode": True
+                }
+        except Exception as e:
+            logger.warning(f"获取基础数据集状态失败: {e}")
+            pass
+
+    # 原有代码...
+    path = dataset_manager.get_active_dataset_path()
+    if not path:
+        return {"active": False, "message": "未选择数据集", "suggestion": "基础数据集可用，请调用 /api/datasets/default/switch 切换"}
+    # ... 其余不变
+    active_info = dataset_manager.datasets.get(active_id)
+    stats = dict((active_info.stats if active_info else {}) or {})
+    train_count = stats.get("train", stats.get("train_images", 0))
+    val_count = stats.get("val", stats.get("val_images", 0))
+    total_count = stats.get("total", train_count + val_count)
+
+    class_names: list[str] = []
+    classes_file = path / "classes.txt"
+    if classes_file.exists():
+        try:
+            class_names = [line.strip() for line in classes_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+        except Exception as class_err:
+            logger.warning(f"read active dataset classes failed | dataset_id={active_id} | err={class_err}")
+
+    return {
+        "active": True,
+        "dataset_id": active_id,
+        "dataset_name": active_info.name if active_info else active_id,
+        "local_path": str(path),
+        "storage_path": f"storage://datasets/{active_info.storage_prefix}" if active_info and active_info.storage_prefix else None,
+        "classes": class_names,
+        "stats": {
+            **stats,
+            "train": train_count,
+            "val": val_count,
+            "total": total_count,
+            "classes": len(class_names),
+            "class_names": class_names,
+        },
+        "storage_mode": False,
+    }
+
+
+@app.get("/api/datasets/{dataset_id}/status")
+async def get_dataset_status(dataset_id: str):
+    """获取指定数据集的状态"""
+
+    # 处理 undefined 或空值
+    if not dataset_id or dataset_id.lower() in ("undefined", "null", "none", ""):
+        dataset_id = "default"
+        logger.info(f"状态查询时 dataset_id 为 undefined，自动回退到 default")
+
+    # 处理 default / base 基础数据集：从 Supabase Storage 读取
+    if dataset_id == "default":
+        return await _get_base_dataset_status_from_storage()
+    if dataset_id == "base":
+        return await _get_storage_dataset_status("base", "base", "基础数据集")
+
+    info = dataset_manager.datasets.get(dataset_id)
+    if info:
+        local_path = info.local_path if info.local_path and info.local_path.exists() else None
+        if not local_path and info.storage_prefix:
+            return await _get_storage_dataset_status(dataset_id, info.storage_prefix, info.name)
+        stats = dict(info.stats or {})
+        train_count = stats.get("train", stats.get("train_images", 0))
+        val_count = stats.get("val", stats.get("val_images", 0))
+        total_count = stats.get("total", train_count + val_count)
+
+        class_names: list[str] = []
+        if local_path:
+            classes_file = local_path / "classes.txt"
+            if classes_file.exists():
+                try:
+                    class_names = [
+                        line.strip()
+                        for line in classes_file.read_text(encoding="utf-8").splitlines()
+                        if line.strip()
+                    ]
+                except Exception as class_err:
+                    logger.warning(f"read classes.txt failed | dataset_id={dataset_id} | err={class_err}")
+
+        return {
+            "dataset_id": dataset_id,
+            "dataset_name": info.name,
+            "exists": bool(total_count > 0 or local_path or info.storage_prefix),
+            "cached": bool(local_path),
+            "cache_path": str(local_path) if local_path else None,
+            "stats": {
+                **stats,
+                "train": train_count,
+                "val": val_count,
+                "total": total_count,
+                "classes": len(class_names),
+                "class_names": class_names,
+            },
+            "is_active": dataset_manager.active_dataset_id == dataset_id,
+            "storage_mode": bool(info.storage_prefix) and not bool(local_path),
+        }
+
+    try:
+        db_dataset_result = supabase.table("datasets").select("*").eq("dataset_id", dataset_id).maybe_single().execute()
+        db_dataset = db_dataset_result.data if db_dataset_result else None
+    except Exception as db_lookup_err:
+        logger.warning(f"lookup dataset status from db failed | dataset_id={dataset_id} | err={db_lookup_err}")
+        db_dataset = None
+
+    if db_dataset:
+        stats = db_dataset.get("stats") or {}
+        cached = dataset_cache_manager.is_cached(dataset_id)
+        cache_path = dataset_cache_manager.get_cache_path(dataset_id)
+        return {
+            "dataset_id": dataset_id,
+            "dataset_name": db_dataset.get("name") or dataset_id,
+            "exists": True,
+            "cached": cached,
+            "cache_path": str(cache_path) if cached else None,
+            "stats": stats,
+            "is_active": dataset_manager.active_dataset_id == dataset_id,
+            "storage_mode": not cached,
+        }
+
+    raise HTTPException(404, detail=f"数据集 {dataset_id} 不存在")
+
+    info = dataset_manager.datasets.get(dataset_id)
+    if False and not info:
+        raise HTTPException(404, detail=f"数据集 {dataset_id} 不存在")
+    # ... 原有代码不变
+
+
+# 在 main.py 中，找到你添加的 _get_base_dataset_status_from_storage 函数
+# 修改为：
+
+
+
+async def _get_base_dataset_status_from_storage(max_files_per_folder: int = 1000) -> dict:
+    """
+    从 Supabase Storage 的 datasets bucket 读取基础数据集状态
+    修复：使用正确的分页参数获取完整文件列表
+    """
+    return await _get_storage_dataset_status("base", "base", "基础数据集")
+
+    try:
+        bucket = "datasets"
+        supabase_client = get_supabase_client()
+
+        # ========== 第一步：尝试从数据库获取准确的统计信息 ==========
+        try:
+            db_result = supabase.table("datasets").select("*").eq("dataset_id", "default").execute()
+            if db_result.data and len(db_result.data) > 0:
+                db_record = db_result.data[0]
+                db_stats = db_record.get("stats", {})
+                if db_stats and db_stats.get("total", 0) > 0:
+                    logger.info(f"从数据库获取基础数据集统计: train={db_stats.get('train')}, val={db_stats.get('val')}")
+                    return {
+                        "dataset_id": "default",
+                        "dataset_name": db_record.get("name", "基础数据集"),
+                        "exists": True,
+                        "cached": True,
+                        "cache_path": f"storage://{bucket}/",
+                        "stats": {
+                            "train": db_stats.get("train", 0),
+                            "val": db_stats.get("val", 0),
+                            "total": db_stats.get("total", 0),
+                            "classes": db_stats.get("classes", 0),
+                            "class_names": db_stats.get("class_names", []),
+                            "train_has_more": False,
+                            "val_has_more": False,
+                            "max_counted": db_stats.get("total", 0)
+                        },
+                        "is_active": True,
+                        "storage_mode": True
+                    }
+        except Exception as db_err:
+            logger.warning(f"从数据库获取基础数据集统计失败: {db_err}")
+
+        # ========== 第二步：尝试从 dataset_registry 内存缓存获取 ==========
+        if "default" in dataset_registry:
+            registry_info = dataset_registry["default"]
+            registry_stats = registry_info.get("stats", {})
+            if registry_stats and registry_stats.get("total", 0) > 0:
+                logger.info(f"从内存缓存获取基础数据集统计: train={registry_stats.get('train')}, val={registry_stats.get('val')}")
+                return {
+                    "dataset_id": "default",
+                    "dataset_name": "基础数据集",
+                    "exists": True,
+                    "cached": True,
+                    "cache_path": f"storage://{bucket}/",
+                    "stats": {
+                        "train": registry_stats.get("train", 0),
+                        "val": registry_stats.get("val", 0),
+                        "total": registry_stats.get("total", 0),
+                        "classes": registry_stats.get("classes", 0),
+                        "class_names": registry_stats.get("class_names", []),
+                        "train_has_more": False,
+                        "val_has_more": False,
+                        "max_counted": registry_stats.get("total", 0)
+                    },
+                    "is_active": True,
+                    "storage_mode": True
+                }
+
+        # ========== 第三步：使用正确的分页从 Storage 统计 ==========
+        def count_images_with_pagination(folder_path: str) -> int:
+            """分页统计图片数量，返回 (数量, 是否有更多)"""
+            try:
+                offset = 0
+                limit = 100
+                total_count = 0
+                image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.webp', '.gif', '.tiff', '.tif'}
+
+                while True:
+                    items = supabase_client.storage.from_(bucket).list(
+                        folder_path,
+                        {
+                            "limit": limit,
+                            "offset": offset,
+                            "sortBy": {"column": "name", "order": "asc"}
+                        }
+                    )
+
+                    if not items:
+                        break
+
+                    for f in items:
+                        name = f.get('name', '').lower()
+                        if any(name.endswith(ext) for ext in image_extensions):
+                            total_count += 1
+
+                    # 如果达到最大统计限制，标记有更多
+
+                    # 如果返回数量小于 limit，说明已经取完
+                    if len(items) < limit:
+                        break
+
+                    offset += limit
+
+                return total_count
+            except Exception as e:
+                logger.warning(f"统计 {folder_path} 失败: {e}")
+                return 0
+
+        train_count = count_images_with_pagination("train/images")
+        val_count = count_images_with_pagination("val/images")
+
+        # 读取 classes.txt
+        classes = []
+        try:
+            file_response = supabase_client.storage.from_(bucket).download("classes.txt")
+            if file_response:
+                content = file_response.decode('utf-8') if isinstance(file_response, bytes) else file_response
+                classes = [line.strip() for line in content.split('') if line.strip()]
+        except Exception as e:
+            logger.warning(f"读取 classes.txt 失败: {e}")
+
+        total = train_count + val_count
+
+        return {
+            "dataset_id": "default",
+            "dataset_name": "基础数据集",
+            "exists": total > 0,
+            "cached": total > 0,
+            "cache_path": f"storage://{bucket}/",
+            "stats": {
+                "train": train_count,
+                "val": val_count,
+                "total": total,
+                "classes": len(classes),
+                "class_names": classes,
+                "train_has_more": False,
+                "val_has_more": False,
+                "max_counted": total
+            },
+            "is_active": True,
+            "storage_mode": True
+        }
+
+    except Exception as e:
+        logger.error(f"获取基础数据集状态失败: {e}")
+        raise HTTPException(500, detail=f"获取基础数据集状态失败: {str(e)}")
+
+
+
+@app.post("/api/datasets/{dataset_id}/prepare")
+async def prepare_dataset(dataset_id: str, background_tasks: BackgroundTasks):
+    """预下载数据集到本地缓存"""
+    info = dataset_manager.datasets.get(dataset_id)
+    if not info:
+        raise HTTPException(404, detail=f"数据集 {dataset_id} 不存在")
+
+    if dataset_manager.is_cached(dataset_id):
+        return {
+            "success": True,
+            "cached": True,
+            "message": "数据集已缓存",
+            "path": str(dataset_manager.get_cache_path(dataset_id))
+        }
+
+    def do_download():
+        dataset_manager.get_dataset_path(dataset_id)
+
+    background_tasks.add_task(do_download)
+
+    return {
+        "success": True,
+        "cached": False,
+        "message": "开始下载数据集到本地缓存",
+        "dataset_id": dataset_id
+    }
+
+
+@app.post("/api/datasets/{dataset_id}/cleanup")
+async def cleanup_dataset(dataset_id: str):
+    """清理数据集本地缓存"""
+    dataset_manager.cleanup(dataset_id)
+    return {
+        "success": True,
+        "message": f"已清理数据集 {dataset_id} 的缓存"
+    }
 
 
 # =================================================================
