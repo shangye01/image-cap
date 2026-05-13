@@ -2,7 +2,7 @@
 import supabase
 from fastapi import APIRouter, HTTPException, BackgroundTasks, UploadFile, File, Form, Header
 from pydantic import BaseModel, Field
-from typing import List, Optional, Annotated
+from typing import List, Optional, Annotated, Dict
 import os
 import json
 import zipfile
@@ -10,9 +10,7 @@ import shutil
 import io
 import uuid
 import re
-
-
-
+import traceback
 
 from datetime import datetime
 from pathlib import Path
@@ -1653,6 +1651,7 @@ class DatasetCacheManager:
     ) -> Path:
         """
         带进度跟踪的下载
+        修复：处理 shutil.move 文件已存在的问题，增强错误信息返回
         """
         cache_path = self.get_cache_path(dataset_id)
         cache_path.mkdir(parents=True, exist_ok=True)
@@ -1709,24 +1708,66 @@ class DatasetCacheManager:
                             )
                         await asyncio.sleep(0.05)  # 模拟网络延迟，让前端看到动画
 
-            # 3. 解压
+            # 3. 解压到临时目录（避免直接解压到 cache_path 造成冲突）
             self.active_downloads[dataset_id]["message"] = "解压数据集..."
             self.active_downloads[dataset_id]["percent"] = 55
 
+            # 创建临时解压目录，避免与 cache_path 中的现有文件冲突
+            extract_temp_dir = cache_path / "_extract_temp"
+            if extract_temp_dir.exists():
+                shutil.rmtree(str(extract_temp_dir), ignore_errors=True)
+            extract_temp_dir.mkdir(parents=True, exist_ok=True)
+
             with zipfile.ZipFile(temp_zip, 'r') as zip_ref:
-                zip_ref.extractall(cache_path)
+                zip_ref.extractall(str(extract_temp_dir))
 
             # 4. 查找数据集根目录
             self.active_downloads[dataset_id]["message"] = "查找数据集结构..."
             self.active_downloads[dataset_id]["percent"] = 70
 
-            dataset_root = find_dataset_root(str(cache_path))
-            if dataset_root and dataset_root != str(cache_path):
-                # 如果解压到了子目录，移动文件到根目录
-                for item in os.listdir(dataset_root):
-                    shutil.move(os.path.join(dataset_root, item), str(cache_path))
+            dataset_root = find_dataset_root(str(extract_temp_dir))
 
-            # 5. 验证结构
+            # 确定源目录：如果找到了数据集根目录，使用它；否则使用临时解压目录
+            source_dir = Path(dataset_root) if dataset_root else extract_temp_dir
+
+            # 5. 将文件从源目录移动到 cache_path，处理文件已存在的情况
+            self.active_downloads[dataset_id]["message"] = "整理文件结构..."
+            self.active_downloads[dataset_id]["percent"] = 75
+
+            for item in source_dir.iterdir():
+                dest = cache_path / item.name
+
+                try:
+                    if dest.exists():
+                        # 如果目标已存在，先删除（文件或目录）
+                        if dest.is_dir():
+                            shutil.rmtree(str(dest))
+                        else:
+                            dest.unlink()
+
+                    # 移动文件/目录
+                    shutil.move(str(item), str(dest))
+
+                except Exception as move_error:
+                    logger.warning(f"移动文件失败 {item.name}: {move_error}")
+                    # 如果移动失败，尝试复制然后删除源文件（降级方案）
+                    try:
+                        if item.is_dir():
+                            if dest.exists():
+                                shutil.rmtree(str(dest))
+                            shutil.copytree(str(item), str(dest))
+                            shutil.rmtree(str(item))
+                        else:
+                            shutil.copy2(str(item), str(dest))
+                            item.unlink()
+                    except Exception as copy_error:
+                        raise Exception(f"无法移动文件 {item.name}: 移动错误={move_error}, 复制错误={copy_error}")
+
+            # 清理临时解压目录
+            if extract_temp_dir.exists():
+                shutil.rmtree(str(extract_temp_dir), ignore_errors=True)
+
+            # 6. 验证结构
             self.active_downloads[dataset_id]["message"] = "验证数据集结构..."
             self.active_downloads[dataset_id]["percent"] = 85
 
@@ -1736,7 +1777,7 @@ class DatasetCacheManager:
             if not train_images.exists() or not val_images.exists():
                 raise Exception("数据集结构不完整，缺少 train/images 或 val/images")
 
-            # 6. 生成 data.yaml
+            # 7. 生成 data.yaml
             self.active_downloads[dataset_id]["message"] = "生成配置文件..."
             self.active_downloads[dataset_id]["percent"] = 95
 
@@ -1767,7 +1808,7 @@ names: {names}
             with open(yaml_path, "w") as f:
                 f.write(yaml_content)
 
-            # 7. 清理 ZIP 文件
+            # 8. 清理 ZIP 文件
             if temp_zip.exists():
                 temp_zip.unlink()
 
@@ -1792,12 +1833,18 @@ names: {names}
             return cache_path
 
         except Exception as e:
+            error_detail = f"下载失败: {str(e)}"
+            error_traceback = traceback.format_exc()
+            logger.error(f"[DatasetCacheManager] {error_detail}")
+            logger.error(error_traceback)
+
             self.active_downloads[dataset_id]["status"] = "error"
-            self.active_downloads[dataset_id]["message"] = f"下载失败: {str(e)}"
+            self.active_downloads[dataset_id]["message"] = error_detail
+            self.active_downloads[dataset_id]["detail"] = error_traceback
 
             # 清理失败的缓存
             if cache_path.exists():
-                shutil.rmtree(cache_path, ignore_errors=True)
+                shutil.rmtree(str(cache_path), ignore_errors=True)
 
             if username:
                 await progress_ws_manager.emit_to_users(
@@ -1807,7 +1854,7 @@ names: {names}
                         "dataset_id": dataset_id,
                         "percent": 0,
                         "message": "下载失败",
-                        "detail": str(e),
+                        "detail": error_detail,
                         "status": "error"
                     }
                 )
@@ -1827,12 +1874,12 @@ names: {names}
         if dataset_id:
             cache_path = self.get_cache_path(dataset_id)
             if cache_path.exists():
-                shutil.rmtree(cache_path, ignore_errors=True)
+                shutil.rmtree(str(cache_path), ignore_errors=True)
             self.active_downloads.pop(dataset_id, None)
         else:
             # 清理所有缓存（谨慎使用）
             if self.cache_dir.exists():
-                shutil.rmtree(self.cache_dir, ignore_errors=True)
+                shutil.rmtree(str(self.cache_dir), ignore_errors=True)
                 self.cache_dir.mkdir(parents=True, exist_ok=True)
 
 

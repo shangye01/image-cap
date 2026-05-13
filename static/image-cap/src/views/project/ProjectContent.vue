@@ -1093,6 +1093,44 @@ import { useUserStore } from '@/stores/user'
 import JSZip from 'jszip' // 需要安装: npm install jszip
 import { saveAs } from 'file-saver' // 需要安装: npm install file-saver
 import GradientBackground from '@/components/GradientBackground.vue'
+
+// ============ 错误提示中文转换工具 ============
+const getFriendlyErrorMessage = (error) => {
+  if (!error) return '操作失败，请稍后重试'
+
+  const msg = error.message || error.toString()
+
+  // Axios 超时错误
+  if (msg.includes('timeout of') && msg.includes('exceeded')) {
+    return '请求超时，请检查网络连接后重试'
+  }
+
+  // 网络错误
+  if (msg.includes('Network Error') || msg.includes('ECONNREFUSED') || msg.includes('ECONNABORTED')) {
+    return '网络连接失败，请检查网络或后端服务是否正常运行'
+  }
+
+  // 404 错误
+  if (msg.includes('404') || msg.includes('Not Found')) {
+    return '请求的资源不存在，请刷新页面后重试'
+  }
+
+  // 500 错误
+  if (msg.includes('500') || msg.includes('Internal Server Error')) {
+    return '服务器内部错误，请稍后重试或联系管理员'
+  }
+
+  // 如果已经是中文，直接返回
+  if (/[一-鿿]/.test(msg)) {
+    return msg
+  }
+
+  // 默认返回原始错误 + 友好提示
+  return msg
+}
+
+// ============================================
+
 // ============ 基础状态 ============
 
 const projectList = ref([])
@@ -1390,7 +1428,7 @@ const confirmExport = async () => {
     closeExportDialog()
   } catch (error) {
     console.error('导出失败:', error)
-    window.alert('导出失败: ' + error.message)
+    window.alert('导出失败: ' + getFriendlyErrorMessage(error))
   } finally {
     isExporting.value = false
   }
@@ -1448,7 +1486,7 @@ const postDatasetApi = async (primaryPath, legacyPath, payload, timeout = 60000)
 
       const result = await response.json().catch(() => ({}))
       if (!response.ok) {
-        throw new Error(result?.detail || result?.message || `Request failed with ${response.status}`)
+        throw new Error(result?.detail || result?.message || `请求失败，状态码: ${response.status}`)
       }
 
       return result
@@ -1463,7 +1501,7 @@ const saveSelectedAnnotationsToDataset = async () => {
 
   const files = selectedDoneFilesForDataset.value
   if (files.length === 0) {
-    window.alert('No completed files available for dataset save')
+    window.alert('请先选择已标注完成的文件，再保存到数据集')
     return
   }
 
@@ -1500,7 +1538,7 @@ const saveSelectedAnnotationsToDataset = async () => {
     }
 
     if (uploadedTaskIds.length === 0) {
-      throw new Error('Selected files do not contain valid annotations for dataset save')
+      throw new Error('选中的文件暂无有效标注数据，请先完成标注再保存')
     }
 
     const today = new Date().toISOString().slice(0, 10)
@@ -1516,10 +1554,10 @@ const saveSelectedAnnotationsToDataset = async () => {
       120000,
     )
 
-    window.alert(result?.message || `Saved ${uploadedTaskIds.length} annotated files into dataset`)
+    window.alert(result?.message || `成功保存 ${uploadedTaskIds.length} 个标注文件到数据集`)
   } catch (error) {
     console.error('save dataset failed:', error)
-    window.alert(error?.response?.data?.detail || error.message || 'Failed to save dataset')
+    window.alert(error?.response?.data?.detail || getFriendlyErrorMessage(error) || '保存数据集失败，请稍后重试')
   } finally {
     isSavingDataset.value = false
   }
@@ -1719,7 +1757,7 @@ const exportVOCFormat = async (zip, files) => {
 // 辅助函数：获取图片Blob
 const fetchImageBlob = async (url) => {
   const response = await fetch(url)
-  if (!response.ok) throw new Error('Failed to fetch image')
+  if (!response.ok) throw new Error('图片下载失败，请检查图片链接是否有效')
   return await response.blob()
 }
 
@@ -2204,7 +2242,7 @@ const loadProjects = async () => {
     console.log('[VUE-005] nextTick完成，DOM已更新')
   } catch (error) {
     console.error('读取项目失败：', error)
-    window.alert(error?.response?.data?.detail || error.message || '读取项目失败')
+    window.alert(error?.response?.data?.detail || getFriendlyErrorMessage(error) || '读取项目失败')
   }
   })()
 
@@ -2320,7 +2358,7 @@ const handleCreateProject = async (projectData) => {
     await loadProjects()
   } catch (error) {
     console.error('创建项目失败：', error)
-    window.alert(error?.response?.data?.detail || error.message || '创建项目失败')
+    window.alert(error?.response?.data?.detail || getFriendlyErrorMessage(error) || '创建项目失败')
   }
 }
 
@@ -2332,7 +2370,7 @@ const enterProject = async (project) => {
     await ensureProjectFilesLoaded(project.id)
   } catch (error) {
     console.error('加载项目文件失败：', error)
-    window.alert(error?.response?.data?.detail || error.message || '加载项目文件失败')
+    window.alert(error?.response?.data?.detail || getFriendlyErrorMessage(error) || '加载项目文件失败')
   }
 }
 
@@ -2345,7 +2383,7 @@ const handleAcceptCurrentSharedProject = async () => {
       ? new Date(resp.accepted_at).getTime()
       : Date.now()
   } catch (error) {
-    window.alert(error?.response?.data?.detail || error?.message || '接收分享项目失败')
+    window.alert(error?.response?.data?.detail || getFriendlyErrorMessage(error) || '接收分享项目失败')
   } finally {
     shareDecisionLoading.value = false
   }
@@ -2360,7 +2398,7 @@ const handleRejectCurrentSharedProject = async () => {
     projectList.value = projectList.value.filter((item) => item.id !== rejectedProjectId)
     backToProjectList()
   } catch (error) {
-    window.alert(error?.response?.data?.detail || error?.message || '拒绝分享项目失败')
+    window.alert(error?.response?.data?.detail || getFriendlyErrorMessage(error) || '拒绝分享项目失败')
   } finally {
     shareDecisionLoading.value = false
   }
@@ -3006,7 +3044,7 @@ const submitReviewResult = async () => {
     window.alert('审核结果已归档到“已审核”文件夹，并同步到分享者的“已标注”')
   } catch (error) {
     console.error('提交审核结果失败:', error)
-    window.alert(error?.response?.data?.detail || error?.message || '提交审核结果失败')
+    window.alert(error?.response?.data?.detail || getFriendlyErrorMessage(error) || '提交审核结果失败')
   } finally {
     reviewSubmitting.value = false
   }
@@ -3645,7 +3683,7 @@ const navigateToAnnotate = (task, taskList) => {
     console.log('[NAVIGATE] ========== 流程结束 ==========')
   } catch (error) {
     console.error('[NAVIGATE] 跳转过程出错:', error)
-    window.alert('跳转失败：' + (error.message || '未知错误'))
+    window.alert('跳转失败：' + getFriendlyErrorMessage(error))
   }
 }
 
@@ -3785,7 +3823,7 @@ const confirmWorkDialog = async () => {
 
     if (!refreshedProject) {
       console.log('[VUE-110] ❌ 刷新后项目不存在')
-      throw new Error('刷新后项目不存在')
+      throw new Error('项目数据刷新失败，请返回项目列表重试')
     }
 
     refreshedProject.folders.forEach((folder) => {
@@ -3836,7 +3874,7 @@ const confirmWorkDialog = async () => {
     console.log('[VUE-119] ========== 流程结束 ==========')
   } catch (error) {
     console.error('[VUE-120] ❌ 创建标注任务失败:', error)
-    window.alert(error?.response?.data?.detail || error.message || '创建标注任务失败')
+    window.alert(error?.response?.data?.detail || getFriendlyErrorMessage(error) || '创建标注任务失败')
   }
 }
 // ============ 项目操作 ============
@@ -3902,7 +3940,7 @@ const deleteProject = async (projectId) => {
       window.alert(`${detail}\n\n请先让接收方删除分享副本，再删除源项目。`)
       return
     }
-    window.alert(detail)
+    window.alert(typeof detail === 'string' && detail.length > 0 ? detail : '删除项目失败，请稍后重试')
   } finally {
     deletingProjectId.value = null
   }

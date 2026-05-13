@@ -10,6 +10,13 @@
 
     <div class="content-wrapper">
       
+      <!-- 全局错误提示 - 放在最顶部，始终可见 -->
+      <div v-if="globalError" class="global-error-banner" @click="clearGlobalError">
+        <div class="error-icon">❌</div>
+        <span>{{ globalError }}</span>
+        <button class="error-close" @click.stop="clearGlobalError">✕</button>
+      </div>
+      
      
 
       <!-- 数据集选择器 - 新增 -->
@@ -114,7 +121,10 @@
           </div>
         </div>
         
-        <p class="status-message">{{ datasetStatus.message || '数据集存储在云端，训练时自动下载' }}</p>
+        <!-- 数据集状态卡片中的 status-message 添加错误样式 -->
+<p class="status-message" :class="{ 'error-text': !datasetStatus.valid }">
+  {{ datasetStatus.message || '数据集存储在云端，训练时自动下载' }}
+</p>
         
         <!-- 数据集元数据展示 -->
         <div v-if="datasetStatus.details && datasetStatus.details.stats" class="stats-grid">
@@ -961,6 +971,8 @@ const selectDataset = async (datasetId) => {
     datasetId = 'default'
   }
   
+  // 先重置选中状态，如果失败再恢复
+  const previousDatasetId = selectedDatasetId.value
   selectedDatasetId.value = datasetId
   
   try {
@@ -969,17 +981,64 @@ const selectDataset = async (datasetId) => {
     })
     const data = await res.json()
     
+    // 关键修复：判断 HTTP 状态码
+    if (!res.ok) {
+      // 恢复之前的选择
+      selectedDatasetId.value = previousDatasetId
+      
+      const errorMsg = data.detail || data.message || `切换失败 (HTTP ${res.status})`
+      console.error('切换数据集失败:', errorMsg)
+      
+      // 显示错误提示 - 使用全局错误显示
+      showGlobalError(`切换数据集失败: ${errorMsg}`)
+      return
+    }
+    
     if (data.success) {
       const idx = availableDatasets.value.findIndex(d => d.id === datasetId)
       if (idx >= 0) {
         availableDatasets.value[idx].cached = true
         availableDatasets.value[idx].stats = data.stats || {}
       }
-      await checkDataset()
+      // 传递错误处理器，确保 checkDataset 的错误也能被捕获
+      const checkResult = await checkDataset({
+        onError: (err) => showGlobalError(`数据集状态检查失败: ${err}`)
+      })
+      if (!checkResult.success) {
+        // checkDataset 已经显示了错误，这里只需要确保数据集状态正确
+        datasetStatus.value.valid = false
+      }
+    } else {
+      throw new Error(data.message || '切换数据集失败')
     }
   } catch (e) {
+    // 恢复之前的选择
+    selectedDatasetId.value = previousDatasetId
+    
     console.error('切换数据集失败:', e)
+    showGlobalError(`切换数据集失败: ${e.message}`)
   }
+}
+
+// 新增：全局错误显示函数
+const globalError = ref(null)
+let errorTimer = null
+
+const showGlobalError = (message) => {
+  // 清除之前的定时器
+  if (errorTimer) clearTimeout(errorTimer)
+  
+  globalError.value = message
+  
+  // 5秒后自动清除
+  errorTimer = setTimeout(() => {
+    globalError.value = null
+  }, 5000)
+}
+
+const clearGlobalError = () => {
+  globalError.value = null
+  if (errorTimer) clearTimeout(errorTimer)
 }
 
 // ===== 状态管理 =====
@@ -1281,7 +1340,8 @@ const cancelUpload = () => {
 }
 
 // ===== 修复：数据集状态检查 - 使用 datasetId 替代 projectId =====
-const checkDataset = async () => {
+const checkDataset = async (options = {}) => {
+  const { onError } = options
   checking.value = true
   try {
     let datasetId = selectedDatasetId.value
@@ -1292,6 +1352,19 @@ const checkDataset = async () => {
     
     const res = await fetch(`${API_BASE}/datasets/${datasetId}/status`)
     const data = await res.json()
+    
+    // 处理后端返回的错误
+    if (!res.ok) {
+      const errorMsg = data.detail || data.message || '检查数据集状态失败'
+      datasetStatus.value = {
+        valid: false,
+        message: errorMsg
+      }
+      console.error('检查数据集状态失败:', errorMsg)
+      // 如果有外部错误处理器，调用它
+      if (onError) onError(errorMsg)
+      return { success: false, error: errorMsg }
+    }
     
     const isValid = data.cached || data.exists || (data.stats && (data.stats.total > 0 || data.stats.train > 0))
     
@@ -1371,17 +1444,21 @@ const checkDataset = async () => {
       console.error('获取硬件信息失败:', hwErr)
     }
     
+    return { success: true, data }
+    
   } catch (e) {
     console.error('检查数据集状态失败:', e)
+    const errorMsg = '检查失败: ' + e.message
     datasetStatus.value = {
       valid: false,
-      message: '检查失败: ' + e.message
+      message: errorMsg
     }
+    if (onError) onError(errorMsg)
+    return { success: false, error: errorMsg }
   } finally {
     checking.value = false
   }
 }
-
 const connectWebSocket = () => {
   const token = localStorage.getItem('token') || ''
   const wsUrl = `ws://localhost:8000/api/ws/progress?token=${token}`
@@ -3636,5 +3713,58 @@ input:checked + .toggle-slider::before {
   width: 100%;
   padding: 10px;
   font-size: 0.85rem;
+}
+
+
+/* 在 <style scoped> 中添加 */
+
+.global-error-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 20px;
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.15), rgba(220, 38, 38, 0.1));
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 12px;
+  margin-bottom: 16px;
+  color: #dc2626;
+  font-weight: 600;
+  font-size: 0.95rem;
+  animation: slideIn 0.3s ease-out;
+  cursor: pointer;
+  backdrop-filter: blur(10px);
+}
+
+.global-error-banner:hover {
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.2), rgba(220, 38, 38, 0.15));
+}
+
+.error-icon {
+  font-size: 1.2rem;
+  flex-shrink: 0;
+}
+
+.error-close {
+  margin-left: auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: none;
+  background: rgba(239, 68, 68, 0.2);
+  color: #dc2626;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.9rem;
+  transition: all 0.2s;
+}
+
+.error-close:hover {
+  background: rgba(239, 68, 68, 0.3);
+}
+.status-message.error-text {
+  color: #dc2626;
+  font-weight: 600;
 }
 </style>

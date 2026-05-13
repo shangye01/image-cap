@@ -12,11 +12,14 @@
     <header class="header">
       <div class="logo">
         <div class="logo-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12,12C10.5,8,8,5,6,4C4,3,2.5,4,3,6C3.5,8,5.5,10,8,11C10,11.5,11,12,12,12Z" fill="#9aa4e8"/>
+            <path d="M12,12C13.5,8,16,5,18,4C20,3,21.5,4,21,6C20.5,8,18.5,10,16,11C14,11.5,13,12,12,12Z" fill="#5b6cf9"/>
+            <path d="M12,12C10.5,16,8,19,6,20C4,21,2.5,20,3,18C3.5,16,5.5,14,8,13C10,12.5,11,12,12,12Z" fill="#9aa4e8"/>
+            <path d="M12,12C13.5,16,16,19,18,20C20,21,21.5,20,21,18C20.5,16,18.5,14,16,13C14,12.5,13,12,12,12Z" fill="#5b6cf9"/>
           </svg>
         </div>
-        <span class="logo-text">Image-cap</span>
+        <span class="logo-text"> 灵绘标注</span>
       </div>
 
       <div class="auth-actions">
@@ -454,28 +457,28 @@ const submitRegister = async () => {
 }
 
 .logo-icon {
-  width: 36px;
-  height: 36px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  border-radius: 10px;
+  width: 44px;
+  height: 44px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
-  box-shadow: 0 6px 16px rgba(102, 126, 234, 0.3);
+  padding: 2px;
+  box-sizing: border-box;
 }
 
 .logo-icon svg {
-  width: 20px;
-  height: 20px;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
 }
 
 .logo-text {
   font-size: 22px;
   font-weight: 700;
-  background: linear-gradient(135deg, #1a202c 0%, #4a5568 100%);
+  background: linear-gradient(135deg, #6c6bc9 0%, #c586de 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 .auth-actions {

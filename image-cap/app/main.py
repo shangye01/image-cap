@@ -4183,99 +4183,117 @@ async def list_datasets(
     return result
 
 
-
 @app.post("/api/datasets/{dataset_id}/switch")
 async def switch_dataset(dataset_id: str):
     """切换训练数据集"""
-    # 处理前端传来的 undefined 或空值
-    if not dataset_id or dataset_id.lower() in ("undefined", "null", "none", ""):
-        dataset_id = "default"
-        logger.info(f"数据集ID为 undefined，自动回退到 default")
+    try:
+        # 处理前端传来的 undefined 或空值
+        if not dataset_id or dataset_id.lower() in ("undefined", "null", "none", ""):
+            dataset_id = "default"
+            logger.info(f"数据集ID为 undefined，自动回退到 default")
 
-    # 如果是 default，确保基础数据集可用
-    if dataset_id == "default":
-        # 检查基础数据集是否存在
-        try:
-            train_list = supabase.storage.from_("datasets").list("train")
-            train_exists = any(f.get('name') == 'images' for f in train_list)
-            if not train_exists:
-                raise HTTPException(400, detail="基础数据集不存在，请检查 Storage 中的 datasets bucket")
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.warning(f"检查基础数据集失败: {e}")
-
-    success = dataset_manager.switch_dataset(dataset_id)
-    if not success:
-        try:
-            db_dataset_result = supabase.table("datasets").select("*").eq("dataset_id", dataset_id).maybe_single().execute()
-            db_dataset = db_dataset_result.data if db_dataset_result else None
-        except Exception as db_lookup_err:
-            logger.warning(f"lookup cloud dataset failed | dataset_id={dataset_id} | err={db_lookup_err}")
-            db_dataset = None
-
-        if db_dataset and str(db_dataset.get("storage_path") or "").endswith(".zip"):
-            if not dataset_cache_manager.is_cached(dataset_id):
-                await dataset_cache_manager.download_with_progress(
-                    dataset_id=dataset_id,
-                    storage_path=db_dataset.get("storage_path"),
-                    bucket=db_dataset.get("bucket") or "datasets",
-                )
-
-            cache_path = dataset_cache_manager.get_cache_path(dataset_id)
-            if cache_path.exists():
-                info = DatasetInfo(
-                    id=dataset_id,
-                    name=db_dataset.get("name") or dataset_id,
-                    storage_prefix="",
-                    is_local=True,
-                )
-                info.local_path = cache_path
-                info.stats = db_dataset.get("stats") or {}
-                dataset_manager.datasets[dataset_id] = info
-                dataset_manager.active_dataset_id = dataset_id
-                _cache_delete_pattern("dataset:list:*")
-                return {
-                    "success": True,
-                    "dataset_id": dataset_id,
-                    "dataset_name": info.name,
-                    "local_path": str(cache_path),
-                    "stats": info.stats,
-                    "message": f"已切换到数据集: {dataset_id}"
-                }
-        # 如果切换失败且是 default，尝试初始化
+        # 如果是 default，确保基础数据集可用
         if dataset_id == "default":
-            logger.info("尝试初始化默认数据集...")
-            # 触发基础数据集状态检查，可能会自动创建缓存
+            # 检查基础数据集是否存在
             try:
-                base_status = await _get_base_dataset_status_from_storage()
-                if base_status.get("stats", {}).get("total", 0) > 0:
-                    # 数据集存在，强制设置 active
-                    dataset_manager.active_dataset_id = "default"
-                    return {
-                        "success": True,
-                        "dataset_id": "default",
-                        "dataset_name": "基础数据集",
-                        "local_path": None,
-                        "stats": base_status["stats"],
-                        "message": "已切换到基础数据集（Storage 模式）"
-                    }
-            except Exception as init_err:
-                logger.error(f"初始化默认数据集失败: {init_err}")
+                train_list = supabase.storage.from_("datasets").list("train")
+                train_exists = any(f.get('name') == 'images' for f in train_list)
+                if not train_exists:
+                    raise HTTPException(400, detail="基础数据集不存在，请检查 Storage 中的 datasets bucket")
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.warning(f"检查基础数据集失败: {e}")
 
-        raise HTTPException(400, detail=f"无法切换到数据集: {dataset_id}，可能不存在或未准备好")
+        success = dataset_manager.switch_dataset(dataset_id)
+        if not success:
+            try:
+                db_dataset_result = supabase.table("datasets").select("*").eq("dataset_id",
+                                                                              dataset_id).maybe_single().execute()
+                db_dataset = db_dataset_result.data if db_dataset_result else None
+            except Exception as db_lookup_err:
+                logger.warning(f"lookup cloud dataset failed | dataset_id={dataset_id} | err={db_lookup_err}")
+                db_dataset = None
 
-    path = dataset_manager.get_active_dataset_path()
-    info = dataset_manager.datasets.get(dataset_id)
-    _cache_delete_pattern("dataset:list:*")
-    return {
-        "success": True,
-        "dataset_id": dataset_id,
-        "dataset_name": info.name if info else dataset_id,
-        "local_path": str(path) if path else None,
-        "stats": info.stats if info else {},
-        "message": f"已切换到数据集: {dataset_id}"
-    }
+            if db_dataset and str(db_dataset.get("storage_path") or "").endswith(".zip"):
+                if not dataset_cache_manager.is_cached(dataset_id):
+                    # 关键修复：捕获 download_with_progress 的具体异常
+                    try:
+                        await dataset_cache_manager.download_with_progress(
+                            dataset_id=dataset_id,
+                            storage_path=db_dataset.get("storage_path"),
+                            bucket=db_dataset.get("bucket") or "datasets",
+                        )
+                    except Exception as download_err:
+                        logger.error(f"数据集下载失败: {download_err}")
+                        # 返回具体的下载错误，而不是 500 Internal Server Error
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"数据集下载失败: {str(download_err)}"
+                        )
+
+                    cache_path = dataset_cache_manager.get_cache_path(dataset_id)
+                    if cache_path.exists():
+                        info = DatasetInfo(
+                            id=dataset_id,
+                            name=db_dataset.get("name") or dataset_id,
+                            storage_prefix="",
+                            is_local=True,
+                        )
+                        info.local_path = cache_path
+                        info.stats = db_dataset.get("stats") or {}
+                        dataset_manager.datasets[dataset_id] = info
+                        dataset_manager.active_dataset_id = dataset_id
+                        _cache_delete_pattern("dataset:list:*")
+                        return {
+                            "success": True,
+                            "dataset_id": dataset_id,
+                            "dataset_name": info.name,
+                            "local_path": str(cache_path),
+                            "stats": info.stats,
+                            "message": f"已切换到数据集: {dataset_id}"
+                        }
+
+            # 如果切换失败且是 default，尝试初始化
+            if dataset_id == "default":
+                logger.info("尝试初始化默认数据集...")
+                try:
+                    base_status = await _get_base_dataset_status_from_storage()
+                    if base_status.get("stats", {}).get("total", 0) > 0:
+                        # 数据集存在，强制设置 active
+                        dataset_manager.active_dataset_id = "default"
+                        return {
+                            "success": True,
+                            "dataset_id": "default",
+                            "dataset_name": "基础数据集",
+                            "local_path": None,
+                            "stats": base_status["stats"],
+                            "message": "已切换到基础数据集（Storage 模式）"
+                        }
+                except Exception as init_err:
+                    logger.error(f"初始化默认数据集失败: {init_err}")
+
+            raise HTTPException(400, detail=f"无法切换到数据集: {dataset_id}，可能不存在或未准备好")
+
+        path = dataset_manager.get_active_dataset_path()
+        info = dataset_manager.datasets.get(dataset_id)
+        _cache_delete_pattern("dataset:list:*")
+        return {
+            "success": True,
+            "dataset_id": dataset_id,
+            "dataset_name": info.name if info else dataset_id,
+            "local_path": str(path) if path else None,
+            "stats": info.stats if info else {},
+            "message": f"已切换到数据集: {dataset_id}"
+        }
+
+    except HTTPException:
+        raise  # FastAPI 会自动处理为 JSON 响应
+    except Exception as e:
+        logger.error(f"切换数据集异常: {e}")
+        logger.error(traceback.format_exc())
+        # 关键修复：所有未捕获的异常都转换为 HTTPException，确保返回 JSON 而不是 HTML
+        raise HTTPException(status_code=500, detail=f"服务器内部错误: {str(e)}")
 
 
 @app.get("/api/datasets/active")

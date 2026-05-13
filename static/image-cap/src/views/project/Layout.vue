@@ -13,11 +13,16 @@
     <header class="top-header">
       <div class="logo-area">
         <div class="logo-wrapper">
-          <img src="@/assets/logo.svg" alt="Logo" class="logo-img" />
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" class="logo-img">
+            <path d="M12,11.5C10.5,8,8,5,6,4C4,3,2.5,4,3,6C3.5,8,5.5,10,8,11C10,11.5,11,12,12,11.5Z" fill="#9aa4e8"/>
+            <path d="M12,11.5C13.5,8,16,5,18,4C20,3,21.5,4,21,6C20.5,8,18.5,10,16,11C14,11.5,13,12,12,11.5Z" fill="#5b6cf9"/>
+            <path d="M12,12.5C10.5,16,8,19,6,20C4,21,2.5,20,3,18C3.5,16,5.5,14,8,13C10,12.5,11,12,12,12.5Z" fill="#9aa4e8"/>
+            <path d="M12,12.5C13.5,16,16,19,18,20C20,21,21.5,20,21,18C20.5,16,18.5,14,16,13C14,12.5,13,12,12,12.5Z" fill="#5b6cf9"/>
+          </svg>
           <div class="logo-orbit"></div>
           <div class="logo-glow"></div>
         </div>
-        <span class="logo-text">Image-cap</span>
+        <span class="logo-text"> 灵绘标注</span>
       </div>
       <div class="header-right">
         <div class="header-actions">
@@ -589,7 +594,6 @@ onUnmounted(() => {
   height: 32px;
   position: relative;
   z-index: 2;
-  filter: drop-shadow(0 2px 4px rgba(59, 130, 246, 0.2));
 }
 
 /* Logo 光晕轨道 */
