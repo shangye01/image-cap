@@ -139,10 +139,10 @@
               待接收：点击进入后正式接收
             </div>
 
-            <div class="folder-meta">
+            <!-- <div class="folder-meta">
               <span>{{ project.mode === 'keyword' ? '关键词模型' : '非关键词模型' }}</span>
               <span>{{ formatDate(project.createdAt) }}</span>
-            </div>
+            </div> -->
           </div>
         </div>
       </div>
@@ -1064,6 +1064,18 @@
         </div>
       </transition>
     </teleport>
+
+    <teleport to="body">
+      <transition name="waiting-fade">
+        <div v-if="actionLoadingVisible" class="action-waiting-mask">
+          <div class="action-waiting-card">
+            <div class="action-waiting-spinner"></div>
+            <div class="action-waiting-title">请稍候</div>
+            <div class="action-waiting-text">{{ actionLoadingText }}</div>
+          </div>
+        </div>
+      </transition>
+    </teleport>
   </div>
 </template>
 
@@ -1163,6 +1175,8 @@ const selectedFileIds = ref([])
 
 const deletingProjectId = ref(null)
 const shareDecisionLoading = ref(false)
+const actionLoadingCount = ref(0)
+const actionLoadingText = ref('')
 
 const userStore = useUserStore()
 const router = useRouter()
@@ -1172,6 +1186,36 @@ const progressSocketStopped = ref(false)
 const projectFilesLoadingMap = new Map()
 let loadProjectsPromise = null
 let projectRefreshTimer = null
+
+const actionLoadingVisible = computed(() => actionLoadingCount.value > 0)
+
+const openActionLoading = (message = '正在处理，请稍候...') => {
+  actionLoadingCount.value += 1
+  actionLoadingText.value = message
+}
+
+const updateActionLoading = (message) => {
+  if (!message) return
+  actionLoadingText.value = message
+}
+
+const closeActionLoading = () => {
+  if (actionLoadingCount.value > 0) {
+    actionLoadingCount.value -= 1
+  }
+  if (actionLoadingCount.value === 0) {
+    actionLoadingText.value = ''
+  }
+}
+
+const runWithActionLoading = async (message, action) => {
+  openActionLoading(message)
+  try {
+    return await action()
+  } finally {
+    closeActionLoading()
+  }
+}
 
 // ============ 大图标注预览相关 ============
 
@@ -2338,24 +2382,28 @@ const handleCreateProject = async (projectData) => {
   const owner_id = userStore.user?.username || 'default'
 
   try {
-    const data = await createProject({
-      name: projectData.projectName,
-      description: projectData.remark || '',
-      owner_id,
-      organization_nickname: userStore.currentOrganization?.organization_nickname || undefined,
-    })
+    await runWithActionLoading('正在创建项目，请稍候...', async () => {
+      const data = await createProject({
+        name: projectData.projectName,
+        description: projectData.remark || '',
+        owner_id,
+        organization_nickname: userStore.currentOrganization?.organization_nickname || undefined,
+      })
 
-    const folders = Array.isArray(projectData.folders) ? projectData.folders : []
-    const pendingFolder = folders.find((folder) => folder.name === '待标注')
-    const pendingFiles = Array.isArray(pendingFolder?.files) ? pendingFolder.files : []
+      const folders = Array.isArray(projectData.folders) ? projectData.folders : []
+      const pendingFolder = folders.find((folder) => folder.name === '待标注')
+      const pendingFiles = Array.isArray(pendingFolder?.files) ? pendingFolder.files : []
 
-    for (const item of pendingFiles) {
-      if (item?.file) {
-        await uploadProjectFile(data.id, item.file, owner_id)
+      for (const [index, item] of pendingFiles.entries()) {
+        if (item?.file) {
+          updateActionLoading(`正在上传项目文件（${index + 1}/${pendingFiles.length}）...`)
+          await uploadProjectFile(data.id, item.file, owner_id)
+        }
       }
-    }
 
-    await loadProjects()
+      updateActionLoading('正在刷新项目列表，请稍候...')
+      await loadProjects()
+    })
   } catch (error) {
     console.error('创建项目失败：', error)
     window.alert(error?.response?.data?.detail || getFriendlyErrorMessage(error) || '创建项目失败')
@@ -3452,28 +3500,32 @@ const handleWork = async (file) => {
 
 const loadSingleFileTask = async (file) => {
   try {
-    console.log(`[WORK] 加载单个文件任务 | file_id=${file.id}`)
+    await runWithActionLoading('正在准备标注页面，请稍候...', async () => {
+      console.log(`[WORK] 加载单个文件任务 | file_id=${file.id}`)
 
-    // 使用过滤后的列表
-    const validLabelingTasks = labelingTasks.value.filter((t) => t && t.file_id)
-    const cachedTask = validLabelingTasks.find((t) => t.file_id === file.id)
+      // 使用过滤后的列表
+      const validLabelingTasks = labelingTasks.value.filter((t) => t && t.file_id)
+      const cachedTask = validLabelingTasks.find((t) => t.file_id === file.id)
 
-    if (cachedTask) {
-      console.log(`[WORK] 从缓存找到任务 | task_id=${cachedTask.task_id}`)
-      navigateToAnnotate(cachedTask, validLabelingTasks)
-      return
-    }
+      if (cachedTask) {
+        console.log(`[WORK] 从缓存找到任务 | task_id=${cachedTask.task_id}`)
+        await navigateToAnnotate(cachedTask, validLabelingTasks, { withLoading: false })
+        return
+      }
 
-    const data = await getTaskByFileId(currentProject.value.id, file.id)
-    if (data?.task) {
-      console.log(`[WORK] 从后端获取任务 | task_id=${data.task.task_id}`)
-      navigateToAnnotate(
-        data.task,
-        [data.task].filter((t) => t && t.task_id)
-      )
-    } else {
-      window.alert('该文件暂无标注任务，请先开始标注')
-    }
+      updateActionLoading('正在加载标注任务，请稍候...')
+      const data = await getTaskByFileId(currentProject.value.id, file.id)
+      if (data?.task) {
+        console.log(`[WORK] 从后端获取任务 | task_id=${data.task.task_id}`)
+        await navigateToAnnotate(
+          data.task,
+          [data.task].filter((t) => t && t.task_id),
+          { withLoading: false }
+        )
+      } else {
+        window.alert('该文件暂无标注任务，请先开始标注')
+      }
+    })
   } catch (error) {
     console.error('加载任务失败:', error)
     window.alert('加载标注任务失败')
@@ -3559,35 +3611,44 @@ const openPendingReviewItem = async (file) => {
 
 const viewCompletedAnnotation = async (file) => {
   try {
-    console.log(`[VIEW] 查看已完成标注 | file_id=${file.id}`)
+    await runWithActionLoading('正在准备标注页面，请稍候...', async () => {
+      console.log(`[VIEW] 查看已完成标注 | file_id=${file.id}`)
 
-    // 使用过滤后的列表
-    const validDoneTasks = doneTasks.value.filter((t) => t && t.file_id)
-    const cachedTask = validDoneTasks.find((t) => t.file_id === file.id)
+      // 使用过滤后的列表
+      const validDoneTasks = doneTasks.value.filter((t) => t && t.file_id)
+      const cachedTask = validDoneTasks.find((t) => t.file_id === file.id)
 
-    if (cachedTask) {
-      console.log(`[VIEW] 从缓存找到已完成任务 | task_id=${cachedTask.task_id}`)
-      navigateToAnnotate(cachedTask, validDoneTasks.length > 0 ? validDoneTasks : [cachedTask])
-      return
-    }
+      if (cachedTask) {
+        console.log(`[VIEW] 从缓存找到已完成任务 | task_id=${cachedTask.task_id}`)
+        await navigateToAnnotate(
+          cachedTask,
+          validDoneTasks.length > 0 ? validDoneTasks : [cachedTask],
+          { withLoading: false }
+        )
+        return
+      }
 
-    const data = await getTaskByFileId(currentProject.value.id, file.id)
-    if (data?.task) {
-      console.log(`[VIEW] 从后端获取已完成任务 | task_id=${data.task.task_id}`)
-      // 确保传入的数组也经过过滤
-      const taskList =
-        validDoneTasks.length > 0 ? validDoneTasks : [data.task].filter((t) => t && t.task_id)
-      navigateToAnnotate(data.task, taskList)
-    } else {
-      window.alert('该文件暂无标注结果')
-    }
+      updateActionLoading('正在加载标注结果，请稍候...')
+      const data = await getTaskByFileId(currentProject.value.id, file.id)
+      if (data?.task) {
+        console.log(`[VIEW] 从后端获取已完成任务 | task_id=${data.task.task_id}`)
+        // 确保传入的数组也经过过滤
+        const taskList =
+          validDoneTasks.length > 0 ? validDoneTasks : [data.task].filter((t) => t && t.task_id)
+        await navigateToAnnotate(data.task, taskList, { withLoading: false })
+      } else {
+        window.alert('该文件暂无标注结果')
+      }
+    })
   } catch (error) {
     console.error('加载已完成标注失败:', error)
     window.alert('加载标注结果失败')
   }
 }
 
-const navigateToAnnotate = (task, taskList) => {
+const navigateToAnnotate = async (task, taskList, options = {}) => {
+  const { withLoading = true } = options
+
   // ⚠️ 参数校验 - 确保 task 有效
   if (!task?.task_id) {
     console.error('[NAVIGATE] 错误：task 或 task_id 为空', task)
@@ -3611,6 +3672,10 @@ const navigateToAnnotate = (task, taskList) => {
   }
 
   console.log(`[NAVIGATE] 开始跳转 | task_id=${task.task_id}, 有效任务数=${validTaskList.length}`)
+
+  if (withLoading) {
+    openActionLoading('正在进入标注页面，请稍候...')
+  }
 
   try {
     // 使用过滤后的列表计算索引
@@ -3675,15 +3740,16 @@ const navigateToAnnotate = (task, taskList) => {
 
     console.log('[NAVIGATE] 路由数据:', routeData)
 
-    router.push(routeData).catch((err) => {
-      console.error('[NAVIGATE] 路由跳转失败:', err)
-      window.alert('页面跳转失败，请检查网络连接或刷新页面重试')
-    })
+    await router.push(routeData)
 
     console.log('[NAVIGATE] ========== 流程结束 ==========')
   } catch (error) {
     console.error('[NAVIGATE] 跳转过程出错:', error)
     window.alert('跳转失败：' + getFriendlyErrorMessage(error))
+  } finally {
+    if (withLoading) {
+      closeActionLoading()
+    }
   }
 }
 
@@ -3743,135 +3809,140 @@ const confirmWorkDialog = async () => {
   }
 
   try {
-    const targetFiles = selectedFiles.value.length
-      ? selectedFiles.value
-      : currentWorkFile.value
-      ? [currentWorkFile.value]
-      : []
+    await runWithActionLoading('正在创建标注任务，请稍候...', async () => {
+      const targetFiles = selectedFiles.value.length
+        ? selectedFiles.value
+        : currentWorkFile.value
+        ? [currentWorkFile.value]
+        : []
 
-    if (!targetFiles.length) {
-      window.alert('请至少选择一张图片')
-      return
-    }
+      if (!targetFiles.length) {
+        window.alert('请至少选择一张图片')
+        return
+      }
 
-    console.log(`[VUE-102] 目标文件 | count=${targetFiles.length}`)
+      console.log(`[VUE-102] 目标文件 | count=${targetFiles.length}`)
 
-    const keywords =
-      workForm.mode === 'keyword' ? workSelectedTags.value.map((tag) => tag.name) : []
+      const keywords =
+        workForm.mode === 'keyword' ? workSelectedTags.value.map((tag) => tag.name) : []
 
-    const confidenceThreshold = workForm.confidenceThreshold
+      const confidenceThreshold = workForm.confidenceThreshold
 
-    console.log('[VUE-103] 🚀 调用createAnnotationSession')
-    const data = await createAnnotationSession(currentProject.value.id, {
-      file_ids: targetFiles.map((file) => file.id),
-      use_keywords: workForm.mode === 'keyword',
-      keywords,
-      confidence_threshold: confidenceThreshold,
-    })
-    console.log(`[VUE-104] ✅ API调用成功 | tasks=${data.tasks?.length || 0}`)
+      console.log('[VUE-103] 🚀 调用createAnnotationSession')
+      const data = await createAnnotationSession(currentProject.value.id, {
+        file_ids: targetFiles.map((file) => file.id),
+        use_keywords: workForm.mode === 'keyword',
+        keywords,
+        confidence_threshold: confidenceThreshold,
+      })
+      console.log(`[VUE-104] ✅ API调用成功 | tasks=${data.tasks?.length || 0}`)
 
-    // ⚠️ 关键修复：过滤 null 元素
-    const rawTasks = data.tasks || []
-    const validTasks = rawTasks.filter((t) => t && t.task_id && t.file_id)
+      // ⚠️ 关键修复：过滤 null 元素
+      const rawTasks = data.tasks || []
+      const validTasks = rawTasks.filter((t) => t && t.task_id && t.file_id)
 
-    if (validTasks.length === 0) {
-      console.error('[VUE-104b] ❌ 没有有效的任务返回')
-      window.alert('创建任务失败：后端返回的任务数据无效')
-      return
-    }
+      if (validTasks.length === 0) {
+        console.error('[VUE-104b] ❌ 没有有效的任务返回')
+        window.alert('创建任务失败：后端返回的任务数据无效')
+        return
+      }
 
-    if (validTasks.length > 0) {
-      localStorage.setItem(`batch_tasks_${data.project_id}`, JSON.stringify(validTasks))
+      if (validTasks.length > 0) {
+        localStorage.setItem(`batch_tasks_${data.project_id}`, JSON.stringify(validTasks))
 
-      validTasks.forEach((task) => {
-        if (task.annotations && task.annotations.length > 0) {
-          localStorage.setItem(
-            `pre_annotations_${task.task_id}`,
-            JSON.stringify({
-              annotations: task.annotations,
-              source: 'ai_prediction',
-              timestamp: Date.now(),
-            })
-          )
-        }
+        validTasks.forEach((task) => {
+          if (task.annotations && task.annotations.length > 0) {
+            localStorage.setItem(
+              `pre_annotations_${task.task_id}`,
+              JSON.stringify({
+                annotations: task.annotations,
+                source: 'ai_prediction',
+                timestamp: Date.now(),
+              })
+            )
+          }
+        })
+
+        localStorage.setItem(
+          `project_keywords_${data.project_id}`,
+          JSON.stringify({
+            use_keywords: data.use_keywords,
+            keywords: data.keywords,
+            mode: workForm.mode,
+          })
+        )
+      }
+
+      closeWorkDialog()
+
+      console.log('[VUE-105] 等待2秒后刷新...')
+      updateActionLoading('正在同步项目数据，请稍候...')
+      await new Promise((resolve) => setTimeout(resolve, 2000))
+
+      console.log('[VUE-106] 🔄 调用loadProjects()')
+      await loadProjects()
+      console.log('[VUE-107] ✅ loadProjects()完成')
+
+      await nextTick()
+      console.log('[VUE-108] nextTick完成')
+
+      const refreshedProject = projectList.value.find((p) => p.id === currentProjectId.value)
+      console.log(`[VUE-109] 刷新后项目查找 | found=${!!refreshedProject}`)
+
+      if (!refreshedProject) {
+        console.log('[VUE-110] ❌ 刷新后项目不存在')
+        throw new Error('项目数据刷新失败，请返回项目列表重试')
+      }
+
+      refreshedProject.folders.forEach((folder) => {
+        console.log(`[VUE-112] 文件夹[${folder.name}] | count=${folder.files.length}`)
       })
 
-      localStorage.setItem(
-        `project_keywords_${data.project_id}`,
-        JSON.stringify({
-          use_keywords: data.use_keywords,
-          keywords: data.keywords,
-          mode: workForm.mode,
-        })
-      )
-    }
+      const pendingFolder = refreshedProject.folders.find((f) => f.name === '待标注')
+      const targetFileIds = new Set(targetFiles.map((f) => f.id))
+      const stillInPending = pendingFolder?.files.some((f) => targetFileIds.has(f.id))
 
-    closeWorkDialog()
+      console.log(`[VUE-114] 文件状态检查 | stillInPending=${stillInPending}`)
 
-    console.log('[VUE-105] 等待2秒后刷新...')
-    await new Promise((resolve) => setTimeout(resolve, 2000))
+      if (stillInPending) {
+        console.log('[VUE-115] ⚠️ 警告：文件仍在待标注文件夹')
+        console.log('[VUE-116] 🔄 执行第二次刷新')
+        updateActionLoading('正在等待文件状态同步，请稍候...')
+        await new Promise((resolve) => setTimeout(resolve, 1000))
+        await loadProjects()
+        await nextTick()
+      }
 
-    console.log('[VUE-106] 🔄 调用loadProjects()')
-    await loadProjects()
-    console.log('[VUE-107] ✅ loadProjects()完成')
+      const labelingFolder = refreshedProject.folders?.find((f) => f.name === '标注中')
+      if (labelingFolder) {
+        currentFolderId.value = labelingFolder.id
+        selectedFileIds.value = []
+        console.log(`[VUE-117] ✅ 切换到标注中文件夹 | files=${labelingFolder.files.length}`)
+      }
 
-    await nextTick()
-    console.log('[VUE-108] nextTick完成')
+      console.log('[VUE-118] 跳转到标注页面')
 
-    const refreshedProject = projectList.value.find((p) => p.id === currentProjectId.value)
-    console.log(`[VUE-109] 刷新后项目查找 | found=${!!refreshedProject}`)
+      const firstTask = validTasks[0]
+      const taskList = validTasks.map((t) => ({
+        task_id: t.task_id,
+        file_id: t.file_id,
+        filename: t.filename,
+        image_url: t.image_url,
+        status: 'labeling',
+        project_name: t.project_name,
+        project_id: data.project_id,
+        use_keywords: t.use_keywords,
+        keywords: t.keywords,
+        annotations: t.annotations || [],
+      }))
 
-    if (!refreshedProject) {
-      console.log('[VUE-110] ❌ 刷新后项目不存在')
-      throw new Error('项目数据刷新失败，请返回项目列表重试')
-    }
+      // ⚠️ 再次过滤确保没有 null
+      const finalTaskList = taskList.filter((t) => t && t.task_id)
 
-    refreshedProject.folders.forEach((folder) => {
-      console.log(`[VUE-112] 文件夹[${folder.name}] | count=${folder.files.length}`)
+      updateActionLoading('正在进入标注页面，请稍候...')
+      await navigateToAnnotate(firstTask, finalTaskList, { withLoading: false })
+      console.log('[VUE-119] ========== 流程结束 ==========')
     })
-
-    const pendingFolder = refreshedProject.folders.find((f) => f.name === '待标注')
-    const targetFileIds = new Set(targetFiles.map((f) => f.id))
-    const stillInPending = pendingFolder?.files.some((f) => targetFileIds.has(f.id))
-
-    console.log(`[VUE-114] 文件状态检查 | stillInPending=${stillInPending}`)
-
-    if (stillInPending) {
-      console.log('[VUE-115] ⚠️ 警告：文件仍在待标注文件夹')
-      console.log('[VUE-116] 🔄 执行第二次刷新')
-      await new Promise((resolve) => setTimeout(resolve, 1000))
-      await loadProjects()
-      await nextTick()
-    }
-
-    const labelingFolder = refreshedProject.folders?.find((f) => f.name === '标注中')
-    if (labelingFolder) {
-      currentFolderId.value = labelingFolder.id
-      selectedFileIds.value = []
-      console.log(`[VUE-117] ✅ 切换到标注中文件夹 | files=${labelingFolder.files.length}`)
-    }
-
-    console.log('[VUE-118] 跳转到标注页面')
-
-    const firstTask = validTasks[0]
-    const taskList = validTasks.map((t) => ({
-      task_id: t.task_id,
-      file_id: t.file_id,
-      filename: t.filename,
-      image_url: t.image_url,
-      status: 'labeling',
-      project_name: t.project_name,
-      project_id: data.project_id,
-      use_keywords: t.use_keywords,
-      keywords: t.keywords,
-      annotations: t.annotations || [],
-    }))
-
-    // ⚠️ 再次过滤确保没有 null
-    const finalTaskList = taskList.filter((t) => t && t.task_id)
-
-    navigateToAnnotate(firstTask, finalTaskList)
-    console.log('[VUE-119] ========== 流程结束 ==========')
   } catch (error) {
     console.error('[VUE-120] ❌ 创建标注任务失败:', error)
     window.alert(error?.response?.data?.detail || getFriendlyErrorMessage(error) || '创建标注任务失败')
@@ -3917,20 +3988,25 @@ const deleteProject = async (projectId) => {
   if (!confirmed) return
 
   try {
-    deletingProjectId.value = projectId
+    await runWithActionLoading('正在删除项目，请稍候...', async () => {
+      deletingProjectId.value = projectId
 
-    await deleteProjectApi(projectId)
+      await deleteProjectApi(projectId)
 
-    // 先乐观更新列表，确保删除后立即反馈
-    projectList.value = projectList.value.filter((item) => item.id !== projectId)
+      // 先乐观更新列表，确保删除后立即反馈
+      projectList.value = projectList.value.filter((item) => item.id !== projectId)
 
-    if (currentProjectId.value === projectId) {
-      backToProjectList()
-    }
+      if (currentProjectId.value === projectId) {
+        backToProjectList()
+      }
 
-    // 再异步拉最新数据，修正可能的服务端并发变化
-    loadProjects().catch((err) => {
-      console.warn('删除后刷新项目列表失败：', err)
+      // 再拉最新数据，修正可能的服务端并发变化
+      updateActionLoading('正在刷新项目列表，请稍候...')
+      try {
+        await loadProjects()
+      } catch (err) {
+        console.warn('删除后刷新项目列表失败：', err)
+      }
     })
   } catch (error) {
     console.error('删除项目失败：', error)
@@ -5179,15 +5255,71 @@ onBeforeUnmount(() => {
 .mask-fade-enter-active,
 .mask-fade-leave-active,
 .preview-fade-enter-active,
-.preview-fade-leave-active {
+.preview-fade-leave-active,
+.waiting-fade-enter-active,
+.waiting-fade-leave-active {
   transition: opacity 0.2s ease;
 }
 
 .mask-fade-enter-from,
 .mask-fade-leave-to,
 .preview-fade-enter-from,
-.preview-fade-leave-to {
+.preview-fade-leave-to,
+.waiting-fade-enter-from,
+.waiting-fade-leave-to {
   opacity: 0;
+}
+
+.action-waiting-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: rgba(15, 23, 42, 0.42);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  box-sizing: border-box;
+}
+
+.action-waiting-card {
+  width: min(320px, 100%);
+  border-radius: 20px;
+  padding: 28px 24px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.2);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  text-align: center;
+}
+
+.action-waiting-spinner {
+  width: 42px;
+  height: 42px;
+  margin: 0 auto 16px;
+  border-radius: 50%;
+  border: 3px solid rgba(59, 130, 246, 0.16);
+  border-top-color: #2563eb;
+  animation: action-waiting-spin 0.8s linear infinite;
+}
+
+.action-waiting-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.action-waiting-text {
+  margin-top: 8px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #475569;
+}
+
+@keyframes action-waiting-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @media (max-width: 640px) {

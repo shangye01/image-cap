@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import base64
 import os
 import random
 import secrets
+from html import escape
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -22,6 +24,10 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 DEFAULT_ORG_TYPES = {"个人", "团队"}
 AVATAR_BUCKET = os.getenv("SUPABASE_AVATAR_BUCKET", "avatars")
+CAPTCHA_EXPIRE_MINUTES = 5
+CAPTCHA_LENGTH = 4
+CAPTCHA_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+CAPTCHA_STORE: dict[str, dict[str, Any]] = {}
 DEFAULT_AVATAR_SVGS = [
     ("avatar-1.svg", "#6366f1", "A"),
     ("avatar-2.svg", "#0ea5e9", "B"),
@@ -40,6 +46,14 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     username: str = Field(min_length=2, max_length=50)
     password: str = Field(min_length=6, max_length=128)
+    captcha_id: str = Field(min_length=8, max_length=64)
+    captcha_code: str = Field(min_length=4, max_length=10)
+
+
+class CaptchaResponse(BaseModel):
+    captcha_id: str
+    image_data: str
+    expires_in: int
 
 
 class LogoutRequest(BaseModel):
@@ -95,6 +109,77 @@ def _avatar_svg(fill: str, label: str) -> bytes:
 <text x='50%' y='54%' dominant-baseline='middle' text-anchor='middle'
       font-family='Arial, sans-serif' font-size='120' font-weight='700' fill='white'>{label}</text>
 </svg>""".encode("utf-8")
+
+
+def _cleanup_expired_captchas() -> None:
+    now = _utc_now()
+    expired_ids = [
+        captcha_id
+        for captcha_id, item in CAPTCHA_STORE.items()
+        if item.get("expires_at") is None or item["expires_at"] <= now
+    ]
+    for captcha_id in expired_ids:
+        CAPTCHA_STORE.pop(captcha_id, None)
+
+
+def _build_captcha_svg(code: str) -> bytes:
+    line_fragments = []
+    for _ in range(6):
+        x1 = random.randint(8, 152)
+        y1 = random.randint(8, 52)
+        x2 = random.randint(8, 152)
+        y2 = random.randint(8, 52)
+        color = random.choice(["#cbd5e1", "#bfdbfe", "#ddd6fe", "#fecaca"])
+        line_fragments.append(
+            f"<line x1='{x1}' y1='{y1}' x2='{x2}' y2='{y2}' stroke='{color}' stroke-width='1.5' />"
+        )
+
+    text_fragments = []
+    for index, char in enumerate(code):
+        x = 22 + index * 28 + random.randint(-2, 2)
+        y = 35 + random.randint(-3, 4)
+        rotate = random.randint(-18, 18)
+        color = random.choice(["#0f172a", "#1d4ed8", "#7c3aed", "#be123c"])
+        text_fragments.append(
+            f"<text x='{x}' y='{y}' transform='rotate({rotate} {x} {y})' "
+            f"font-family='Arial, sans-serif' font-size='24' font-weight='700' fill='{color}'>{escape(char)}</text>"
+        )
+
+    svg = f"""
+<svg xmlns='http://www.w3.org/2000/svg' width='160' height='60' viewBox='0 0 160 60'>
+  <rect width='160' height='60' rx='12' fill='#f8fafc' />
+  <rect x='1' y='1' width='158' height='58' rx='11' fill='none' stroke='#cbd5e1' />
+  {''.join(line_fragments)}
+  {''.join(text_fragments)}
+</svg>
+""".strip()
+    return svg.encode("utf-8")
+
+
+def _issue_captcha() -> CaptchaResponse:
+    _cleanup_expired_captchas()
+    code = "".join(secrets.choice(CAPTCHA_ALPHABET) for _ in range(CAPTCHA_LENGTH))
+    captcha_id = secrets.token_urlsafe(16)
+    expires_at = _utc_now() + timedelta(minutes=CAPTCHA_EXPIRE_MINUTES)
+    CAPTCHA_STORE[captcha_id] = {"code": code, "expires_at": expires_at}
+    image_data = "data:image/svg+xml;base64," + base64.b64encode(_build_captcha_svg(code)).decode("ascii")
+    return CaptchaResponse(
+        captcha_id=captcha_id,
+        image_data=image_data,
+        expires_in=CAPTCHA_EXPIRE_MINUTES * 60,
+    )
+
+
+def _verify_captcha(captcha_id: str, captcha_code: str) -> None:
+    _cleanup_expired_captchas()
+    captcha = CAPTCHA_STORE.pop(captcha_id, None)
+    if not captcha:
+        raise HTTPException(status_code=400, detail="验证码错误或已过期，请刷新后重试")
+
+    expected_code = str(captcha.get("code") or "").strip().upper()
+    submitted_code = captcha_code.strip().upper()
+    if not submitted_code or submitted_code != expected_code:
+        raise HTTPException(status_code=400, detail="验证码错误或已过期，请刷新后重试")
 
 
 def _normalize_bucket_list(items: Any) -> list[Any]:
@@ -364,8 +449,14 @@ def register(data: RegisterRequest, db: Session = Depends(get_db)):
 
 
 
+@router.get("/captcha", response_model=CaptchaResponse)
+def get_captcha():
+    return _issue_captcha()
+
+
 @router.post("/login")
 def login(data: LoginRequest, db: Session = Depends(get_db)):
+    _verify_captcha(data.captcha_id, data.captcha_code)
     user = _get_user_by_username(db, data.username.strip())
     if not user or not verify_password(data.password, user.password_hash):
         raise HTTPException(status_code=401, detail="用户名或密码错误")

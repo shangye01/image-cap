@@ -44,7 +44,22 @@ export interface UserProfile {
   organizations: UserOrganization[]
 }
 
-export function loginApi(data: { username: string; password: string }) {
+export interface CaptchaPayload {
+  captcha_id: string
+  image_data: string
+  expires_in: number
+}
+
+export function getCaptchaApi() {
+  return request.get<CaptchaPayload>('/auth/captcha')
+}
+
+export function loginApi(data: {
+  username: string
+  password: string
+  captcha_id: string
+  captcha_code: string
+}) {
   return request.post<{ access_token: string; user: UserProfile }>('/auth/login', data)
 }
 

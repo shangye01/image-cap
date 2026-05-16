@@ -36,7 +36,6 @@ const router = createRouter({
         { path: '', redirect: '/app/guide' },
         { path: 'guide', name: 'guide', component: () => import('@/views/guide/CreateGuide.vue') },
         { path: 'project', name: 'project', component: () => import('@/views/project/ProjectContent.vue') },
-        { path: 'history', name: 'history', component: () => import('@/views/history/History.vue') },
         {
           path: 'publish',
           name: 'publish',

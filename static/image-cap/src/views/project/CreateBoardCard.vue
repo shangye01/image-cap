@@ -68,6 +68,7 @@
                     ref="folderInputRef"
                     class="hidden-input"
                     type="file"
+                    accept="image/*"
                     webkitdirectory
                     multiple
                     @change="handleFolderUpload"
@@ -225,8 +226,8 @@ const handleFolderUpload = (event) => {
   const files = event.target.files
   if (!files || !files.length) return
 
-  const allPickedFiles = normalizeFiles(files)
-  mergeFiles(allPickedFiles)
+  const imageFiles = normalizeFiles(files).filter((item) => isImageLikeFile(item))
+  mergeFiles(imageFiles)
   event.target.value = ''
 }
 

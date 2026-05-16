@@ -265,4 +265,8 @@ const handleAddMore = () => {
 }
 
 .plus { font-size: 32px; margin-bottom: 4px; }
+<<<<<<< ours
 </style>
+=======
+</style>
+>>>>>>> theirs
