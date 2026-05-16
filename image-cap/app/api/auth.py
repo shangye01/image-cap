@@ -45,6 +45,20 @@ class LoginRequest(BaseModel):
 class LogoutRequest(BaseModel):
     username: str | None = None
 
+
+class UsernameUpdateRequest(BaseModel):
+    username: str = Field(min_length=2, max_length=50)
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str = Field(min_length=6, max_length=128)
+    new_password: str = Field(min_length=6, max_length=128)
+
+
+class AccountDeleteRequest(BaseModel):
+    password: str = Field(min_length=6, max_length=128)
+
+
 class OrganizationCreateRequest(BaseModel):
     organization_nickname: str = Field(min_length=2, max_length=100)
     organization_type: str = Field(default="团队", max_length=30)
@@ -229,6 +243,35 @@ def _join_organization(db: Session, user: User, organization: Organization, join
     return True
 
 
+def _sync_organization_member_count(db: Session, organization_id: int) -> None:
+    organization = db.get(Organization, organization_id)
+    if not organization:
+        return
+
+    member_count = db.scalar(
+        select(func.count(UserOrganization.id)).where(UserOrganization.organization_id == organization_id)
+    )
+    organization.member_count = int(member_count or 0)
+    if organization.member_count <= 0:
+        db.delete(organization)
+    db.flush()
+
+
+def _remove_membership(db: Session, user_id: str, organization: Organization) -> None:
+    membership = db.scalar(
+        select(UserOrganization).where(
+            UserOrganization.user_id == user_id,
+            UserOrganization.organization_id == organization.id,
+        )
+    )
+    if not membership:
+        raise HTTPException(status_code=404, detail="你尚未加入该团队")
+
+    db.delete(membership)
+    db.flush()
+    _sync_organization_member_count(db, organization.id)
+
+
 def _resolve_user_id_from_token(authorization: str | None) -> str | None:
     if not authorization or not authorization.lower().startswith("bearer "):
         return None
@@ -335,28 +378,83 @@ def login(data: LoginRequest, db: Session = Depends(get_db)):
     token = create_access_token({"user_id": fresh_user.id, "username": fresh_user.username})
     return {"access_token": token, "user": _serialize_user(fresh_user)}
 
-    @router.post("/logout")
-    def logout(
-            data: LogoutRequest,
-            authorization: str | None = Header(default=None),
-            db: Session = Depends(get_db),
-    ):
-        user_id = _resolve_user_id_from_token(authorization)
-        if not user_id and data.username:
-            user = _get_user_by_username(db, data.username.strip())
-            user_id = user.id if user else None
 
-        if user_id:
-            user = _get_user_by_id(db, user_id)
-            if user:
-                user.is_active = False
-                db.commit()
-        return {"message": "退出成功"}
+
+@router.post("/logout")
+def logout(
+    data: LogoutRequest,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    user_id = _resolve_user_id_from_token(authorization)
+    if not user_id and data.username:
+        user = _get_user_by_username(db, data.username.strip())
+        user_id = user.id if user else None
+
+    if user_id:
+        user = _get_user_by_id(db, user_id)
+        if user:
+            user.is_active = False
+            db.commit()
+    return {"message": "退出成功"}
 
 @router.get("/me")
 def get_me(authorization: str | None = Header(default=None), db: Session = Depends(get_db)):
     user = _require_current_user(db, authorization)
     return {"user": _serialize_user(user)}
+
+
+@router.put("/me/username")
+def update_username(
+    payload: UsernameUpdateRequest,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    user = _require_current_user(db, authorization)
+    username = payload.username.strip()
+    if username != user.username and _get_user_by_username(db, username):
+        raise HTTPException(status_code=409, detail="用户名已存在")
+
+    user.username = username
+    db.commit()
+    fresh_user = _get_user_by_id(db, user.id)
+    return {"message": "用户名已更新", "user": _serialize_user(fresh_user)}
+
+
+@router.put("/me/password")
+def change_password(
+    payload: PasswordChangeRequest,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    user = _require_current_user(db, authorization)
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(status_code=401, detail="当前密码不正确")
+    if payload.current_password == payload.new_password:
+        raise HTTPException(status_code=400, detail="新密码不能与当前密码相同")
+
+    user.password_hash = hash_password(payload.new_password)
+    db.commit()
+    return {"message": "密码已更新"}
+
+
+@router.delete("/me")
+def delete_account(
+    payload: AccountDeleteRequest,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    user = _require_current_user(db, authorization)
+    if not verify_password(payload.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="密码不正确")
+
+    organization_ids = [membership.organization_id for membership in user.organizations]
+    db.delete(user)
+    db.flush()
+    for organization_id in organization_ids:
+        _sync_organization_member_count(db, organization_id)
+    db.commit()
+    return {"message": "账户已注销"}
 
 
 @router.post("/organizations")
@@ -414,6 +512,32 @@ def list_organization_members(
         "organization_nickname": organization.nickname,
         "members": _serialize_members(organization),
     }
+
+
+@router.delete("/organizations/{organization_nickname}/members/me")
+def leave_organization(
+    organization_nickname: str,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    user = _require_current_user(db, authorization)
+    organization = db.scalar(
+        select(Organization)
+        .join(UserOrganization, UserOrganization.organization_id == Organization.id)
+        .where(
+            Organization.nickname == organization_nickname,
+            UserOrganization.user_id == user.id,
+        )
+    )
+    if not organization:
+        raise HTTPException(status_code=404, detail="未找到当前团队或你尚未加入")
+    if organization.org_type != "团队":
+        raise HTTPException(status_code=400, detail="个人组织不支持退出")
+
+    _remove_membership(db, user.id, organization)
+    db.commit()
+    fresh_user = _get_user_by_id(db, user.id)
+    return {"message": f"已退出团队“{organization_nickname}”", "user": _serialize_user(fresh_user)}
 
 
 @router.post("/team-invitations")

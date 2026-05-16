@@ -65,6 +65,18 @@ export function getMeApi() {
   return request.get<{ user: UserProfile }>('/auth/me')
 }
 
+export function updateUsernameApi(data: { username: string }) {
+  return request.put<{ message: string; user: UserProfile }>('/auth/me/username', data)
+}
+
+export function changePasswordApi(data: { current_password: string; new_password: string }) {
+  return request.put<{ message: string }>('/auth/me/password', data)
+}
+
+export function deleteAccountApi(data: { password: string }) {
+  return request.delete<{ message: string }>('/auth/me', { data })
+}
+
 export function createOrganizationApi(data: {
   organization_nickname: string
   organization_type?: '团队'
@@ -78,6 +90,12 @@ export function createOrganizationApi(data: {
 export function listOrganizationMembersApi(organizationNickname: string) {
   return request.get<{ organization_nickname: string; members: TeamMember[] }>(
     `/auth/organizations/${encodeURIComponent(organizationNickname)}/members`,
+  )
+}
+
+export function leaveOrganizationApi(organizationNickname: string) {
+  return request.delete<{ message: string; user: UserProfile }>(
+    `/auth/organizations/${encodeURIComponent(organizationNickname)}/members/me`,
   )
 }
 
