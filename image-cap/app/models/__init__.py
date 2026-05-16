@@ -1,7 +1,7 @@
 from .base import Base
 from .performance import AnnotationTaskActivity
 from .project_storage import Project, ProjectFile
-from .user import Organization, TeamInvitation, User, UserOrganization
+from .user import Organization, PasswordHistory, TeamInvitation, User, UserOrganization
 
 __all__ = [
     "Base",
@@ -12,4 +12,5 @@ __all__ = [
     "Organization",
     "UserOrganization",
     "TeamInvitation",
+    "PasswordHistory",
 ]

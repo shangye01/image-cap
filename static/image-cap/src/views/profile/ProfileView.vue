@@ -238,6 +238,7 @@
         </el-form-item>
         <el-form-item label="新密码">
           <el-input v-model="passwordForm.newPassword" type="password" show-password />
+          <div class="password-policy-tip">{{ PASSWORD_POLICY_HINT }}</div>
         </el-form-item>
         <el-form-item label="确认新密码">
           <el-input v-model="passwordForm.confirmPassword" type="password" show-password />
@@ -266,6 +267,7 @@ import {
 } from '@/api/auth'
 import { getMyPerformanceSummary } from '@/api/performance'
 import { useUserStore } from '@/stores/user'
+import { PASSWORD_POLICY_HINT, validatePasswordPolicy } from '@/utils/passwordPolicy'
 import GradientBackground from '@/components/GradientBackground.vue'
 const performanceSummary = ref(null)
 
@@ -374,8 +376,9 @@ const submitPasswordChange = async () => {
     ElMessage.warning('请填写完整密码信息')
     return
   }
-  if (passwordForm.newPassword.length < 6) {
-    ElMessage.warning('新密码至少 6 位')
+  const passwordError = validatePasswordPolicy(passwordForm.newPassword)
+  if (passwordError) {
+    ElMessage.warning(passwordError)
     return
   }
   if (passwordForm.newPassword !== passwordForm.confirmPassword) {
@@ -748,6 +751,12 @@ onMounted(() => {
 .fade-slide-leave-to {
   opacity: 0;
   transform: translateY(8px);
+}
+.password-policy-tip {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #64748b;
 }
 @media (max-width: 1024px) {
   .profile-layout {

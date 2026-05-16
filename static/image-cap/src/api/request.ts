@@ -1,8 +1,18 @@
 import axios, { type AxiosRequestConfig } from 'axios'
 import { useUserStore } from '@/stores/user'
 
+function resolveApiBaseUrl() {
+  const configuredBaseUrl = String(import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/+$/, '')
+
+  if (configuredBaseUrl) {
+    return configuredBaseUrl.endsWith('/api') ? configuredBaseUrl : `${configuredBaseUrl}/api`
+  }
+
+  return import.meta.env.DEV ? 'http://127.0.0.1:8000/api' : '/api'
+}
+
 const service = axios.create({
-  baseURL: '/api',
+  baseURL: resolveApiBaseUrl(),
   timeout: 10000,
 })
 

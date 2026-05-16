@@ -15,8 +15,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..config import supabase
+from ..core.password_policy import RECENT_PASSWORD_HISTORY_LIMIT, validate_password_policy
 from ..db.session import get_db
-from ..models import Organization, TeamInvitation, User, UserOrganization
+from ..models import Organization, PasswordHistory, TeamInvitation, User, UserOrganization
 from ..utils.jwt import ALGORITHM, SECRET_KEY, create_access_token
 from ..utils.security import hash_password, verify_password
 
@@ -38,7 +39,7 @@ DEFAULT_AVATAR_SVGS = [
 
 class RegisterRequest(BaseModel):
     username: str = Field(min_length=2, max_length=50)
-    password: str = Field(min_length=6, max_length=128)
+    password: str = Field(min_length=8, max_length=128)
     organization_nickname: str | None = Field(default=None, max_length=100)
     organization_type: str | None = Field(default="个人", max_length=30)
 
@@ -66,7 +67,7 @@ class UsernameUpdateRequest(BaseModel):
 
 class PasswordChangeRequest(BaseModel):
     current_password: str = Field(min_length=6, max_length=128)
-    new_password: str = Field(min_length=6, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
 
 
 class AccountDeleteRequest(BaseModel):
@@ -101,6 +102,67 @@ def _utc_now() -> datetime:
 
 def _format_dt(value: datetime | None) -> str | None:
     return value.strftime("%Y-%m-%d %H:%M:%S") if value else None
+
+
+def _assert_valid_password(password: str) -> None:
+    try:
+        validate_password_policy(password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _list_recent_password_histories(db: Session, user_id: str, limit: int = RECENT_PASSWORD_HISTORY_LIMIT) -> list[PasswordHistory]:
+    stmt = (
+        select(PasswordHistory)
+        .where(PasswordHistory.user_id == user_id)
+        .order_by(PasswordHistory.created_at.desc(), PasswordHistory.id.desc())
+        .limit(limit)
+    )
+    return list(db.scalars(stmt).all())
+
+
+def _seed_current_password_history(db: Session, user: User) -> None:
+    latest_history = db.scalar(
+        select(PasswordHistory)
+        .where(PasswordHistory.user_id == user.id)
+        .order_by(PasswordHistory.created_at.desc(), PasswordHistory.id.desc())
+        .limit(1)
+    )
+    if latest_history and latest_history.password_hash == user.password_hash:
+        return
+
+    db.add(
+        PasswordHistory(
+            user_id=user.id,
+            password_hash=user.password_hash,
+            created_at=user.last_login_at or user.created_at or _utc_now(),
+        )
+    )
+    db.flush()
+
+
+def _assert_password_not_recently_used(db: Session, user: User, password: str) -> None:
+    for history in _list_recent_password_histories(db, user.id):
+        if verify_password(password, history.password_hash):
+            raise HTTPException(
+                status_code=400,
+                detail=f"新密码不能与最近 {RECENT_PASSWORD_HISTORY_LIMIT} 次使用过的密码重复",
+            )
+
+
+def _record_password_history(db: Session, user_id: str, password_hash: str) -> None:
+    db.add(PasswordHistory(user_id=user_id, password_hash=password_hash, created_at=_utc_now()))
+    db.flush()
+
+    histories = list(
+        db.scalars(
+            select(PasswordHistory)
+            .where(PasswordHistory.user_id == user_id)
+            .order_by(PasswordHistory.created_at.desc(), PasswordHistory.id.desc())
+        ).all()
+    )
+    for stale_history in histories[RECENT_PASSWORD_HISTORY_LIMIT:]:
+        db.delete(stale_history)
 
 
 def _avatar_svg(fill: str, label: str) -> bytes:
@@ -426,6 +488,7 @@ def register(data: RegisterRequest, db: Session = Depends(get_db)):
     username = data.username.strip()
     if _get_user_by_username(db, username):
         raise HTTPException(status_code=409, detail="用户名已存在")
+    _assert_valid_password(data.password)
 
     joined_at = _utc_now()
     user = User(
@@ -439,6 +502,7 @@ def register(data: RegisterRequest, db: Session = Depends(get_db)):
     )
     db.add(user)
     db.flush()
+    _record_password_history(db, user.id, user.password_hash)
 
     default_organization = _ensure_organization(db, f"{username}的个人团队", "个人", joined_at)
     _join_organization(db, user, default_organization, joined_at)
@@ -523,8 +587,12 @@ def change_password(
         raise HTTPException(status_code=401, detail="当前密码不正确")
     if payload.current_password == payload.new_password:
         raise HTTPException(status_code=400, detail="新密码不能与当前密码相同")
+    _assert_valid_password(payload.new_password)
+    _seed_current_password_history(db, user)
+    _assert_password_not_recently_used(db, user, payload.new_password)
 
     user.password_hash = hash_password(payload.new_password)
+    _record_password_history(db, user.id, user.password_hash)
     db.commit()
     return {"message": "密码已更新"}
 

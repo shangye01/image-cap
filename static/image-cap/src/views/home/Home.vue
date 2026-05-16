@@ -179,14 +179,35 @@
             <label>密码</label>
             <input v-model="loginForm.password" type="password" placeholder="请输入密码" />
           </div>
+          <div class="input-group">
+            <label>验证码</label>
+            <div class="captcha-row">
+              <input
+                v-model.trim="loginForm.captcha_code"
+                class="captcha-code-input"
+                maxlength="10"
+                placeholder="请输入图中内容"
+              />
+              <button
+                class="captcha-button"
+                type="button"
+                :disabled="loginCaptchaLoading"
+                @click="refreshLoginCaptcha()"
+              >
+                <img v-if="loginCaptchaImage" :src="loginCaptchaImage" alt="验证码" class="captcha-image" />
+                <span v-else>{{ loginCaptchaLoading ? '加载中...' : '刷新验证码' }}</span>
+              </button>
+            </div>
+            <div class="captcha-tip">看不清？点击图片刷新</div>
+          </div>
           <div v-if="loginError" class="error">{{ loginError }}</div>
-          <button class="submit-btn" @click="submitLogin" :disabled="loginLoading">
+          <button class="submit-btn" @click="submitLogin" :disabled="loginLoading || loginCaptchaLoading || !loginForm.captcha_id">
             <span v-if="loginLoading" class="spinner"></span>
             <span v-else>登录</span>
           </button>
           <div class="form-footer">
             <span>还没有账号？</span>
-            <a @click="drawerMode = 'register'">立即注册</a>
+            <a @click="switchToRegisterMode">立即注册</a>
           </div>
         </div>
 
@@ -206,8 +227,30 @@
             </div>
           </div>
           <div class="input-group">
-            <label>密码</label>
-            <input v-model="registerForm.password" type="password" placeholder="设置登录密码（至少6位）" />
+            <label class="password-label">
+              <span>密码</span>
+              <button
+                class="rule-trigger"
+                type="button"
+                :aria-expanded="showRegisterPasswordRules ? 'true' : 'false'"
+                aria-label="查看密码规则"
+                @click="showRegisterPasswordRules = !showRegisterPasswordRules"
+              >
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8" />
+                  <path d="M12 10.2V16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+                  <circle cx="12" cy="7.5" r="1" fill="currentColor" />
+                </svg>
+              </button>
+            </label>
+            <input v-model="registerForm.password" type="password" placeholder="设置登录密码（至少8位，含字母和数字）" />
+            <div v-if="showRegisterPasswordRules" class="password-rules">
+              <div class="password-rules__title">密码规则</div>
+              <ul class="password-rules__list">
+                <li v-for="item in PASSWORD_POLICY_ITEMS" :key="item">{{ item }}</li>
+              </ul>
+            </div>
+            <div class="password-tip">{{ PASSWORD_POLICY_HINT }}</div>
           </div>
           <div class="input-group">
             <label>确认密码</label>
@@ -220,7 +263,7 @@
           </button>
           <div class="form-footer">
             <span>已有账号？</span>
-            <a @click="drawerMode = 'login'">直接登录</a>
+            <a @click="switchToLoginMode()">直接登录</a>
           </div>
         </div>
       </div>
@@ -230,8 +273,13 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import { loginApi, logoutApi, registerApi } from '@/api/auth'
+import { getCaptchaApi, loginApi, logoutApi, registerApi } from '@/api/auth'
 import { useUserStore } from '@/stores/user'
+import {
+  PASSWORD_POLICY_HINT,
+  PASSWORD_POLICY_ITEMS,
+  validatePasswordPolicy,
+} from '@/utils/passwordPolicy'
 import { useRouter } from 'vue-router'
 
 const userStore = useUserStore()
@@ -272,8 +320,7 @@ const logout = async () => {
 
 const goCreate = () => {
   if (!userStore.isLogin) {
-    drawerMode.value = 'login'
-    drawerVisible.value = true
+    openLogin()
     return
   }
   router.push('/app/guide')
@@ -285,23 +332,32 @@ const drawerMode = ref<'login' | 'register'>('login')
 const openLogin = () => {
   drawerMode.value = 'login'
   drawerVisible.value = true
+  void refreshLoginCaptcha()
 }
 
 const openRegister = () => {
   drawerMode.value = 'register'
   drawerVisible.value = true
+  showRegisterPasswordRules.value = false
 }
 
 const closeDrawer = () => {
   drawerVisible.value = false
   loginError.value = ''
   registerError.value = ''
+  loginForm.value.captcha_id = ''
+  loginForm.value.captcha_code = ''
+  loginCaptchaImage.value = ''
+  showRegisterPasswordRules.value = false
 }
 
 // ===== 登录表单 =====
-const loginForm = ref({ username: '', password: '' })
+const loginForm = ref({ username: '', password: '', captcha_id: '', captcha_code: '' })
 const loginError = ref('')
 const loginLoading = ref(false)
+const loginCaptchaImage = ref('')
+const loginCaptchaLoading = ref(false)
+const showRegisterPasswordRules = ref(false)
 
 // ===== 注册表单 =====
 const registerForm = ref({
@@ -314,12 +370,71 @@ const registerForm = ref({
 const registerError = ref('')
 const registerLoading = ref(false)
 
+const getActionErrorMessage = (err: unknown, fallback: string) => {
+  if (typeof err === 'object' && err !== null) {
+    const response = (err as { response?: { data?: { detail?: string; message?: string } } }).response
+    const detail = response?.data?.detail || response?.data?.message
+    if (detail) return detail
+  }
+
+  if (err instanceof Error && err.message) {
+    return err.message
+  }
+
+  return fallback
+}
+
+const refreshLoginCaptcha = async (preserveError = false) => {
+  loginCaptchaLoading.value = true
+  if (!preserveError) {
+    loginError.value = ''
+  }
+
+  try {
+    const result = await getCaptchaApi()
+    loginForm.value.captcha_id = result.captcha_id
+    loginForm.value.captcha_code = ''
+    loginCaptchaImage.value = result.image_data
+  } catch (err: unknown) {
+    loginForm.value.captcha_id = ''
+    loginCaptchaImage.value = ''
+    if (!preserveError) {
+      loginError.value = getActionErrorMessage(err, '验证码加载失败，请稍后重试')
+    }
+  } finally {
+    loginCaptchaLoading.value = false
+  }
+}
+
+const switchToRegisterMode = () => {
+  drawerMode.value = 'register'
+  loginError.value = ''
+  showRegisterPasswordRules.value = false
+}
+
+const switchToLoginMode = (username = '') => {
+  drawerMode.value = 'login'
+  loginError.value = ''
+  if (username) {
+    loginForm.value.username = username
+  }
+  void refreshLoginCaptcha()
+}
+
 // 登录
 const submitLogin = async () => {
   loginError.value = ''
   if (!loginForm.value.username) return (loginError.value = '请输入用户名称')
   if (!loginForm.value.password) return (loginError.value = '请输入密码')
+  if (!loginForm.value.captcha_code) return (loginError.value = '请输入验证码')
   if (loginLoading.value) return
+  if (!loginForm.value.captcha_id) {
+    await refreshLoginCaptcha()
+    if (!loginForm.value.captcha_id) {
+      loginError.value = '验证码加载失败，请刷新后重试'
+      return
+    }
+  }
 
   try {
     loginLoading.value = true
@@ -327,8 +442,9 @@ const submitLogin = async () => {
     userStore.login(result.user, result.access_token)
     drawerVisible.value = false
     router.push('/app/guide')
-  } catch (e: any) {
-    loginError.value = e?.response?.data?.detail || '登录失败'
+  } catch (err: unknown) {
+    loginError.value = getActionErrorMessage(err, '登录失败')
+    await refreshLoginCaptcha(true)
   } finally {
     loginLoading.value = false
   }
@@ -340,7 +456,8 @@ const submitRegister = async () => {
   const { username, password, confirmPassword, organization_nickname, organization_type } = registerForm.value
   if (!username) return (registerError.value = '请输入用户名称')
   if (!password) return (registerError.value = '请输入密码')
-  if (password.length < 6) return (registerError.value = '密码至少 6 位')
+  const passwordError = validatePasswordPolicy(password)
+  if (passwordError) return (registerError.value = passwordError)
   if (password !== confirmPassword) return (registerError.value = '两次密码不一致')
   if (registerLoading.value) return
 
@@ -352,12 +469,11 @@ const submitRegister = async () => {
       organization_nickname: organization_nickname || undefined,
       organization_type,
     })
-    drawerMode.value = 'login'
-    loginForm.value.username = username
+    switchToLoginMode(username)
     registerForm.value.password = ''
     registerForm.value.confirmPassword = ''
-  } catch (e: any) {
-    registerError.value = e?.response?.data?.detail || '注册失败'
+  } catch (err: unknown) {
+    registerError.value = getActionErrorMessage(err, '注册失败')
   } finally {
     registerLoading.value = false
   }
@@ -1109,6 +1225,12 @@ const submitRegister = async () => {
   color: #4a5568;
 }
 
+.password-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .input-group label .optional {
   color: #a0aec0;
   font-weight: 400;
@@ -1147,6 +1269,101 @@ const submitRegister = async () => {
   background: #f7fafc;
   color: #a0aec0;
   cursor: not-allowed;
+}
+
+.captcha-row {
+  display: grid;
+  grid-template-columns: 1fr 140px;
+  gap: 12px;
+}
+
+.captcha-code-input {
+  min-width: 0;
+}
+
+.captcha-button {
+  border: 2px solid #e2e8f0;
+  border-radius: 12px;
+  background: #f8fafc;
+  padding: 0;
+  overflow: hidden;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.captcha-button:hover:not(:disabled) {
+  border-color: #c7d2fe;
+  box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.08);
+}
+
+.captcha-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.captcha-image {
+  display: block;
+  width: 100%;
+  height: 52px;
+  object-fit: cover;
+}
+
+.captcha-tip {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #718096;
+}
+
+.password-tip {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #718096;
+}
+
+.rule-trigger {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #6366f1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.rule-trigger svg {
+  width: 14px;
+  height: 14px;
+}
+
+.password-rules {
+  margin-top: 8px;
+  padding: 12px 14px;
+  border: 1px solid #c7d2fe;
+  border-radius: 12px;
+  background: rgba(238, 242, 255, 0.92);
+}
+
+.password-rules__title {
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #4338ca;
+}
+
+.password-rules__list {
+  margin: 0;
+  padding-left: 18px;
+  color: #4c1d95;
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .error {
@@ -1298,6 +1515,10 @@ const submitRegister = async () => {
   }
 
   .input-row {
+    grid-template-columns: 1fr;
+  }
+
+  .captcha-row {
     grid-template-columns: 1fr;
   }
 }

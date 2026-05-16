@@ -23,8 +23,30 @@
         </div>
 
         <div>
-          <label>密码</label>
+          <label class="password-label">
+            <span>密码</span>
+            <button
+              type="button"
+              class="rule-trigger"
+              :aria-expanded="showPasswordRules ? 'true' : 'false'"
+              aria-label="查看密码规则"
+              @click="showPasswordRules = !showPasswordRules"
+            >
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8" />
+                <path d="M12 10.2V16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+                <circle cx="12" cy="7.5" r="1" fill="currentColor" />
+              </svg>
+            </button>
+          </label>
           <input v-model="form.password" type="password" required />
+          <div v-if="showPasswordRules" class="password-rules">
+            <div class="password-rules__title">密码规则</div>
+            <ul class="password-rules__list">
+              <li v-for="item in PASSWORD_POLICY_ITEMS" :key="item">{{ item }}</li>
+            </ul>
+          </div>
+          <p class="password-tip">{{ PASSWORD_POLICY_HINT }}</p>
         </div>
 
         <div>
@@ -51,11 +73,17 @@
 defineOptions({ name: 'AuthRegister' })
 import { computed, ref } from 'vue'
 import { registerApi } from '@/api/auth'
+import {
+  PASSWORD_POLICY_HINT,
+  PASSWORD_POLICY_ITEMS,
+  validatePasswordPolicy,
+} from '@/utils/passwordPolicy'
 import { useRoute, useRouter } from 'vue-router'
 
 const route = useRoute()
 const router = useRouter()
 const confirmPassword = ref('')
+const showPasswordRules = ref(false)
 
 const form = ref({
   username: '',
@@ -74,8 +102,9 @@ const loginLink = computed(() => ({
 
 const submit = async () => {
   error.value = ''
-  if (form.value.password.length < 6) {
-    error.value = '密码至少 6 位'
+  const passwordError = validatePasswordPolicy(form.value.password)
+  if (passwordError) {
+    error.value = passwordError
     return
   }
   if (form.value.password !== confirmPassword.value) {
@@ -91,8 +120,16 @@ const submit = async () => {
     })
     router.push(loginLink.value)
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : ''
-    error.value = message || '注册失败'
+    if (typeof err === 'object' && err !== null) {
+      const response = (err as { response?: { data?: { detail?: string; message?: string } } }).response
+      const detail = response?.data?.detail || response?.data?.message
+      if (detail) {
+        error.value = detail
+        return
+      }
+    }
+
+    error.value = err instanceof Error && err.message ? err.message : '注册失败'
   } finally {
     loading.value = false
   }
@@ -118,6 +155,48 @@ label {
   display: block;
   margin-bottom: 8px;
   font-weight: 600;
+}
+.password-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.rule-trigger {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #6366f1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.rule-trigger svg {
+  width: 14px;
+  height: 14px;
+}
+.password-rules {
+  margin: -8px 0 12px;
+  padding: 12px 14px;
+  border: 1px solid #c7d2fe;
+  border-radius: 12px;
+  background: #eef2ff;
+}
+.password-rules__title {
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #4338ca;
+}
+.password-rules__list {
+  margin: 0;
+  padding-left: 18px;
+  color: #4c1d95;
+  font-size: 12px;
+  line-height: 1.6;
 }
 input,
 select {
@@ -145,5 +224,11 @@ button {
 .switch-link {
   margin-top: 16px;
   text-align: center;
+}
+.password-tip {
+  margin: -8px 0 16px;
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.5;
 }
 </style>

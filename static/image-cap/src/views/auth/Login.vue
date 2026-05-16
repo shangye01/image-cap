@@ -13,9 +13,33 @@
           <input v-model="form.password" type="password" required />
         </div>
 
+        <div>
+          <label>验证码</label>
+          <div class="captcha-row">
+            <input
+              v-model.trim="form.captcha_code"
+              class="captcha-input"
+              type="text"
+              maxlength="10"
+              placeholder="请输入图中内容"
+              required
+            />
+            <button
+              type="button"
+              class="captcha-trigger"
+              :disabled="captchaLoading"
+              @click="refreshCaptcha()"
+            >
+              <img v-if="captchaImage" :src="captchaImage" alt="验证码" class="captcha-image" />
+              <span v-else>{{ captchaLoading ? '加载中...' : '刷新验证码' }}</span>
+            </button>
+          </div>
+          <p class="captcha-tip">看不清？点击图片刷新</p>
+        </div>
+
         <div v-if="error" class="error">{{ error }}</div>
 
-        <button type="submit" :disabled="loading">
+        <button type="submit" class="submit-btn" :disabled="loading || captchaLoading || !form.captcha_id">
           {{ loading ? '登录中...' : '登录' }}
         </button>
       </form>
@@ -30,8 +54,8 @@
 
 <script setup lang="ts">
 defineOptions({ name: 'AuthLogin' })
-import { computed, ref } from 'vue'
-import { loginApi } from '@/api/auth'
+import { computed, onMounted, ref } from 'vue'
+import { getCaptchaApi, loginApi } from '@/api/auth'
 import { useUserStore } from '@/stores/user'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -42,15 +66,41 @@ const store = useUserStore()
 const form = ref({
   username: '',
   password: '',
+  captcha_id: '',
+  captcha_code: '',
 })
 
 const loading = ref(false)
+const captchaLoading = ref(false)
+const captchaImage = ref('')
 const error = ref('')
 const redirectTarget = computed(() => String(route.query.redirect || '/app/guide'))
 const registerLink = computed(() => ({
   path: '/register',
   query: route.query.redirect ? { redirect: redirectTarget.value } : {},
 }))
+
+const refreshCaptcha = async (preserveError = false) => {
+  captchaLoading.value = true
+  if (!preserveError) {
+    error.value = ''
+  }
+
+  try {
+    const result = await getCaptchaApi()
+    form.value.captcha_id = result.captcha_id
+    form.value.captcha_code = ''
+    captchaImage.value = result.image_data
+  } catch (err: unknown) {
+    form.value.captcha_id = ''
+    captchaImage.value = ''
+    if (!preserveError) {
+      error.value = getLoginErrorMessage(err) || '验证码加载失败，请稍后重试'
+    }
+  } finally {
+    captchaLoading.value = false
+  }
+}
 
 const getLoginErrorMessage = (err: unknown) => {
   if (typeof err === 'object' && err !== null) {
@@ -68,6 +118,14 @@ const getLoginErrorMessage = (err: unknown) => {
 
 const submit = async () => {
   error.value = ''
+  if (!form.value.captcha_id) {
+    await refreshCaptcha()
+    if (!form.value.captcha_id) {
+      error.value = '验证码加载失败，请刷新后重试'
+      return
+    }
+  }
+
   loading.value = true
   try {
     const result = await loginApi(form.value)
@@ -75,10 +133,15 @@ const submit = async () => {
     router.push(redirectTarget.value)
   } catch (err: unknown) {
     error.value = getLoginErrorMessage(err)
+    await refreshCaptcha(true)
   } finally {
     loading.value = false
   }
 }
+
+onMounted(() => {
+  void refreshCaptcha()
+})
 </script>
 
 <style scoped>
@@ -108,7 +171,40 @@ input {
   border: 1px solid #d4d4d8;
   border-radius: 12px;
 }
-button {
+.captcha-row {
+  display: flex;
+  gap: 12px;
+  align-items: stretch;
+  margin-bottom: 8px;
+}
+.captcha-input {
+  flex: 1;
+  margin-bottom: 0;
+}
+.captcha-trigger {
+  width: 140px;
+  padding: 0;
+  border: 1px solid #d4d4d8;
+  border-radius: 12px;
+  background: #f8fafc;
+  overflow: hidden;
+}
+.captcha-trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+.captcha-image {
+  display: block;
+  width: 100%;
+  height: 48px;
+  object-fit: cover;
+}
+.captcha-tip {
+  margin: 0 0 16px;
+  font-size: 12px;
+  color: #64748b;
+}
+.submit-btn {
   width: 100%;
   padding: 12px 16px;
   border: none;

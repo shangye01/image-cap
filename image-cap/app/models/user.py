@@ -33,6 +33,11 @@ class User(Base):
         back_populates="accepted_by_user",
         foreign_keys="TeamInvitation.accepted_by",
     )
+    password_histories: Mapped[list[PasswordHistory]] = relationship(
+        "PasswordHistory",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
 
 
 class Organization(Base):
@@ -91,3 +96,14 @@ class TeamInvitation(Base):
     accepted_by_user: Mapped[User | None] = relationship(
         "User", back_populates="accepted_team_invitations", foreign_keys=[accepted_by]
     )
+
+
+class PasswordHistory(Base):
+    __tablename__ = "password_histories"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    user: Mapped[User] = relationship("User", back_populates="password_histories")
