@@ -685,7 +685,11 @@
         >
           <button v-if="canGoPrev" class="nav-arrow nav-prev" @click.stop="goToPrevImage">‹</button>
 
-          <div class="annotation-preview-panel" @click.stop>
+          <div
+            class="annotation-preview-panel"
+            :class="{ 'review-mode': reviewWorkbenchEnabled }"
+            @click.stop
+          >
             <div class="preview-toolbar">
               <div class="toolbar-info">
                 <span class="file-counter"
@@ -732,61 +736,264 @@
 
             <div
               class="annotation-preview-content"
+              :class="{ 'review-mode': reviewWorkbenchEnabled }"
               ref="swipeAreaRef"
               @touchstart="handleTouchStart"
               @touchend="handleTouchEnd"
             >
-              <div class="annotation-image-wrapper" ref="imageWrapperRef">
-                <div class="annotation-image-container" :style="imageContainerStyle">
-                  <img
-                    v-if="annotationPreviewImageUrl"
-                    :src="annotationPreviewImageUrl"
-                    :alt="annotationPreviewFileName"
-                    class="annotation-preview-image"
-                    @load="onAnnotationImageLoad"
-                    ref="previewImageRef"
-                    draggable="false"
-                  />
-
-                  <svg
-                    v-if="annotationImageLoaded && currentAnnotations.length > 0"
-                    class="annotation-overlay"
-                    :viewBox="`0 0 ${annotationImageNaturalWidth} ${annotationImageNaturalHeight}`"
-                    preserveAspectRatio="none"
-                  >
-                    <rect
-                      v-for="(anno, index) in currentAnnotations"
-                      :key="`box-${index}`"
-                      :x="anno.x"
-                      :y="anno.y"
-                      :width="anno.width"
-                      :height="anno.height"
-                      fill="none"
-                      :stroke="anno.color || '#ff4444'"
-                      stroke-width="2"
-                      rx="2"
+              <div class="review-split-layout" :class="{ active: reviewWorkbenchEnabled }">
+                <div class="annotation-image-wrapper" ref="imageWrapperRef">
+                  <div class="annotation-image-container" :style="imageContainerStyle">
+                    <img
+                      v-if="annotationPreviewImageUrl"
+                      :src="annotationPreviewImageUrl"
+                      :alt="annotationPreviewFileName"
+                      class="annotation-preview-image"
+                      @load="onAnnotationImageLoad"
+                      ref="previewImageRef"
+                      draggable="false"
                     />
-                  </svg>
 
-                  <div
-                    v-if="annotationImageLoaded && currentAnnotations.length > 0"
-                    class="annotation-labels-layer"
-                  >
-                    <div
-                      v-for="(anno, index) in currentAnnotations"
-                      :key="`label-${index}`"
-                      class="annotation-label"
-                      :class="{ 'label-below': isLabelBelow(anno) }"
-                      :style="getLabelStyle(anno)"
+                    <svg
+                      v-if="annotationImageLoaded && currentAnnotations.length > 0"
+                      class="annotation-overlay"
+                      :viewBox="`0 0 ${annotationImageNaturalWidth} ${annotationImageNaturalHeight}`"
+                      preserveAspectRatio="none"
                     >
-                      <span class="label-text">{{ anno.label || '未命名' }}</span>
+                      <rect
+                        v-for="(anno, index) in currentAnnotations"
+                        :key="`box-${index}`"
+                        :x="anno.x"
+                        :y="anno.y"
+                        :width="anno.width"
+                        :height="anno.height"
+                        fill="none"
+                        :stroke="anno.color || '#ff4444'"
+                        stroke-width="2"
+                        rx="2"
+                      />
+                    </svg>
+
+                    <div
+                      v-if="annotationImageLoaded && currentAnnotations.length > 0"
+                      class="annotation-labels-layer"
+                    >
+                      <div
+                        v-for="(anno, index) in currentAnnotations"
+                        :key="`label-${index}`"
+                        class="annotation-label"
+                        :class="{ 'label-below': isLabelBelow(anno) }"
+                        :style="getLabelStyle(anno)"
+                      >
+                        <span class="label-text">{{ anno.label || '未命名' }}</span>
+                      </div>
                     </div>
                   </div>
                 </div>
+
+                <aside v-if="reviewWorkbenchEnabled" class="review-side-workbench">
+                  <div v-if="reviewPreviewTabs.length > 0" class="review-preview-tabs">
+                    <button
+                      v-for="tab in reviewPreviewTabs"
+                      :key="tab.key"
+                      type="button"
+                      class="review-preview-tab"
+                      :class="{ active: reviewPreviewMode === tab.key }"
+                      @click="switchReviewPreviewMode(tab.key)"
+                    >
+                      {{ tab.label }}
+                    </button>
+                  </div>
+
+                  <div class="review-workbench">
+                    <div class="review-workbench-header">
+                      <div class="workbench-title">🧑‍⚖️ 裁决工作台</div>
+                      <div class="workbench-decision">{{ integrationDecisionText }}</div>
+                      <label class="conflict-switch">
+                        <input v-model="reviewConflictOnly" type="checkbox" />
+                        只看冲突框
+                      </label>
+                    </div>
+
+                    <div v-if="displayedReviewItems.length > 0" class="workbench-body">
+                      <div class="cluster-list">
+                        <button
+                          v-for="item in displayedReviewItems"
+                          :key="item.clusterKey"
+                          type="button"
+                          class="cluster-btn"
+                          :class="[
+                            { active: selectedReviewCluster?.clusterKey === item.clusterKey },
+                            `tone-${item.differenceMeta.tone}`,
+                          ]"
+                          @click="pickReviewCluster(item)"
+                        >
+                          <span class="cluster-btn-title">{{ getReviewItemTitle(item) }}</span>
+                          <span class="cluster-btn-meta">{{ getClusterMetricText(item) }}</span>
+                        </button>
+                      </div>
+
+                      <div v-if="selectedReviewCluster" class="cluster-detail">
+                        <div class="cluster-detail-header">
+                          <span
+                            class="difference-chip"
+                            :class="`tone-${selectedReviewCluster.differenceMeta.tone}`"
+                          >
+                            {{ selectedReviewCluster.differenceTypeLabel }}
+                          </span>
+                          <strong>{{ getReviewItemTitle(selectedReviewCluster) }}</strong>
+                          <span class="cluster-metric">{{ getClusterMetricText(selectedReviewCluster) }}</span>
+                        </div>
+
+                        <div class="difference-advice">
+                          <div class="advice-title">{{ selectedReviewCluster.differenceMeta.primaryAction }}</div>
+                          <div class="advice-text">{{ selectedReviewCluster.differenceMeta.scenario }}</div>
+                          <div class="advice-text">建议：{{ selectedReviewCluster.recommendedAction }}</div>
+                        </div>
+
+                        <div
+                          v-if="getAnnotationCountEntries(selectedReviewCluster).length"
+                          class="quantity-grid"
+                        >
+                          <div
+                            v-for="entry in getAnnotationCountEntries(selectedReviewCluster)"
+                            :key="`count-${entry.index}`"
+                            class="quantity-item"
+                          >
+                            <span>{{ getAnnotatorBadge(entry.index) }}</span>
+                            <strong>{{ entry.count }} 个目标</strong>
+                          </div>
+                        </div>
+
+                        <div class="source-comparison-grid">
+                          <div
+                            v-for="entry in reviewAnnotatorEntries"
+                            :key="`source-${selectedReviewCluster.clusterKey}-${entry.annotator_index}`"
+                            class="source-card"
+                            :class="{
+                              missing: !getClusterMembersByAnnotator(
+                                selectedReviewCluster,
+                                entry.annotator_index,
+                              ).length,
+                            }"
+                          >
+                            <div class="source-card-head">
+                              <span
+                                class="source-dot"
+                                :style="{ background: getAnnotatorColor(entry.annotator_index) }"
+                              ></span>
+                              <span>{{ getAnnotatorDisplayName(entry) }}</span>
+                            </div>
+                            <div
+                              v-if="
+                                getClusterMembersByAnnotator(
+                                  selectedReviewCluster,
+                                  entry.annotator_index,
+                                ).length
+                              "
+                              class="source-box-list"
+                            >
+                              <div
+                                v-for="(member, memberIndex) in getClusterMembersByAnnotator(
+                                  selectedReviewCluster,
+                                  entry.annotator_index,
+                                )"
+                                :key="getMemberKey(member, memberIndex)"
+                                class="source-box-row"
+                              >
+                                <span>{{ getAnnotationSummary(member) }}</span>
+                                <button
+                                  type="button"
+                                  class="mini-btn"
+                                  :class="{ active: isMemberDecisionActive(selectedReviewCluster, member) }"
+                                  @click="applyMemberDecision(member)"
+                                >
+                                  采用此框
+                                </button>
+                              </div>
+                            </div>
+                            <div v-else class="source-missing">该目标未标出</div>
+                          </div>
+
+                          <div v-if="selectedReviewCluster.fusedPreview" class="source-card fused">
+                            <div class="source-card-head">
+                              <span class="source-dot fused-dot"></span>
+                              <span>自动融合</span>
+                            </div>
+                            <div class="source-box-row">
+                              <span>{{ getAnnotationSummary(selectedReviewCluster.fusedPreview) }}</span>
+                              <button
+                                type="button"
+                                class="mini-btn primary"
+                                :class="{ active: hasClusterDecision(selectedReviewCluster, 'adopt_fused') }"
+                                @click="applyClusterDecision('adopt_fused')"
+                              >
+                                采用融合框
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div class="decision-actions">
+                          <button
+                            v-if="shouldShowAdoptFused(selectedReviewCluster)"
+                            type="button"
+                            class="mini-btn primary"
+                            :class="{ active: hasClusterDecision(selectedReviewCluster, 'adopt_fused') }"
+                            @click="applyClusterDecision('adopt_fused')"
+                          >
+                            采用融合框
+                          </button>
+                          <button
+                            v-if="shouldShowDeleteCluster(selectedReviewCluster)"
+                            type="button"
+                            class="mini-btn danger"
+                            :class="{ active: hasClusterDecision(selectedReviewCluster, 'delete_cluster') }"
+                            @click="applyClusterDecision('delete_cluster')"
+                          >
+                            删除该差异框
+                          </button>
+                          <button
+                            v-if="shouldShowReannotation(selectedReviewCluster)"
+                            type="button"
+                            class="mini-btn warning"
+                            :disabled="reviewReannotationSubmitting"
+                            @click="requestClusterReannotation(selectedReviewCluster)"
+                          >
+                            {{
+                              reviewReannotationSubmitting
+                                ? '退回中...'
+                                : getReannotationButtonLabel(selectedReviewCluster)
+                            }}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                    <div v-else class="review-workbench-empty">
+                      当前图片暂未识别到可裁决的冲突簇。你仍可切换上方视图查看各标注员结果。
+                    </div>
+
+                    <div v-if="displayedReviewItems.length > 0" class="batch-actions">
+                      <span>批量裁决：</span>
+                      <button type="button" class="mini-btn" @click="applyBatchBase(0)">
+                        全图采用{{ getAnnotatorBadge(0) }}为基础
+                      </button>
+                      <button type="button" class="mini-btn" @click="applyBatchBase(1)">
+                        全图采用{{ getAnnotatorBadge(1) }}为基础
+                      </button>
+                      <button type="button" class="mini-btn" @click="applyBatchBase(2)">
+                        全图采用{{ getAnnotatorBadge(2) }}为基础
+                      </button>
+                      <button type="button" class="mini-btn" @click="resetReviewWorkbench">
+                        恢复融合结果
+                      </button>
+                    </div>
+                  </div>
+                </aside>
               </div>
             </div>
 
-            <div class="annotation-preview-footer">
+            <div class="annotation-preview-footer" :class="{ 'review-mode': reviewWorkbenchEnabled }">
               <div class="annotation-stats">
                 <span v-if="currentAnnotations.length > 0" class="stat-item">
                   📦 {{ currentAnnotations.length }} 个标注
@@ -798,123 +1005,10 @@
                 </span>
               </div>
 
-              <div v-if="reviewWorkbenchEnabled && reviewPreviewTabs.length > 0" class="review-preview-tabs">
-                <button
-                  v-for="tab in reviewPreviewTabs"
-                  :key="tab.key"
-                  type="button"
-                  class="review-preview-tab"
-                  :class="{ active: reviewPreviewMode === tab.key }"
-                  @click="switchReviewPreviewMode(tab.key)"
-                >
-                  {{ tab.label }}
-                </button>
-              </div>
-
-              <div v-if="annotationLabels.length > 0" class="annotation-label-list">
+              <div v-if="!reviewWorkbenchEnabled && annotationLabels.length > 0" class="annotation-label-list">
                 <span v-for="label in annotationLabels" :key="label" class="annotation-label-chip">
                   🏷️ {{ label }}
                 </span>
-              </div>
-
-              <div v-if="reviewWorkbenchEnabled" class="review-workbench">
-                <div class="review-workbench-header">
-                  <div class="workbench-title">🧑‍⚖️ 裁决工作台</div>
-                  <div class="workbench-decision">{{ integrationDecisionText }}</div>
-                  <label class="conflict-switch">
-                    <input v-model="reviewConflictOnly" type="checkbox" />
-                    只看冲突框
-                  </label>
-                </div>
-
-                <div v-if="displayedReviewItems.length > 0" class="workbench-body">
-                  <div class="cluster-list">
-                    <button
-                      v-for="item in displayedReviewItems"
-                      :key="item.clusterKey"
-                      type="button"
-                      class="cluster-btn"
-                      :class="{ active: selectedReviewCluster?.clusterKey === item.clusterKey }"
-                      @click="pickReviewCluster(item)"
-                    >
-                      #{{ item.clusterKey }} · {{ item.differenceType }}
-                    </button>
-                  </div>
-
-                  <div v-if="selectedReviewCluster" class="cluster-detail">
-                    <div class="detail-line">建议：{{ selectedReviewCluster.recommendedAction }}</div>
-                    <div class="detail-line">
-                      IoU:
-                      {{
-                        selectedReviewCluster.overlay?.fused_preview?.agreement?.mean_pairwise_iou ??
-                        '-'
-                      }}
-                      · Vote:
-                      {{
-                        selectedReviewCluster.overlay?.fused_preview?.agreement?.label_vote ?? '-'
-                      }}
-                    </div>
-                    <div class="overlay-boxes">
-                      <div
-                        v-for="member in selectedReviewCluster.overlay?.member_boxes || []"
-                        :key="`${selectedReviewCluster.clusterKey}-${member.annotation_id}`"
-                        class="overlay-box-item"
-                      >
-                        <span>{{ getAnnotatorBadge(member.annotator_index) }}</span>
-                        <span>{{ member.label }}</span>
-                      </div>
-                    </div>
-                    <div class="decision-actions">
-                      <button
-                        type="button"
-                        class="mini-btn"
-                        @click="applyClusterDecision('adopt_annotator', { annotatorIndex: 0 })"
-                      >
-                        采用A
-                      </button>
-                      <button
-                        type="button"
-                        class="mini-btn"
-                        @click="applyClusterDecision('adopt_annotator', { annotatorIndex: 1 })"
-                      >
-                        采用B
-                      </button>
-                      <button
-                        type="button"
-                        class="mini-btn"
-                        @click="applyClusterDecision('adopt_annotator', { annotatorIndex: 2 })"
-                      >
-                        采用C
-                      </button>
-                      <button
-                        type="button"
-                        class="mini-btn primary"
-                        @click="applyClusterDecision('adopt_fused')"
-                      >
-                        采用融合框
-                      </button>
-                    </div>
-                  </div>
-                </div>
-                <div v-else class="review-workbench-empty">
-                  当前图片暂未识别到可裁决的冲突簇。你仍可切换上方视图查看各标注员结果。
-                </div>
-
-                <div v-if="displayedReviewItems.length > 0" class="batch-actions">
-                  <span>批量裁决：</span>
-                  <button type="button" class="mini-btn" @click="applyBatchBase(0)">
-                    全图采用A为基础
-                  </button>
-                  <button type="button" class="mini-btn" @click="applyBatchBase(1)">
-                    全图采用B为基础
-                  </button>
-                  <button type="button" class="mini-btn" @click="applyBatchBase(2)">
-                    全图采用C为基础
-                  </button>
-                  <button type="button" class="mini-btn" @click="resetReviewWorkbench">
-                    恢复融合结果
-                  </button>
-                </div>
               </div>
             </div>
           </div>
@@ -1099,6 +1193,7 @@ import {
   getFolderTasks,
   getTaskByFileId,
   confirmReviewDecision,
+  requestReviewReannotation,
 } from '@/api/projectStorage'
 import request from '@/api/request'
 import { useUserStore } from '@/stores/user'
@@ -1234,6 +1329,7 @@ const reviewPreviewMode = ref('default')
 const reviewBaseSource = ref('fused')
 const reviewClusterDecisions = ref({})
 const reviewSubmitting = ref(false)
+const reviewReannotationSubmitting = ref(false)
 const annotationImageLoaded = ref(false)
 const annotationImageNaturalWidth = ref(0)
 const annotationImageNaturalHeight = ref(0)
@@ -1257,6 +1353,50 @@ const imageRenderRect = ref({
   top: 0,
 })
 
+const REVIEW_DIFFERENCE_META = {
+  label_conflict: {
+    label: '类别冲突',
+    tone: 'danger',
+    scenario: '标注框位置接近，但类别名称不一致，适合采用某位标注员的类别或融合结果。',
+    primaryAction: '采用标注员的框',
+  },
+  missing_annotation: {
+    label: '疑似漏标',
+    tone: 'warning',
+    scenario: '只有部分标注员标出了该目标，适合确认保留、删除或退回漏标员重标。',
+    primaryAction: '保留或退回漏标员',
+  },
+  bbox_minor_offset: {
+    label: '边框偏移',
+    tone: 'info',
+    scenario: '类别一致但位置略有偏差，适合采用融合框或指定更准确的标注员框。',
+    primaryAction: '采用融合框',
+  },
+  over_segmentation: {
+    label: '重标过分割',
+    tone: 'warning',
+    scenario: '同一目标被某位标注员画成多个框，适合采用融合框或单个标注员框。',
+    primaryAction: '采用融合框',
+  },
+  global_quantity_anomaly: {
+    label: '全图数量异常',
+    tone: 'danger',
+    scenario: '整张图目标数量差距较大，适合退回原标注员重新标注。',
+    primaryAction: '重新标注',
+  },
+  cluster_conflict: {
+    label: '差异簇',
+    tone: 'neutral',
+    scenario: '该目标存在标注差异，请结合画面和标注员结果裁决。',
+    primaryAction: '人工裁决',
+  },
+}
+
+const getReviewDifferenceMeta = (type) =>
+  REVIEW_DIFFERENCE_META[type] || REVIEW_DIFFERENCE_META.cluster_conflict
+
+const getDifferenceTypeLabel = (type) => getReviewDifferenceMeta(type).label
+
 const collaborationIntegration = computed(() =>
   isReviewerWorkspace.value ? currentPreviewTask.value?.collaboration_integration || null : null,
 )
@@ -1267,18 +1407,49 @@ const integrationDecisionText = computed(
   () => collaborationIntegration.value?.integration_decision_text || '未判定'
 )
 
+const reviewAnnotatorEntries = computed(() => collaborationIntegration.value?.annotator_entries || [])
+
 const normalizedReviewItems = computed(() => {
   const integration = collaborationIntegration.value
   if (!integration) return []
   const items = integration.diff_highlights || integration.review_items || []
-  return items.map((item, idx) => ({
-    clusterKey: item.cluster_index ?? item.cluster_id ?? idx,
-    differenceType: item.difference_type || 'cluster_conflict',
-    recommendedAction: item.recommended_action || item.review_suggestion || '请人工裁决',
-    overlay: item.overlay || {},
-    quickActions: item.quick_actions || [],
-    clusterSnapshot: item.cluster_snapshot || {},
-  }))
+  return items.map((item, idx) => {
+    const differenceType = item.difference_type || 'cluster_conflict'
+    const clusterSnapshot = item.cluster_snapshot || {}
+    const overlay = item.overlay || {}
+    const memberBoxes = Array.isArray(overlay.member_boxes) ? overlay.member_boxes : []
+    const memberAnnotatorIndexes = [
+      ...new Set(
+        memberBoxes
+          .map((member) => Number(member.annotator_index))
+          .filter((index) => Number.isInteger(index)),
+      ),
+    ].sort((a, b) => a - b)
+    const missingAnnotatorIndexes = reviewAnnotatorEntries.value
+      .map((entry) => entry.annotator_index)
+      .filter((index) => !memberAnnotatorIndexes.includes(index))
+    const annotatorCounter = clusterSnapshot.annotator_counter || {}
+    const overSegmentedAnnotatorIndexes = Object.entries(annotatorCounter)
+      .filter(([, count]) => Number(count) > 1)
+      .map(([index]) => Number(index))
+      .filter((index) => Number.isInteger(index))
+
+    return {
+      clusterKey: item.cluster_index ?? item.cluster_id ?? idx,
+      differenceType,
+      differenceTypeLabel: getDifferenceTypeLabel(differenceType),
+      differenceMeta: getReviewDifferenceMeta(differenceType),
+      recommendedAction: item.recommended_action || item.review_suggestion || '请人工裁决',
+      overlay,
+      memberBoxes,
+      fusedPreview: overlay.fused_preview || null,
+      quickActions: item.quick_actions || [],
+      clusterSnapshot,
+      memberAnnotatorIndexes,
+      missingAnnotatorIndexes,
+      overSegmentedAnnotatorIndexes,
+    }
+  })
 })
 
 const displayedReviewItems = computed(() => {
@@ -1287,8 +1458,6 @@ const displayedReviewItems = computed(() => {
   if (!queue.size) return normalizedReviewItems.value
   return normalizedReviewItems.value.filter((item) => queue.has(item.clusterKey))
 })
-
-const reviewAnnotatorEntries = computed(() => collaborationIntegration.value?.annotator_entries || [])
 
 const reviewPreviewTabs = computed(() => {
   if (!isReviewerWorkspace.value) return []
@@ -1302,12 +1471,13 @@ const reviewPreviewTabs = computed(() => {
   reviewAnnotatorEntries.value.forEach((entry) => {
     tabs.push({
       key: `annotator_${entry.annotator_index}`,
-      label: entry.annotator_label || getAnnotatorBadge(entry.annotator_index),
+      label: getAnnotatorDisplayName(entry),
     })
   })
 
   return tabs
 })
+
 // ============ 任务列表状态 ============
 
 const labelingTasks = ref([])
@@ -2005,6 +2175,14 @@ const canSubmitReviewDecision = computed(
         currentPreviewFile.value,
     )
 )
+
+watch(displayedReviewItems, (items) => {
+  if (!reviewWorkbenchEnabled.value) return
+  const selectedKey = selectedReviewCluster.value?.clusterKey
+  if (!items.some((item) => item.clusterKey === selectedKey)) {
+    selectedReviewCluster.value = items[0] || null
+  }
+})
 
 const getWorkButtonText = computed(() => {
   if (isPendingFolder.value) return '工作'
@@ -2764,11 +2942,15 @@ const buildResolvedReviewAnnotations = () => {
       adoptedAnnotations = [normalizePreviewAnnotation(cluster.overlay.fused_preview)]
     } else if (decision.action === 'adopt_annotator') {
       const matchedBox = (cluster.overlay?.member_boxes || []).find(
-        (box) => box.annotator_index === decision.annotatorIndex,
+        (box) =>
+          (decision.annotationId && box.annotation_id === decision.annotationId) ||
+          (!decision.annotationId && box.annotator_index === decision.annotatorIndex),
       )
       if (matchedBox) {
         adoptedAnnotations = [normalizePreviewAnnotation(matchedBox)]
       }
+    } else if (decision.action === 'delete_cluster') {
+      adoptedAnnotations = []
     }
 
     resolved = resolved.filter((annotation) => !annotationMatchesCluster(annotation, cluster))
@@ -2827,7 +3009,7 @@ const refreshPreviewAnnotations = () => {
       annotatorEntry?.annotations || [],
       annotatorIndex,
     )
-    annotationDataSource.value = `${annotatorEntry?.annotator_label || getAnnotatorBadge(annotatorIndex)}${annotatorEntry?.owner_id ? ` · ${annotatorEntry.owner_id}` : ''}`
+    annotationDataSource.value = getAnnotatorDisplayName(annotatorEntry)
     nextTick(() => {
       updateContainerSize()
       updateImageRenderRect()
@@ -2991,7 +3173,129 @@ const pickReviewCluster = (item) => {
   selectedReviewCluster.value = item
 }
 
-const getAnnotatorBadge = (index) => `标注员 ${['A', 'B', 'C'][index] || index + 1}`
+const getAnnotatorBadge = (index) => {
+  const annotatorEntry = getAnnotatorEntry(Number(index))
+  return (
+    annotatorEntry?.owner_id ||
+    annotatorEntry?.username ||
+    annotatorEntry?.annotator_name ||
+    `标注员 ${Number(index) + 1}`
+  )
+}
+
+const formatBoxNumber = (value) => {
+  const numberValue = Number(value)
+  return Number.isFinite(numberValue) ? Math.round(numberValue) : 0
+}
+
+const getAnnotationSummary = (annotation) => {
+  if (!annotation) return '暂无标注内容'
+  const label = annotation.label || annotation.category || '未命名'
+  return `${label} · x:${formatBoxNumber(annotation.x)} y:${formatBoxNumber(annotation.y)} w:${formatBoxNumber(annotation.width)} h:${formatBoxNumber(annotation.height)}`
+}
+
+const getMemberKey = (member, index = 0) =>
+  `${member?.annotator_index ?? 'x'}-${member?.annotation_id || index}`
+
+const getClusterMembersByAnnotator = (cluster, annotatorIndex) =>
+  (cluster?.memberBoxes || cluster?.overlay?.member_boxes || []).filter(
+    (member) => Number(member.annotator_index) === Number(annotatorIndex),
+  )
+
+const getAnnotatorDisplayName = (entry) =>
+  entry?.owner_id ||
+  entry?.username ||
+  entry?.annotator_name ||
+  getAnnotatorBadge(entry?.annotator_index)
+
+const getReviewItemTitle = (item) => {
+  if (!item) return ''
+  if (item.differenceType === 'global_quantity_anomaly') return '整图数量异常'
+  return `#${item.clusterKey} · ${item.differenceTypeLabel}`
+}
+
+const getClusterMetricText = (cluster) => {
+  const stats = cluster?.clusterSnapshot?.iou_stats || {}
+  const meanIou = stats.mean_iou ?? cluster?.fusedPreview?.agreement?.mean_pairwise_iou
+  const labelVote = cluster?.clusterSnapshot?.label_vote_ratio ?? cluster?.fusedPreview?.agreement?.label_vote
+  const metricParts = []
+  if (meanIou !== undefined && meanIou !== null) metricParts.push(`IoU ${meanIou}`)
+  if (labelVote !== undefined && labelVote !== null) metricParts.push(`投票 ${labelVote}`)
+  if (cluster?.clusterSnapshot?.count_spread !== undefined) {
+    metricParts.push(`数量差 ${cluster.clusterSnapshot.count_spread}`)
+  }
+  return metricParts.length ? metricParts.join(' · ') : '暂无统计'
+}
+
+const getAnnotationCountEntries = (cluster) =>
+  Object.entries(cluster?.clusterSnapshot?.annotation_counts || {}).map(([index, count]) => ({
+    index: Number(index),
+    count: Number(count || 0),
+  }))
+
+const hasClusterDecision = (cluster, action) =>
+  reviewClusterDecisions.value?.[cluster?.clusterKey]?.action === action
+
+const isMemberDecisionActive = (cluster, member) => {
+  const decision = reviewClusterDecisions.value?.[cluster?.clusterKey]
+  if (!decision || decision.action !== 'adopt_annotator') return false
+  if (decision.annotationId && member.annotation_id) {
+    return decision.annotationId === member.annotation_id
+  }
+  return Number(decision.annotatorIndex) === Number(member.annotator_index)
+}
+
+const shouldShowAdoptFused = (cluster) =>
+  Boolean(cluster?.fusedPreview && cluster.differenceType !== 'global_quantity_anomaly')
+
+const shouldShowDeleteCluster = (cluster) =>
+  ['missing_annotation', 'over_segmentation'].includes(cluster?.differenceType)
+
+const resolveReannotationAnnotatorIndexes = (cluster, mode = 'auto') => {
+  if (!cluster) return []
+  const allAnnotatorIndexes = reviewAnnotatorEntries.value.length
+    ? reviewAnnotatorEntries.value.map((entry) => entry.annotator_index)
+    : [0, 1, 2]
+  const memberIndexes = cluster.memberAnnotatorIndexes || []
+  const missingIndexes = cluster.missingAnnotatorIndexes || []
+  const duplicateIndexes = cluster.overSegmentedAnnotatorIndexes || []
+
+  let indexes = []
+  if (mode === 'all' || cluster.differenceType === 'global_quantity_anomaly') {
+    indexes = allAnnotatorIndexes
+  } else if (mode === 'missing' || cluster.differenceType === 'missing_annotation') {
+    indexes = missingIndexes.length ? missingIndexes : allAnnotatorIndexes
+  } else if (cluster.differenceType === 'over_segmentation') {
+    indexes = duplicateIndexes.length ? duplicateIndexes : memberIndexes
+  } else if (cluster.differenceType === 'label_conflict') {
+    indexes = memberIndexes
+  } else if (cluster.differenceType === 'bbox_minor_offset') {
+    indexes = memberIndexes
+  } else {
+    indexes = memberIndexes.length ? memberIndexes : allAnnotatorIndexes
+  }
+
+  return [...new Set(indexes.filter((index) => Number.isInteger(Number(index))).map(Number))]
+}
+
+const shouldShowReannotation = (cluster) => resolveReannotationAnnotatorIndexes(cluster).length > 0
+
+const getReannotationButtonLabel = (cluster) => {
+  if (!cluster) return '重新标注'
+  if (cluster.differenceType === 'global_quantity_anomaly') return '整图退回重标'
+  if (cluster.differenceType === 'missing_annotation') return '退回漏标员'
+  if (cluster.differenceType === 'over_segmentation') return '退回重复标注员'
+  if (cluster.differenceType === 'label_conflict') return '退回冲突标注员'
+  return '重新标注'
+}
+
+const applyMemberDecision = (member) => {
+  if (!member) return
+  applyClusterDecision('adopt_annotator', {
+    annotatorIndex: Number(member.annotator_index),
+    annotationId: member.annotation_id || null,
+  })
+}
 
 const applyClusterDecision = (action, payload = {}) => {
   const cluster = selectedReviewCluster.value
@@ -3002,6 +3306,7 @@ const applyClusterDecision = (action, payload = {}) => {
     [cluster.clusterKey]: {
       action,
       annotatorIndex: payload.annotatorIndex ?? null,
+      annotationId: payload.annotationId ?? null,
     },
   }
   reviewPreviewMode.value = 'resolved'
@@ -3009,8 +3314,10 @@ const applyClusterDecision = (action, payload = {}) => {
 
   reviewDecisionLog.value.push({
     clusterKey: cluster.clusterKey,
+    differenceType: cluster.differenceType,
     action,
     annotatorIndex: payload.annotatorIndex ?? null,
+    annotationId: payload.annotationId ?? null,
     at: Date.now(),
   })
 }
@@ -3026,6 +3333,61 @@ const applyBatchBase = (annotatorIndex) => {
     annotatorIndex,
     at: Date.now(),
   })
+}
+
+const requestClusterReannotation = async (cluster = selectedReviewCluster.value, mode = 'auto') => {
+  if (!cluster || !currentProject.value || !currentPreviewFile.value) return
+
+  const annotatorIndexes = resolveReannotationAnnotatorIndexes(cluster, mode)
+  if (!annotatorIndexes.length) {
+    window.alert('未找到需要退回的原标注员')
+    return
+  }
+
+  const targetNames = annotatorIndexes
+    .map((index) => getAnnotatorBadge(index))
+    .join('、')
+  const confirmed = window.confirm(
+    `确认将「${annotationPreviewFileName.value || '当前图片'}」退回给 ${targetNames} 重新标注吗？`,
+  )
+  if (!confirmed) return
+
+  const logEntry = {
+    clusterKey: cluster.clusterKey,
+    differenceType: cluster.differenceType,
+    action: 'request_reannotation',
+    annotatorIndexes,
+    at: Date.now(),
+  }
+
+  reviewReannotationSubmitting.value = true
+  try {
+    await requestReviewReannotation(currentProject.value.id, {
+      file_id: currentPreviewFile.value.id,
+      task_id: currentPreviewTask.value?.task_id,
+      annotator_indexes: annotatorIndexes,
+      difference_type: cluster.differenceType,
+      cluster_key: cluster.clusterKey,
+      reason: cluster.recommendedAction,
+      review_decision_log: [...reviewDecisionLog.value, logEntry],
+    })
+
+    reviewDecisionLog.value.push(logEntry)
+
+    const activeProjectId = currentProject.value.id
+    await loadProjects()
+    await ensureProjectFilesLoaded(activeProjectId, { force: true })
+    currentProjectId.value = activeProjectId
+    await nextTick()
+    await loadFolderTasks()
+    closeAnnotationPreview()
+    window.alert('已退回原标注员的待标注文件夹，待其重新提交后会再次进入审核。')
+  } catch (error) {
+    console.error('退回重标失败:', error)
+    window.alert(error?.response?.data?.detail || getFriendlyErrorMessage(error) || '退回重标失败')
+  } finally {
+    reviewReannotationSubmitting.value = false
+  }
 }
 
 const resolveReviewMetricTaskId = () => {
@@ -3559,6 +3921,26 @@ const reviewCompleted = () => {
   navigateToAnnotate(firstTask, validTasks)
 }
 
+const buildPendingReviewMeta = (task, annotations = []) => {
+  const integration = task?.collaboration_integration || {}
+  const diffItems = integration.diff_highlights || integration.review_items || []
+  const differenceTypeLabels = [
+    ...new Set(diffItems.map((item) => getDifferenceTypeLabel(item.difference_type))),
+  ]
+  const reviewRules = integration.review_rules || []
+
+  return {
+    annotationCount: Array.isArray(annotations) ? annotations.length : 0,
+    differenceCount: diffItems.length,
+    differenceTypeLabels,
+    integrationDecisionText: integration.integration_decision_text || '',
+    reviewHint:
+      reviewRules[0] ||
+      diffItems[0]?.recommended_action ||
+      (diffItems.length ? '请进入裁决工作台处理差异' : '暂无差异摘要'),
+  }
+}
+
 const openPendingReviewDialog = async () => {
   if (!currentProject.value) return
   pendingReviewVisible.value = true
@@ -3566,6 +3948,10 @@ const openPendingReviewDialog = async () => {
     ...file,
     previewUrl: getFilePreviewUrl(file) || file.downloadUrl || '',
     annotationCount: 0,
+    differenceCount: 0,
+    differenceTypeLabels: [],
+    integrationDecisionText: '',
+    reviewHint: '正在读取差异摘要...',
   }))
 
   const reviewItems = await Promise.all(
@@ -3574,10 +3960,11 @@ const openPendingReviewDialog = async () => {
         const data = await getTaskByFileId(currentProject.value.id, file.id)
         const task = data?.task
         const annotations = task?.annotations || task?.pre_annotations || []
+        const reviewMeta = buildPendingReviewMeta(task, annotations)
         return {
           ...file,
           previewUrl: getFilePreviewUrl(file) || file.downloadUrl || task?.image_url || '',
-          annotationCount: Array.isArray(annotations) ? annotations.length : 0,
+          ...reviewMeta,
         }
       } catch (error) {
         console.warn('加载待审核项失败:', error)
@@ -3585,6 +3972,10 @@ const openPendingReviewDialog = async () => {
           ...file,
           previewUrl: getFilePreviewUrl(file) || file.downloadUrl || '',
           annotationCount: 0,
+          differenceCount: 0,
+          differenceTypeLabels: [],
+          integrationDecisionText: '',
+          reviewHint: '差异摘要加载失败，进入后可重新读取',
         }
       }
     })
@@ -5379,6 +5770,13 @@ onBeforeUnmount(() => {
   flex-direction: column;
 }
 
+.annotation-preview-panel.review-mode {
+  width: min(1720px, calc(100vw - 20px));
+  max-width: none;
+  height: calc(100vh - 20px);
+  border-radius: 12px;
+}
+
 /* 顶部工具栏 */
 .preview-toolbar {
   display: flex;
@@ -5501,6 +5899,59 @@ onBeforeUnmount(() => {
   background: #f9fafb;
 }
 
+.annotation-preview-content.review-mode {
+  padding: 12px 16px;
+  align-items: stretch;
+  justify-content: stretch;
+}
+
+.review-split-layout {
+  width: 100%;
+  height: 100%;
+}
+
+.review-split-layout.active {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(380px, 36%);
+  gap: 12px;
+  min-height: 0;
+}
+
+.review-side-workbench {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.review-side-workbench .review-preview-tabs {
+  justify-content: flex-start;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 8px;
+}
+
+.review-side-workbench .review-workbench {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.review-side-workbench .workbench-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.review-side-workbench .cluster-list,
+.review-side-workbench .cluster-detail {
+  max-height: none;
+  overflow: auto;
+}
+
 /* 图片包装器 - 填满可用空间 */
 .annotation-image-wrapper {
   width: 100%;
@@ -5556,6 +6007,14 @@ onBeforeUnmount(() => {
   justify-content: center;
   gap: 10px;
   flex-shrink: 0;
+}
+
+.annotation-preview-footer.review-mode {
+  padding: 12px 16px;
+  gap: 8px;
+  min-height: 54px;
+  max-height: 96px;
+  overflow-y: hidden;
 }
 
 .annotation-stats {
@@ -5639,6 +6098,10 @@ onBeforeUnmount(() => {
   background: #f8fafc;
 }
 
+.annotation-preview-footer.review-mode .review-workbench {
+  max-width: none;
+}
+
 .review-workbench-header {
   display: flex;
   align-items: center;
@@ -5699,20 +6162,200 @@ onBeforeUnmount(() => {
   background: #fff;
   color: #1e3a8a;
   border-radius: 8px;
-  padding: 6px 8px;
+  padding: 8px 10px;
   text-align: left;
   font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .cluster-btn.active {
   background: #dbeafe;
 }
 
+.cluster-btn.tone-danger {
+  border-color: #fecaca;
+  color: #991b1b;
+}
+
+.cluster-btn.tone-warning {
+  border-color: #fed7aa;
+  color: #9a3412;
+}
+
+.cluster-btn.tone-info {
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+}
+
+.cluster-btn-title {
+  font-weight: 700;
+}
+
+.cluster-btn-meta {
+  color: #64748b;
+  font-size: 11px;
+}
+
 .cluster-detail {
   border: 1px dashed #cbd5e1;
   border-radius: 8px;
-  padding: 8px;
+  padding: 10px;
   background: #fff;
+}
+
+.cluster-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  color: #1f2937;
+  margin-bottom: 8px;
+}
+
+.difference-chip {
+  border-radius: 999px;
+  padding: 4px 9px;
+  font-size: 12px;
+  font-weight: 700;
+  background: #f1f5f9;
+  color: #334155;
+}
+
+.difference-chip.tone-danger {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.difference-chip.tone-warning {
+  background: #ffedd5;
+  color: #9a3412;
+}
+
+.difference-chip.tone-info {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.cluster-metric {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.difference-advice {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #f8fafc;
+  margin-bottom: 8px;
+}
+
+.advice-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #0f172a;
+  margin-bottom: 4px;
+}
+
+.advice-text {
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.quantity-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.quantity-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 6px 8px;
+  color: #334155;
+  background: #fff;
+  font-size: 12px;
+}
+
+.source-comparison-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.source-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 8px;
+  background: #ffffff;
+  min-width: 0;
+}
+
+.source-card.missing {
+  background: #f8fafc;
+  border-style: dashed;
+}
+
+.source-card.fused {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.source-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #1f2937;
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.source-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.fused-dot {
+  background: #2563eb;
+}
+
+.source-box-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.source-box-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.35;
+  min-width: 0;
+}
+
+.source-box-row span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.source-missing {
+  color: #94a3b8;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .detail-line {
@@ -5757,12 +6400,36 @@ onBeforeUnmount(() => {
   border-radius: 8px;
   padding: 4px 10px;
   font-size: 12px;
+  cursor: pointer;
+  color: #334155;
+  white-space: nowrap;
 }
 
 .mini-btn.primary {
   background: #2563eb;
   color: white;
   border-color: #2563eb;
+}
+
+.mini-btn.warning {
+  background: #f59e0b;
+  color: white;
+  border-color: #f59e0b;
+}
+
+.mini-btn.danger {
+  background: #dc2626;
+  color: white;
+  border-color: #dc2626;
+}
+
+.mini-btn.active {
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.18);
+}
+
+.mini-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
 }
 
 /* 左右切换箭头 */
@@ -5805,6 +6472,12 @@ onBeforeUnmount(() => {
     width: 100vw;
   }
 
+  .annotation-preview-panel.review-mode {
+    width: 100vw;
+    height: 100vh;
+    border-radius: 0;
+  }
+
   .nav-prev {
     left: 8px;
   }
@@ -5824,6 +6497,30 @@ onBeforeUnmount(() => {
 
   .annotation-preview-content {
     padding: 16px;
+  }
+
+  .annotation-preview-content.review-mode {
+    padding: 8px;
+  }
+
+  .review-split-layout.active {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(260px, 52vh) minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .review-side-workbench .review-preview-tabs {
+    padding: 6px;
+  }
+
+  .review-side-workbench .workbench-body {
+    grid-template-columns: 1fr;
+    overflow: auto;
+  }
+
+  .annotation-preview-footer.review-mode {
+    max-height: 84px;
+    padding: 10px 12px;
   }
 
   .nav-arrow {

@@ -28,6 +28,23 @@
                   <div class="pending-review-file-name">{{ item.name }}</div>
                   <div class="pending-review-file-extra">
                     {{ item.annotationCount > 0 ? `${item.annotationCount} 个标注` : '暂无标注' }}
+                    <span v-if="item.differenceCount" class="pending-review-separator">·</span>
+                    <span v-if="item.differenceCount">{{ item.differenceCount }} 项差异</span>
+                  </div>
+                  <div v-if="item.integrationDecisionText" class="pending-review-decision">
+                    {{ item.integrationDecisionText }}
+                  </div>
+                  <div v-if="item.differenceTypeLabels?.length" class="pending-review-tags">
+                    <span
+                      v-for="label in item.differenceTypeLabels"
+                      :key="`${item.id}-${label}`"
+                      class="pending-review-tag"
+                    >
+                      {{ label }}
+                    </span>
+                  </div>
+                  <div v-if="item.reviewHint" class="pending-review-hint">
+                    {{ item.reviewHint }}
                   </div>
                 </div>
               </button>
@@ -154,6 +171,48 @@ const emit = defineEmits(['close', 'select'])
   margin-top: 4px;
   font-size: 12px;
   color: #6b7280;
+}
+
+.pending-review-separator {
+  margin: 0 4px;
+}
+
+.pending-review-decision {
+  display: inline-flex;
+  margin-top: 7px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #fff7ed;
+  color: #c2410c;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.pending-review-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.pending-review-tag {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #4338ca;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.pending-review-hint {
+  margin-top: 7px;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .pending-review-empty {

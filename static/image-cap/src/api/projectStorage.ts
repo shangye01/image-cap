@@ -221,3 +221,19 @@ export const confirmReviewDecision = (
   request.post(`/projects/${projectId}/review/confirm`, payload, {
     timeout: 45000,
   })
+
+export const requestReviewReannotation = (
+  projectId: string,
+  payload: {
+    file_id: string
+    task_id?: string
+    annotator_indexes: number[]
+    difference_type?: string
+    cluster_key?: string | number
+    reason?: string
+    review_decision_log?: Array<Record<string, unknown>>
+  },
+) =>
+  request.post(`/projects/${projectId}/review/reannotate`, payload, {
+    timeout: 45000,
+  })

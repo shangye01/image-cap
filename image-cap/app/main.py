@@ -355,6 +355,78 @@ def _is_metric_task_eligible(
     return task_status in {"completed", "reviewed"}
 
 
+def _list_completed_annotator_tasks_for_storage(
+        *,
+        lineage_context: dict[str, Any],
+        image_storage_path: str,
+        db: Session,
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """按前端标注员 A/B/C 的稳定顺序返回同图像的已提交标注任务。"""
+    related_project_ids = [
+        str(project_id)
+        for project_id in (lineage_context.get("related_project_ids") or [])
+        if project_id
+    ]
+    if not related_project_ids or not image_storage_path:
+        return [], {}
+
+    related_project_uuid_ids: list[uuid.UUID] = []
+    for related_id in related_project_ids:
+        try:
+            related_project_uuid_ids.append(uuid.UUID(str(related_id)))
+        except (TypeError, ValueError):
+            continue
+
+    project_owner_map: dict[str, str] = {}
+    if related_project_uuid_ids:
+        related_projects = (
+            db.query(Project)
+            .filter(Project.id.in_(related_project_uuid_ids))
+            .all()
+        )
+        project_owner_map = {str(project.id): project.owner_id for project in related_projects}
+
+    sibling_tasks_result = (
+        supabase
+        .table("tasks")
+        .select("*")
+        .in_("project_id", related_project_ids)
+        .eq("image_storage_path", image_storage_path)
+        .execute()
+    )
+    sibling_tasks = sibling_tasks_result.data or []
+    excluded_owners = {
+        lineage_context.get("root_owner"),
+        lineage_context.get("reviewer_username"),
+    }
+
+    completed_siblings: list[dict[str, Any]] = []
+    for sibling in sibling_tasks:
+        sibling_status = str(sibling.get("status") or "").lower()
+        if sibling_status != "completed":
+            continue
+        sibling_owner = project_owner_map.get(str(sibling.get("project_id")))
+        if sibling_owner and sibling_owner in excluded_owners:
+            continue
+        completed_siblings.append(sibling)
+
+    completed_siblings.sort(key=_task_sort_value, reverse=True)
+    latest_task_by_project: dict[str, dict[str, Any]] = {}
+    for sibling in completed_siblings:
+        sibling_project_id = str(sibling.get("project_id") or "")
+        if sibling_project_id and sibling_project_id not in latest_task_by_project:
+            latest_task_by_project[sibling_project_id] = sibling
+
+    candidate_tasks = list(latest_task_by_project.values())
+    candidate_tasks.sort(
+        key=lambda item: (
+            project_owner_map.get(str(item.get("project_id")), ""),
+            str(item.get("project_id") or ""),
+        )
+    )
+    return candidate_tasks, project_owner_map
+
+
 def _resolve_metric_source_task_from_base_source(
         *,
         fallback_task: dict[str, Any],
@@ -907,6 +979,60 @@ def _classify_cluster_difference(cluster_summary: Dict[str, Any]) -> Tuple[str |
     return None, None
 
 
+def _build_review_quick_actions(diff_type: str, cluster_summary: Dict[str, Any]) -> list[dict[str, Any]]:
+    """按差异类型生成裁决工作台可展示的建议操作。"""
+    annotators = sorted(int(idx) for idx in cluster_summary.get("annotators", []))
+    missing_annotators = [idx for idx in range(3) if idx not in annotators]
+    annotator_counter = {
+        int(idx): int(count)
+        for idx, count in (cluster_summary.get("annotator_counter") or {}).items()
+    }
+    duplicate_annotators = [idx for idx, count in annotator_counter.items() if count > 1]
+
+    actions: list[dict[str, Any]] = []
+
+    if diff_type in {"bbox_minor_offset", "over_segmentation", "label_conflict", "missing_annotation"}:
+        actions.append({
+            "action": "adopt_fused",
+            "label": "采用融合框",
+            "reason": "以自动融合后的类别和位置作为该目标的裁决结果",
+        })
+
+    if diff_type in {"bbox_minor_offset", "label_conflict", "over_segmentation", "missing_annotation"}:
+        for annotator_index in annotators:
+            actions.append({
+                "action": "adopt_annotator",
+                "annotator_index": annotator_index,
+                "label": f"采用标注员 {['A', 'B', 'C'][annotator_index] if annotator_index < 3 else annotator_index + 1} 的框",
+                "reason": "以该标注员的框覆盖当前差异簇",
+            })
+
+    if diff_type in {"missing_annotation", "over_segmentation"}:
+        actions.append({
+            "action": "delete_cluster",
+            "label": "删除该差异框",
+            "reason": "判定该目标为误标或冗余框时使用",
+        })
+
+    reannotation_targets = missing_annotators
+    if diff_type == "over_segmentation":
+        reannotation_targets = duplicate_annotators or annotators
+    elif diff_type == "label_conflict":
+        reannotation_targets = annotators
+    elif diff_type == "bbox_minor_offset":
+        reannotation_targets = annotators
+
+    if reannotation_targets:
+        actions.append({
+            "action": "request_reannotation",
+            "annotator_indexes": reannotation_targets,
+            "label": "退回重标",
+            "reason": "需要原标注员重新确认该图片时使用",
+        })
+
+    return actions
+
+
 def _collaborative_auto_integrate(task: Dict[str, Any]) -> Dict[str, Any]:
     """
     协作标注自动整合：
@@ -1011,9 +1137,6 @@ def _collaborative_auto_integrate(task: Dict[str, Any]) -> Dict[str, Any]:
             }
         )
 
-    if any(len(anns) == 0 for anns in annotation_sets):
-        return {"ready": False, "reason": "存在空标注结果，无法自动整合"}
-
     count_values = [len(anns) for anns in annotation_sets]
     count_spread = max(count_values) - min(count_values)
     count_consistent = count_spread <= 1
@@ -1027,6 +1150,34 @@ def _collaborative_auto_integrate(task: Dict[str, Any]) -> Dict[str, Any]:
     fused_annotations: list[dict[str, Any]] = []
     auto_pass_clusters = 0
     unresolved_conflict_count = 0
+
+    if global_quantity_anomaly:
+        review_items.append({
+            "cluster_index": "global_quantity",
+            "difference_type": "global_quantity_anomaly",
+            "recommended_action": "整张图目标数差异较大，建议退回相关标注员重新标注",
+            "quick_actions": [
+                {
+                    "action": "request_reannotation",
+                    "annotator_indexes": [0, 1, 2],
+                    "label": "整图退回重标",
+                    "reason": "三份结果的目标数量差距过大",
+                }
+            ],
+            "overlay": {
+                "member_boxes": [],
+                "fused_preview": None,
+            },
+            "cluster_snapshot": {
+                "annotation_counts": {
+                    str(idx): len(annotations)
+                    for idx, annotations in enumerate(annotation_sets)
+                },
+                "count_spread": count_spread,
+                "count_consistent": count_consistent,
+                "global_quantity_anomaly": True,
+            },
+        })
 
     for idx, summary in enumerate(cluster_summaries):
         diff_type, recommendation = _classify_cluster_difference(summary)
@@ -1081,12 +1232,7 @@ def _collaborative_auto_integrate(task: Dict[str, Any]) -> Dict[str, Any]:
                 "cluster_index": idx,
                 "difference_type": diff_type,
                 "recommended_action": recommendation,
-                "quick_actions": [
-                    {"action": "adopt_annotator", "annotator_index": 0},
-                    {"action": "adopt_annotator", "annotator_index": 1},
-                    {"action": "adopt_annotator", "annotator_index": 2},
-                    {"action": "adopt_fused"},
-                ],
+                "quick_actions": _build_review_quick_actions(diff_type, summary),
                 "overlay": {
                     "member_boxes": overlay_member_boxes,
                     "fused_preview": _fuse_matched_annotations(
@@ -2853,6 +2999,172 @@ async def confirm_review_result(
     except Exception as exc:
         logger.exception("确认裁决并归档失败 | project_id=%s | payload_keys=%s", project_id, list(payload.keys()))
         raise HTTPException(status_code=500, detail=f"确认裁决失败: {str(exc)}")
+
+
+@app.post("/api/projects/{project_id}/review/reannotate")
+async def request_review_reannotation(
+        project_id: str,
+        payload: dict,
+        authorization: str | None = Header(default=None),
+        db: Session = Depends(get_db)
+):
+    """审核员将差异图片退回给原标注员重新标注。"""
+    try:
+        user = _require_current_user(db, authorization)
+
+        try:
+            project_uuid = uuid.UUID(str(project_id))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="项目 ID 无效")
+
+        current_project = db.query(Project).filter(Project.id == project_uuid).first()
+        if not current_project:
+            raise HTTPException(status_code=404, detail="项目不存在")
+        if current_project.owner_id != user.username:
+            raise HTTPException(status_code=403, detail="仅当前审核项目拥有者可以退回重标")
+
+        lineage_context = _get_project_lineage_context(project_id)
+        reviewer_username = lineage_context.get("reviewer_username")
+        if not reviewer_username or reviewer_username != user.username:
+            raise HTTPException(status_code=403, detail="仅项目审核人可以退回重标")
+
+        file_id = payload.get("file_id")
+        if not file_id:
+            raise HTTPException(status_code=400, detail="缺少 file_id")
+
+        try:
+            file_uuid = uuid.UUID(str(file_id))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="文件 ID 无效")
+
+        file_record = db.query(ProjectFile).filter(
+            ProjectFile.id == file_uuid,
+            ProjectFile.project_id == project_uuid,
+        ).first()
+        if not file_record:
+            raise HTTPException(status_code=404, detail="审核文件不存在")
+
+        raw_indexes = payload.get("annotator_indexes")
+        if not isinstance(raw_indexes, list) or not raw_indexes:
+            raw_indexes = [0, 1, 2]
+
+        annotator_indexes: list[int] = []
+        for raw_index in raw_indexes:
+            try:
+                index_value = int(raw_index)
+            except (TypeError, ValueError):
+                continue
+            if index_value not in annotator_indexes:
+                annotator_indexes.append(index_value)
+
+        if not annotator_indexes:
+            raise HTTPException(status_code=400, detail="缺少有效的标注员索引")
+
+        candidate_tasks, project_owner_map = _list_completed_annotator_tasks_for_storage(
+            lineage_context=lineage_context,
+            image_storage_path=file_record.storage_path,
+            db=db,
+        )
+        if not candidate_tasks:
+            raise HTTPException(status_code=404, detail="未找到可退回的原标注任务")
+
+        now_iso = datetime.now().isoformat()
+        returned_tasks: list[dict[str, Any]] = []
+        updated_file_ids: list[str] = []
+        notify_usernames: set[str] = {user.username}
+
+        for annotator_index in annotator_indexes:
+            if annotator_index < 0 or annotator_index >= len(candidate_tasks):
+                continue
+
+            target_task = candidate_tasks[annotator_index]
+            task_project_id = target_task.get("project_id")
+            task_id = target_task.get("id")
+            if not task_project_id or not task_id:
+                continue
+
+            try:
+                task_project_uuid = uuid.UUID(str(task_project_id))
+            except (TypeError, ValueError):
+                continue
+
+            target_owner = project_owner_map.get(str(task_project_id), "")
+            if target_owner:
+                notify_usernames.add(target_owner)
+
+            target_file = db.query(ProjectFile).filter(
+                ProjectFile.project_id == task_project_uuid,
+                ProjectFile.storage_path == file_record.storage_path,
+            ).first()
+            if target_file and target_file.status != "pending":
+                target_file.status = "pending"
+                updated_file_ids.append(str(target_file.id))
+
+            existing_annotations = _load_task_annotations(target_task)
+            supabase.table("tasks").update({
+                "status": "labeling",
+                "completed_at": None,
+                "annotations_count": len(existing_annotations),
+            }).eq("id", task_id).execute()
+            supabase.table("drafts").upsert({
+                "task_id": task_id,
+                "annotations_json": existing_annotations,
+                "user_id": target_owner or "review_return",
+                "saved_at": now_iso,
+            }).execute()
+
+            returned_tasks.append({
+                "annotator_index": annotator_index,
+                "task_id": task_id,
+                "project_id": str(task_project_id),
+                "owner_id": target_owner,
+                "file_id": str(target_file.id) if target_file else None,
+                "draft_count": len(existing_annotations),
+            })
+
+        if not returned_tasks:
+            raise HTTPException(status_code=404, detail="未找到匹配的标注员任务")
+
+        if file_record.status != "archived":
+            file_record.status = "archived"
+            updated_file_ids.append(str(file_record.id))
+
+        db.commit()
+
+        notify_usernames.update(
+            username
+            for username in {
+                lineage_context.get("root_owner"),
+                current_project.shared_by,
+            }
+            if username
+        )
+        await progress_ws_manager.emit_to_users(
+            list(notify_usernames),
+            {
+                "type": "PROJECT_PROGRESS_UPDATED",
+                "owner": current_project.owner_id,
+                "project_id": str(current_project.source_project_id or current_project.id),
+                "file_id": str(file_record.id),
+                "storage_path": file_record.storage_path,
+                "updated_rows": len(updated_file_ids),
+                "review_action": "request_reannotation",
+                "timestamp": now_iso,
+            },
+        )
+
+        return {
+            "success": True,
+            "message": "已退回原标注员重新标注",
+            "file_id": str(file_record.id),
+            "returned_count": len(returned_tasks),
+            "returned_tasks": returned_tasks,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("退回重标失败 | project_id=%s | payload_keys=%s", project_id, list(payload.keys()))
+        raise HTTPException(status_code=500, detail=f"退回重标失败: {str(exc)}")
 
 
 # =================================================================
