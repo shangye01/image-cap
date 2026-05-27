@@ -1002,6 +1002,22 @@ const removeSmartKeyword = (name) => {
     selectedSmartKeywords.value.splice(index, 1)
   }
 }
+// ========== 标注框去重工具函数 ==========
+const calculateIoU = (box1, box2) => {
+  const x1 = Math.max(box1.x || 0, box2.x || 0)
+  const y1 = Math.max(box1.y || 0, box2.y || 0)
+  const x2 = Math.min((box1.x || 0) + (box1.width || 0), (box2.x || 0) + (box2.width || 0))
+  const y2 = Math.min((box1.y || 0) + (box1.height || 0), (box2.y || 0) + (box2.height || 0))
+  
+  if (x2 <= x1 || y2 <= y1) return 0.0
+  
+  const intersection = (x2 - x1) * (y2 - y1)
+  const area1 = (box1.width || 0) * (box1.height || 0)
+  const area2 = (box2.width || 0) * (box2.height || 0)
+  const union = area1 + area2 - intersection
+  
+  return union > 0 ? intersection / union : 0
+}
 
 const executeSmartAnnotation = async () => {
   if (!imageObj.value) return
@@ -1009,10 +1025,13 @@ const executeSmartAnnotation = async () => {
   smartAnnotateVisible.value = false
   predicting.value = true
   taskError.value = ''
-  taskSuccess.value = '🔍 正在进行增量智能识别，请稍候...'
+  taskSuccess.value = '🔍 正在进行智能识别，请稍候...'
 
   try {
     const keywords = smartAnnotateMode.value === 'keyword' ? [...selectedSmartKeywords.value] : []
+    
+    // 保存当前已有标注（关键！不能丢）
+    const currentAnnotations = JSON.parse(JSON.stringify(store.annotations || []))
 
     let data
 
@@ -1029,7 +1048,7 @@ const executeSmartAnnotation = async () => {
 
       if (!response.ok) {
         const errorData = await response.json()
-        throw new Error(errorData.detail || '增量预标注失败')
+        throw new Error(errorData.detail || '预标注失败')
       }
 
       data = await response.json()
@@ -1067,27 +1086,61 @@ const executeSmartAnnotation = async () => {
     }
 
     if (data.annotations && data.annotations.length > 0) {
-      // ========== 使用新的统一处理方法 ==========
+      // 处理AI返回的新标注
       const processedNewAnnotations = await processAIAnnotations(data.annotations, 'smart-annotate')
-
-      const currentAnnotations = store.annotations || []
-      store.setAnnotations([...currentAnnotations, ...processedNewAnnotations])
-      // ========== 结束修改 ==========
-
-      const stats = data.stats || {}
-      taskSuccess.value = `🤖 增量识别完成！新增 ${data.annotations.length} 个目标（AI检测到${
-        stats.ai_detected || 0
-      }个，跳过重复${stats.duplicate_skipped || 0}个）`
-      setTimeout(() => (taskSuccess.value = ''), 4000)
+      
+      // 与当前已有标注去重（防止重复叠加）
+      const existingIds = new Set(currentAnnotations.map(a => a.id).filter(Boolean))
+      const newAnnotations = []
+      let duplicateCount = 0
+      
+      for (const ann of processedNewAnnotations) {
+        // 跳过ID已存在的
+        if (ann.id && existingIds.has(ann.id)) {
+          duplicateCount++
+          continue
+        }
+        
+        // IOU去重：与当前已有标注比较
+        let isDuplicate = false
+        for (const exist of currentAnnotations) {
+          if (ann.label === exist.label) {
+            const iou = calculateIoU(ann, exist)
+            if (iou > 0.5) {
+              isDuplicate = true
+              duplicateCount++
+              break
+            }
+          }
+        }
+        
+        if (!isDuplicate) {
+          newAnnotations.push(ann)
+        }
+      }
+      
+      if (newAnnotations.length > 0) {
+        // 核心修复：追加到现有标注，绝不替换！
+        const mergedAnnotations = [...currentAnnotations, ...newAnnotations]
+        store.setAnnotations(mergedAnnotations)
+        
+        taskSuccess.value = `🤖 识别完成！新增 ${newAnnotations.length} 个目标` + 
+          (duplicateCount > 0 ? `（跳过重复${duplicateCount}个）` : '')
+        setTimeout(() => (taskSuccess.value = ''), 4000)
+      } else {
+        taskSuccess.value = ''
+        taskError.value = `⚠️ 未发现新目标（AI检测到${data.annotations.length}个，全部与已有标注重复）`
+        setTimeout(() => (taskError.value = ''), 3000)
+      }
+      
       dragTick.value++
     } else {
-      const stats = data.stats || {}
       taskSuccess.value = ''
-      taskError.value = `⚠️ 未发现新目标（AI检测到${stats.ai_detected || 0}个，全部与已有标注重复）`
+      taskError.value = '⚠️ 未检测到任何目标'
       setTimeout(() => (taskError.value = ''), 3000)
     }
   } catch (error) {
-    console.error('增量智能标注失败:', error)
+    console.error('智能标注失败:', error)
     taskError.value = `❌ 智能标注失败: ${error.message}`
     setTimeout(() => (taskError.value = ''), 3000)
   } finally {

@@ -2517,7 +2517,7 @@ async def smart_annotate_incremental(
                     "is_new": True  # 标记为新检测
                 })
 
-        # AI结果内部去重
+        # AI结果内部去重（NMS）
         unique_ai_annotations = remove_duplicate_annotations(raw_ai_annotations, iou_threshold=0.85)
         logger.info(f"【SMART-ANNOTATE】AI检测到 {len(unique_ai_annotations)} 个唯一目标")
 
